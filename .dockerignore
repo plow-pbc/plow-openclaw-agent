@@ -1,4 +1,4 @@
 .git
 plow-credentials
-node_modules
-dist
+**/node_modules
+**/dist

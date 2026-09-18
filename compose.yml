@@ -1,7 +1,11 @@
 services:
   agent:
     build: .
-    env_file: ./plow-credentials
+    # The credential `plow-agents mint` writes. Optional so an `up` before a
+    # mint fails on the missing credential, not on a missing file.
+    env_file:
+      - path: ./plow-credentials
+        required: false
     volumes:
       - state:/var/lib/plow
     stop_grace_period: 35s
