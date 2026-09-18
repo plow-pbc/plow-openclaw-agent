@@ -27,19 +27,19 @@ plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
 
 Use the full digest reference printed by push and the selected line ID.
 
-To build and run locally, clone this repository and run these commands from its
-root. By default, mint writes `plow-credentials` in the current directory;
-Compose reads `./plow-credentials` from this repository root:
+To build and run locally, clone this repository and run the CLI from its root.
+`plow-agents deploy --local --line LINE_UID` mints the credential and starts this
+Compose project in one step, and `plow-agents lines` is what names the line: it
+prints the dashboard name and the number to text.
+
+To do it by hand, mint first — it writes `plow-credentials` in the current
+directory, which Compose reads from this repository root — then start:
 
 ```sh
 plow-agents mint LINE_UID
 docker compose up --build -d
 docker compose logs -f agent
 ```
-
-`plow-agents deploy --local --line LINE_UID` does the mint and the `compose up`
-in one step. Either way, `plow-agents lines` is what names the line: it prints
-the dashboard name and the number to text.
 
 For a local Plow API, use the CLI's `--api-base` option and mint with
 `--agent-api-base` set to an address the container can reach, such as

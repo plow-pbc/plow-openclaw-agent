@@ -8,7 +8,7 @@ import { startGateway } from "./process.js";
 
 try {
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
-  if (!base) throw new Error("PLOW_API_BASE is required");
+  if (!base) throw new Error("PLOW_API_BASE is required: mint a line with `plow-agents mint LINE_UID` or `plow-agents deploy --local --line LINE_UID`, then start this container");
   process.env.PLOW_AGENT_TOKEN ||= "proxied";
   process.env.OPENCLAW_GATEWAY_TOKEN = randomBytes(32).toString("hex");
   let identity = (await identityFromApi(base, process.env.PLOW_AGENT_TOKEN))!;
