@@ -15,9 +15,13 @@ plow-agents login
 plow-agents lines
 ```
 
-No official image is published yet. For Plow's cloud host, first clone this repo,
-then build and push from its root to a registry you control. Authenticate Docker
-with that registry and make the image publicly pullable by Plow:
+This image is published as
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>`, one
+immutable tag per commit of this repository — pinned by digest, because a tag
+is a name someone can move, and the code it names boots holding this agent's
+Plow credential. An agent built on it is a `FROM` line plus its own content — see [Building a variant image](#building-a-variant-image). Build
+and push your variant to a registry you control, make it publicly pullable by
+Plow, and deploy it:
 
 ```sh
 plow-agents image build REGISTRY/REPOSITORY:TAG
@@ -25,7 +29,8 @@ plow-agents image push REGISTRY/REPOSITORY:TAG
 plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
 ```
 
-Use the full digest reference printed by push and the selected line ID.
+Use the full digest reference printed by push and the selected line ID — for
+your image and for the base you build on alike.
 
 To build and run locally, clone this repository and run these commands from its
 root. By default, mint writes `plow-credentials` in the current directory;
@@ -51,6 +56,18 @@ deletes it, so the next boot starts with fresh agent state.
 Set `PLOW_API_BASE` to the API root without `/v1`. Local runs also need
 `PLOW_AGENT_TOKEN`; cloud hosts can inject it. Use an API endpoint you control.
 Agent state lives in the persistent `/var/lib/plow` volume.
+
+Set `AGENT_ID` to the Agent Index id to put this agent on
+[the index](https://aiworthusing.com/agent-index): boot then registers the listing,
+with `AGENT_NAME`, `AGENT_BLURB` and `AGENT_RUNTIME` (default `OpenClaw`) sent along when they are set, and reports its
+token usage every five minutes. The counts come from agentsview, which this
+image installs and which reads OpenClaw's own sessions; boot links them where
+it looks, since this image moves OpenClaw's state off `~/.openclaw`, and each
+pass refreshes the collector before reporting. The client is
+[agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned by
+commit and checksum in the `Dockerfile` and fetched at build; its key and ledger live in the state
+volume, so a rebuilt container keeps one install rather than registering a second.
+Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw.json` is boot-owned: runtime config edits (`config set`, `set-identity` emoji/avatar changes, and plugin installs) do not survive a restart.
 Workspace `BOOTSTRAP.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` are also boot-owned
 and removed at every startup; `AGENTS.md` is boot-rendered.
@@ -88,6 +105,41 @@ Mac provides its tools and instructions. Mac unavailability does not prevent
 texting. Long-running MCP responses stream without a fixed bridge timeout;
 client disconnects cancel the upstream request. A bridge crash restarts the
 bridge while the gateway continues.
+
+## Building a variant image
+
+For a persona, prompt and skills, build a separate image on this base:
+
+```dockerfile
+FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>
+
+# Which agent this reports as on the Agent Index. A cloud install runs the
+# image with no compose file, so this is the only place the id can come from,
+# and without it nothing is reported and no page is claimed.
+ENV AGENT_ID=your-agent-id
+
+COPY prompt/AGENTS.md /opt/plow/prompt/AGENTS.md
+COPY skills/ /opt/plow/skills/
+```
+
+Keep the inherited boot and reporter to use Plow's maintained reporting: it
+registers the listing, reads OpenClaw's transcripts and reports every five
+minutes. Rebuild on an updated base digest to pick up fixes.
+
+If you need different startup behavior, fork this repository and maintain those
+changes, including reporting. Free hosting requires working usage reporting
+from the deployed image, whether it inherits this base or is a fork.
+
+## Publishing
+
+Published by CI in `plow-pbc/plow`
+(`.github/workflows/build-agent-image.yml`), one immutable tag per commit:
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<full commit sha>`. There is no
+`latest`, and the tag names the commit of this repository that built the
+image. A variant lives in the registry its builder controls, pushed by
+`plow-agents image push`. The tags that exist here are readable from the
+registry itself:
+<https://gallery.ecr.aws/e1h7x4a2/plow-cloud-agents>.
 
 ## Trust
 
