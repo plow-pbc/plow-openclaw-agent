@@ -42,20 +42,24 @@ docker compose up --build -d
 docker compose logs -f agent
 ```
 
-For cloud agents, Plow sets
-`PLOW_DASHBOARD_ORIGIN=https://<agent-uid>.agents.plow.co` at provision time
-to expose the owner dashboard through its private proxy. The image runs as
-the VM's PID 1, so the ingress reaches the gateway at `127.0.0.1:3000` inside
-the VM. Self-hosted Compose does not support dashboard mode. Without the
-variable, the Control UI stays disabled and the gateway keeps its loopback
-token config.
-The proxy must remove browser-supplied `X-Plow-*`, `X-Forwarded-*`, `Forwarded`,
-and `X-Real-IP`, then set `X-Plow-User` to the authenticated owner's Plow user
-UID and `X-Forwarded-For` to the browser's non-loopback address. The UID is an
+The owner dashboard needs `PLOW_DASHBOARD_ORIGIN=https://<agent-uid>.plow.run`
+in the VM's environment. Plow's current provisioning does not set this variable,
+so deployed images keep the Control UI disabled until the API supplies it.
+Without the variable, the gateway keeps its loopback token config. The Compose
+setup has no owner-authenticated dashboard proxy.
+
+With the variable set, the gateway serves the Control UI on loopback port 3000.
+Plow reaches it through the private `https://<vm>.exe.xyz:3000` ingress, which
+delivers to `127.0.0.1` inside the VM. The proxy requires the exact browser
+origin on WebSockets and preserves that `Origin` upstream, while replacing the
+browser's `Host` with the upstream host. The image must use relative links so
+the browser stays on its agent's web origin.
+
+The proxy removes browser-supplied `X-Plow-*`, `X-Exedev-*`, `X-Forwarded-*`,
+`Forwarded`, and `X-Real-IP` headers, plus Plow's session cookie. It sets
+`X-Plow-User` to the authenticated owner's bare Plow user UID and
+`X-Forwarded-For` to the request's client address when present. The UID is an
 account identifier, not a phone number or a dashboard display name.
-The dashboard accepts WebSocket requests only from `PLOW_DASHBOARD_ORIGIN`.
-The proxy preserves that browser `Origin` but replaces `Host` with the VM's
-upstream host.
 
 For a local Plow API, use the CLI's `--api-base` option and mint with
 `--agent-api-base` set to an address the container can reach, such as
@@ -160,7 +164,7 @@ registry itself:
 
 Dashboard access relies on Plow's proxy admitting only the owner. Every
 identity that reaches this gateway through that proxy receives admin access;
-`GET /v1/agents/me` does not provide the owner's account UID for a narrower
+`GET /v1/agents/cloud/me` does not provide the owner's account UID for a narrower
 gateway grant. Any process on the same host, including the agent's shell, can
 forge `X-Plow-User` over loopback. Keep direct gateway access limited to the
 host's loopback interface.

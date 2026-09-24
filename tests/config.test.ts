@@ -118,10 +118,10 @@ test("without PLOW_DASHBOARD_ORIGIN, config remains byte-identical to main", () 
 });
 
 test("PLOW_DASHBOARD_ORIGIN uses the proxy's port and exact browser origin", () => {
-  const config = renderConfig(identity, "http://api:8000", "https://d658f8f5ab5882ad5edf5a5fd607d198.agents.plow.co");
+  const config = renderConfig(identity, "http://api:8000", "https://d658f8f5ab5882ad5edf5a5fd607d198.plow.run");
   assert.deepEqual(config.gateway, {
     mode: "local", bind: "loopback", port: 3000,
-    controlUi: { enabled: true, allowedOrigins: ["https://d658f8f5ab5882ad5edf5a5fd607d198.agents.plow.co"] },
+    controlUi: { enabled: true, allowedOrigins: ["https://d658f8f5ab5882ad5edf5a5fd607d198.plow.run"] },
     auth: { mode: "trusted-proxy", trustedProxy: {
       userHeader: "x-plow-user", allowLoopback: true,
       deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
