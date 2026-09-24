@@ -65,13 +65,15 @@ The runtime user's login and interactive shells load it from a private state
 file, so `openclaw` commands work over SSH without entering a password. Anyone
 with a shell on the VM already has full control of the agent.
 
-For local development, enable the Compose dashboard profile:
+For local development, use the Compose dashboard override:
 
-1. Run `docker compose --profile dashboard up`.
+1. Run `docker compose -f compose.yml -f compose.dashboard.yml up --build`.
 2. Open <http://localhost:3001>.
 
 This proxy is for local development only: anyone who can reach localhost:3001
-is an admin of this agent. Compose publishes that port on loopback only.
+can act as an admin of this agent. It rejects browser requests with a foreign
+`Origin`; local clients can supply an allowed `Origin`. Compose publishes the
+port on loopback only when the override is used.
 
 For a local Plow API, use the CLI's `--api-base` option and mint with
 `--agent-api-base` set to an address the container can reach, such as
