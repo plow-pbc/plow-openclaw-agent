@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFile, mkdir, writeFile, rm } from "node:fs/promises";
+import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
@@ -10,12 +10,14 @@ try {
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
   if (!base) throw new Error("PLOW_API_BASE is required");
   process.env.PLOW_AGENT_TOKEN ||= "proxied";
-  if (process.env.PLOW_DASHBOARD_ORIGIN) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  else process.env.OPENCLAW_GATEWAY_TOKEN = randomBytes(32).toString("hex");
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString("hex");
   process.env.PLOW_MCP_BRIDGE_TOKEN = randomBytes(32).toString("hex");
   const identity = await identityFromApi(base, process.env.PLOW_AGENT_TOKEN);
-  const config = renderConfig(identity, base, process.env.PLOW_DASHBOARD_ORIGIN);
+  const config = renderConfig(identity, base);
   await mkdir("/var/lib/plow/workspace", { recursive: true });
+  await writeFile("/var/lib/plow/gateway-password", process.env.OPENCLAW_GATEWAY_PASSWORD + "\n", { mode: 0o600 });
+  await chmod("/var/lib/plow/gateway-password", 0o600);
   for (const name of ["BOOTSTRAP.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
     await rm(`/var/lib/plow/workspace/${name}`, { force: true });
   }

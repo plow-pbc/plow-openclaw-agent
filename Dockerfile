@@ -4,6 +4,8 @@ LABEL org.opencontainers.image.revision=$PLOW_REVISION co.plow.probe=/opt/plow/p
 USER root
 RUN mkdir -p /opt/plow/skills /var/lib/plow && chown node:node /var/lib/plow
 COPY boot /opt/plow/boot
+COPY boot/gateway-password.sh /etc/profile.d/plow-openclaw.sh
+RUN printf '\n. /etc/profile.d/plow-openclaw.sh\n' >> /home/node/.bashrc
 COPY plugin /opt/plow/plugin
 COPY prompt /opt/plow/prompt
 COPY skills /opt/plow/skills

@@ -42,24 +42,28 @@ docker compose up --build -d
 docker compose logs -f agent
 ```
 
-The owner dashboard needs `PLOW_DASHBOARD_ORIGIN=https://<agent-uid>.plow.run`
-in the VM's environment. Plow's current provisioning does not set this variable,
-so deployed images keep the Control UI disabled until the API supplies it.
-Without the variable, the gateway keeps its loopback token config. The Compose
-setup has no owner-authenticated dashboard proxy.
+The gateway always serves the Control UI on loopback port 3000. No dashboard
+origin environment variable is needed. Bare Docker Compose has no dashboard
+proxy and does not publish port 3000, so its UI is unreachable.
 
-With the variable set, the gateway serves the Control UI on loopback port 3000.
 Plow reaches it through the private `https://<vm>.exe.xyz:3000` ingress, which
 delivers to `127.0.0.1` inside the VM. The proxy requires the exact browser
 origin on WebSockets and preserves that `Origin` upstream, while replacing the
-browser's `Host` with the upstream host. The image must use relative links so
-the browser stays on its agent's web origin.
+browser's `Host` with the upstream host. OpenClaw accepts any browser origin;
+the proxy enforces the origin and owner checks. The image uses relative links
+so the browser stays on its agent's web origin.
 
 The proxy removes browser-supplied `X-Plow-*`, `X-Exedev-*`, `X-Forwarded-*`,
 `Forwarded`, and `X-Real-IP` headers, plus Plow's session cookie. It sets
 `X-Plow-User` to the authenticated owner's bare Plow user UID and
 `X-Forwarded-For` to the request's client address when present. The UID is an
 account identifier, not a phone number or a dashboard display name.
+Each boot generates a gateway password in `OPENCLAW_GATEWAY_PASSWORD` for local
+OpenClaw CLI calls. It is never written to `openclaw.json`. OpenClaw accepts
+this password only on direct loopback requests without forwarded headers.
+The runtime user's login and interactive shells load it from a private state
+file, so `openclaw` commands work over SSH without entering a password. Anyone
+with a shell on the VM already has full control of the agent.
 
 For a local Plow API, use the CLI's `--api-base` option and mint with
 `--agent-api-base` set to an address the container can reach, such as
@@ -165,9 +169,11 @@ registry itself:
 Dashboard access relies on Plow's proxy admitting only the owner. Every
 identity that reaches this gateway through that proxy receives admin access;
 `GET /v1/agents/cloud/me` does not provide the owner's account UID for a narrower
-gateway grant. Any process on the same host, including the agent's shell, can
-forge `X-Plow-User` over loopback. Keep direct gateway access limited to the
-host's loopback interface.
+gateway grant. The per-boot password lets the agent's own CLI use the gateway
+over loopback; it does not authenticate requests carrying forwarded headers.
+Any process on the same host, including the agent's shell, can forge
+`X-Plow-User` over loopback. Keep direct gateway access limited to the host's
+loopback interface.
 
 This agent does not isolate hostile users. Every turn retains its tools; the
 model judges authority from the fetched roster, trust flag, conversation and
