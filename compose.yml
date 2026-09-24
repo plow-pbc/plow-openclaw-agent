@@ -2,8 +2,6 @@ services:
   agent:
     build: .
     env_file: ./plow-credentials
-    environment:
-      PLOW_DASHBOARD_ORIGIN: ${PLOW_DASHBOARD_ORIGIN:-}
     ports:
       - "127.0.0.1:3001:3001"
     volumes:

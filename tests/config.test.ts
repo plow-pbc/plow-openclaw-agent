@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { renderConfig, type Identity } from "../boot/config.ts";
 
@@ -49,7 +48,8 @@ test("provider and optional MCP use environment references, never credential val
   const config = renderConfig({ ...identity, mcp_url: "http://api:8000/relay" }, "http://api:8000");
   assert.equal(config.models.providers.plow.apiKey, "${PLOW_AGENT_TOKEN}");
   assert.equal(config.models.providers.plow.baseUrl, "http://api:8000/v1");
-  assert.equal(config.gateway.auth.token, "${OPENCLAW_GATEWAY_TOKEN}");
+  assert.equal(config.gateway.auth.mode, "trusted-proxy");
+  assert.equal("password" in config.gateway.auth, false);
   assert.equal(config.mcp?.servers.plow.url, "http://127.0.0.1:18790/mcp");
   assert.equal(renderConfig(identity, "http://api:8000").mcp, undefined);
 });
@@ -105,23 +105,18 @@ for (const name of [undefined, null, "", "  "]) test(`missing agent name is not 
   assert.throws(() => renderConfig({ ...identity, agent: { name } }, "http://api:8000"), /no usable agent.name/);
 });
 
-test("the base image uses boot-owned config without the OpenClaw browser UI", () => {
+test("the base image uses boot-owned config with the OpenClaw browser UI", () => {
   const config = renderConfig(identity, "http://api:8000");
-  assert.equal(config.gateway.controlUi?.enabled, false);
+  assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
   assert.deepEqual(config.meta, {});
 });
 
-test("without PLOW_DASHBOARD_ORIGIN, config remains byte-identical to main", () => {
-  const rendered = JSON.stringify(renderConfig(identity, "http://api:8000"), null, 2) + "\n";
-  assert.equal(createHash("sha256").update(rendered).digest("hex"), "2f30f966922de7b9a211350d32cb4e6bb8993c9c4f42d7126457f9bbbf9e7a94");
-});
-
-test("PLOW_DASHBOARD_ORIGIN uses the proxy's port and exact browser origin", () => {
-  const config = renderConfig(identity, "http://api:8000", "https://d658f8f5ab5882ad5edf5a5fd607d198.agents.plow.co");
+test("the dashboard uses the proxy's port and accepts origins checked by the proxy", () => {
+  const config = renderConfig(identity, "http://api:8000");
   assert.deepEqual(config.gateway, {
     mode: "local", bind: "loopback", port: 3000,
-    controlUi: { enabled: true, allowedOrigins: ["https://d658f8f5ab5882ad5edf5a5fd607d198.agents.plow.co"] },
+    controlUi: { enabled: true, allowedOrigins: ["*"] },
     auth: { mode: "trusted-proxy", trustedProxy: {
       userHeader: "x-plow-user", allowLoopback: true,
       deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },

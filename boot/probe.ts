@@ -5,13 +5,13 @@ import { renderConfig } from "./config.js";
 import { startGateway } from "./process.js";
 
 process.env.PLOW_AGENT_TOKEN = "probe-" + randomBytes(16).toString("hex");
-if (process.env.PLOW_DASHBOARD_ORIGIN) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-else process.env.OPENCLAW_GATEWAY_TOKEN = randomBytes(32).toString("hex");
-const config = renderConfig(probeIdentity, "http://127.0.0.1:1", process.env.PLOW_DASHBOARD_ORIGIN);
+delete process.env.OPENCLAW_GATEWAY_TOKEN;
+process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString("hex");
+const config = renderConfig(probeIdentity, "http://127.0.0.1:1");
 await mkdir("/var/lib/plow/workspace", { recursive: true });
 const serialized = JSON.stringify(config, null, 2);
-if ([process.env.PLOW_AGENT_TOKEN, process.env.OPENCLAW_GATEWAY_TOKEN].some(token => token && serialized.includes(token))) {
-  throw new Error("Token leaked into rendered config");
+if ([process.env.PLOW_AGENT_TOKEN, process.env.OPENCLAW_GATEWAY_PASSWORD].some(token => token && serialized.includes(token))) {
+  throw new Error("Credential leaked into rendered config");
 }
 await writeFile("/var/lib/plow/openclaw.json", serialized + "\n", { mode: 0o600 });
 const child = await startGateway(true);
