@@ -5,7 +5,7 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; messageUid: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
+type ActiveTurn = { chat: Chat; messageUid: string; senderIsOwner: boolean; deliveryUnknown?: boolean; replyDelivered?: boolean };
 const activeTurn = new AsyncLocalStorage<ActiveTurn>();
 const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn> };
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
@@ -69,8 +69,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
     from: senderId, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
-    conversation: { kind, id: chat.uid, label: chat.display_name, routePeer: peer },
-    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, replyToId: message.reply_to?.uid },
+    conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
+    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
@@ -84,7 +84,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, messageUid: message.uid };
+  const turn: ActiveTurn = { chat, messageUid: message.uid, senderIsOwner };
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
@@ -167,30 +167,35 @@ export default defineChannelPluginEntry({
   registerCapabilities(api) {
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "Start a group text on your own Plow line with the owner and the supplied phone numbers. Sends the first message and returns the chat uid; use message with action send, channel plow, accountId chat and that uid as target for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. Choose trusted only when the owner explicitly chose full trust. Sends the first message and returns the chat uid; use message with action send, channel plow, accountId chat and that uid as target for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
           members: { type: "array", minItems: 1, items: { type: "string", pattern: "^\\+[1-9][0-9]{1,14}$" }, description: "Recipient phone numbers in E.164 format. The owner is included automatically." },
           body: { type: "string", minLength: 1, description: "The first message to send." },
+          trusted: { type: "boolean", description: "Whether the owner explicitly chose full trust for this group. Defaults to false." },
         },
       },
-      async execute(_id, args: { members: string[]; body: string }) {
+      async execute(_id, args: { members: string[]; body: string; trusted?: boolean }) {
         if (!context.config) return {
           isError: true, content: [{ type: "text", text: "Plow configuration is unavailable." }], details: {},
         };
         const account = plugin.config.resolveAccount(context.config, "chat");
         const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-        const owner = (turn && accepts(account, turn.chat)
-          ? turn.chat.participants.find(p => p.type === "member" && p.role === "owner") : undefined)
-          ?? (await ownerChat(account)).participants.find(p => p.type === "member" && p.role === "owner");
+        if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow"
+          || context.agentAccountId !== "chat" || !turn || !turn.senderIsOwner
+          || context.nativeChannelId !== turn.chat.uid || turn.chat.participants.length !== 2
+          || !accepts(account, turn.chat)) {
+          throw new Error("Starting a thread requires an active message in the owner's main Plow DM.");
+        }
+        const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
-        if (!turn) throw new Error("Starting a thread requires an active message");
         const members = [...new Set([owner.provider_key, ...args.members])].sort();
-        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, turn.messageUid, members, args.body])).digest("hex");
+        const trusted = args.trusted ?? false;
+        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, turn.messageUid, members, args.body, trusted])).digest("hex");
         const chat = await requestWithDeliveryState<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
-          body: args.body, trusted: true, idempotency_key: idempotencyKey,
+          body: args.body, trusted, idempotency_key: idempotencyKey,
         }, turn);
         api.logger.info(`plow started thread chat=${chat.uid}`);
         const result = { chat_uid: chat.uid, message_sent: true };

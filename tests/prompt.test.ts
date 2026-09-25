@@ -6,8 +6,22 @@ import { renderPrompt } from "../boot/prompt.ts";
 
 const prompt = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");
 
-test("no Mac leaves the prompt unchanged", async () => {
-  assert.equal(await renderPrompt(prompt, null, "test-token"), prompt);
+test("no Mac still renders the default thread trust instruction", async () => {
+  assert.match(await renderPrompt(prompt, null, "test-token"), /ask the owner whether the group should have full trust/i);
+});
+
+for (const [mode, expected] of [
+  ["ask", /ask the owner whether the group should have full trust/i],
+  ["trusted", /create groups with trusted: true/i],
+  ["untrusted", /create groups with trusted: false/i],
+] as const) test(`thread trust mode ${mode} renders its instruction`, async () => {
+  const rendered = await renderPrompt(prompt, null, "test-token", mode);
+  assert.match(rendered, expected);
+  if (mode !== "ask") assert.doesNotMatch(rendered, /ask the owner whether the group should have full trust/i);
+});
+
+test("invalid thread trust mode fails at boot", async () => {
+  await assert.rejects(renderPrompt(prompt, null, "test-token", "unknown"), /PLOW_THREAD_TRUST/);
 });
 
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
@@ -37,12 +51,13 @@ for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavail
     try {
       const address = server.address();
       assert.ok(address && typeof address !== "string");
-      const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token");
+      const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token", "ask");
       const expectedInstructions = format === "oversized" ? "A".repeat(8_000)
         : "Use plow_list_skills to discover the owner's Mac skills.";
+      const base = await renderPrompt(prompt, null, "test-token", "ask");
       assert.equal(rendered, ["json", "sse", "oversized"].includes(format)
-        ? `${prompt}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${expectedInstructions}\n\`\`\`\n`
-        : prompt);
+        ? `${base}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${expectedInstructions}\n\`\`\`\n`
+        : base);
       assert.ok(rendered.length <= 20_000, "workspace instructions fit the per-file context cap");
       assert.equal(requests, 1);
     } finally {

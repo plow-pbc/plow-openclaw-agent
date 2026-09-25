@@ -17,7 +17,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   assert.ok(!hooks.includes("before_tool_call"));
 });
 
-test("start-thread refuses an owner's chat without an owner handle", async t => {
+test("start-thread refuses outside an active main Plow DM without a request", async t => {
   let factory: ((context: object) => { name: string; execute: (id: string, args: object) => Promise<unknown> }) | undefined;
   entry.register({ registrationMode: "full", runtime: {}, registerChannel() {}, logger: { info() {} }, on() {},
     registerTool(value: typeof factory) { if (value?.({}).name === "plow_start_thread") factory = value; } });
@@ -25,9 +25,13 @@ test("start-thread refuses an owner's chat without an owner handle", async t => 
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const calls: string[] = [];
   t.mock.method(globalThis, "fetch", async (url: string) => { calls.push(url); return Response.json({ data: [{ uid: "home", status: "active", participants: [{ type: "agent", relationship: "self", line: { uid: "line" } }, { type: "member", role: "owner" }] }], has_more: false }); });
-  const tool = factory({ config: { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } } });
-  await assert.rejects(tool.execute("call", { members: ["+15550000002"], body: "Meet Friday?" }), /no owner handle/);
-  assert.deepEqual(calls, ["http://fixture/v1/chats"]);
+  const config = { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } };
+  for (const context of [
+    { config, sessionKey: "agent:main:main" },
+    { config, sessionKey: "agent:main:plow:group:other", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "group" },
+    { config, sessionKey: "agent:main:main", messageChannel: "webchat" },
+  ]) await assert.rejects(factory(context).execute("call", { members: ["+15550000002"], body: "Meet Friday?" }), /owner's main Plow DM/);
+  assert.deepEqual(calls, []);
 });
 
 test("start-thread returns a tool error without config and makes no request", async t => {

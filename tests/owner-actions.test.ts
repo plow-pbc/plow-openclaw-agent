@@ -76,12 +76,17 @@ for (const action of ["pending", "thread-cache", "thread-roster", "owner-send"])
     } } },
   });
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal });
+  if (action.startsWith("thread")) {
+    assert.match((failure as Error)?.message, /owner's main Plow DM/);
+    assert.equal(posts.length, 0);
+    assert.equal(listings, 1);
+    return;
+  }
   assert.equal(failure, undefined);
   assert.equal(posts.length, 1);
-  assert.equal(posts[0].path, ["pending", "owner-send"].includes(action) ? "/v1/chats/home/messages" : "/v1/chats");
+  assert.equal(posts[0].path, "/v1/chats/home/messages");
   assert.equal(posts[0].body.body, action === "pending" ? "42" : "Ready");
   if (action === "pending") assert.equal(firstContact, true);
-  if (action.startsWith("thread")) assert.deepEqual(posts[0].body.members, [owner.provider_key, guest.provider_key]);
   assert.equal(listings, 1, "actions use discovered facts instead of listing again");
   t.diagnostic(`HTTP received ${posts[0].path}: ${JSON.stringify(posts[0].body)}`);
 });
