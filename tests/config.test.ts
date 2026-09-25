@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import JSON5 from "json5";
 import { renderConfig, syncConfig, type Identity } from "../boot/config.ts";
 
@@ -14,6 +14,12 @@ const identity: Identity = {
     { type: "member", role: "owner", uid: "mem_owner" },
   ] }],
 };
+
+async function configFixture(t: TestContext) {
+  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return { path: join(dir, "openclaw.json"), includes: join(dir, "includes") };
+}
 
 test("only the owner's phone DM becomes main; other peers and groups stay isolated", () => {
   const config = renderConfig(identity, "http://api:8000");
@@ -131,10 +137,7 @@ test("the dashboard uses the proxy's port and accepts origins checked by the pro
 });
 
 test("fresh boot seeds owner defaults and external includes for Plow-owned settings", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
-  t.after(async () => { const { rm } = await import("node:fs/promises"); await rm(dir, { recursive: true, force: true }); });
-  const path = join(dir, "openclaw.json");
-  const includes = join(dir, "includes");
+  const { path, includes } = await configFixture(t);
   await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
   assert.deepEqual(owner.meta, {});
@@ -146,17 +149,14 @@ test("fresh boot seeds owner defaults and external includes for Plow-owned setti
 });
 
 test("restart migrates a full render and keeps owner edits outside Plow-owned paths", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
-  t.after(async () => { const { rm } = await import("node:fs/promises"); await rm(dir, { recursive: true, force: true }); });
-  const path = join(dir, "openclaw.json");
-  const includes = join(dir, "includes");
+  const { path, includes } = await configFixture(t);
   const old = renderConfig(identity, "http://old-api:8000") as Record<string, any>;
   old.channels.telegram = { enabled: true };
   old.models.providers.extra = { baseUrl: "https://example.com" };
   old.plugins.entries.extra = { enabled: true };
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
-  old.bindings.push({ agentId: "extra", match: { channel: "telegram" } });
+  old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
@@ -167,6 +167,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
   assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });
+  assert.deepEqual(owner.bindings[1], { agentId: "extra", match: { channel: "telegram" } });
   assert.equal(JSON5.parse(await readFile(join(includes, "plow-provider.json5"), "utf8")).baseUrl, "http://new-api:8000/v1");
   owner.gateway.port = 9999;
   owner.channels.plow.enabled = false;
@@ -180,10 +181,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
 });
 
 test("MCP Plow server include disappears without a relay while owner MCP settings remain", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
-  t.after(async () => { const { rm } = await import("node:fs/promises"); await rm(dir, { recursive: true, force: true }); });
-  const path = join(dir, "openclaw.json");
-  const includes = join(dir, "includes");
+  const { path, includes } = await configFixture(t);
   await syncConfig(renderConfig({ ...identity, mcp_url: "https://relay.example" }, "http://api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
   owner.mcp.servers.other = { url: "https://other.example" };

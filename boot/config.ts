@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import JSON5 from "json5";
 
@@ -100,6 +100,13 @@ function parentAt(root: ConfigObject, path: readonly string[], create: boolean):
   return node;
 }
 
+function isPlowOwnerBinding(value: unknown): boolean {
+  if (!isObject(value) || !isObject(value.match)) return false;
+  const match = value.match;
+  return value.agentId === "main" && match.channel === "plow" && match.accountId === "chat"
+    && isObject(match.peer) && match.peer.kind === "direct" && match.peer.id === "plow-owner";
+}
+
 export async function syncConfig(
   rendered: ReturnType<typeof renderConfig>, configPath: string, includeDir: string,
 ): Promise<void> {
@@ -113,7 +120,6 @@ export async function syncConfig(
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
     owner = structuredClone(seed);
-    await writeFile(configPath, JSON.stringify(owner, null, 2) + "\n", { mode: 0o600 });
   }
 
   for (const [file, path] of ownedPaths) {
@@ -132,6 +138,10 @@ export async function syncConfig(
   }
   const bindingPath = join(includeDir, "binding.json5");
   await writeFile(bindingPath, JSON.stringify(rendered.bindings[0], null, 2) + "\n");
-  owner.bindings = [{ $include: bindingPath }, ...(Array.isArray(owner.bindings) ? owner.bindings.slice(1) : [])];
-  await writeFile(configPath, JSON.stringify(owner, null, 2) + "\n", { mode: 0o600 });
+  const ownerBindings = Array.isArray(owner.bindings) ? owner.bindings.filter(binding =>
+    !(isObject(binding) && binding.$include === bindingPath) && !isPlowOwnerBinding(binding)) : [];
+  owner.bindings = [{ $include: bindingPath }, ...ownerBindings];
+  const temporaryPath = `${configPath}.tmp`;
+  await writeFile(temporaryPath, JSON.stringify(owner, null, 2) + "\n", { mode: 0o600 });
+  await rename(temporaryPath, configPath);
 }
