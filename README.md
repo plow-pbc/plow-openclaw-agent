@@ -38,7 +38,7 @@ Compose reads `./plow-credentials` from this repository root:
 
 ```sh
 plow-agents mint LINE_UID
-docker compose up
+docker compose up --build
 ```
 
 Open <http://localhost:3001>.
