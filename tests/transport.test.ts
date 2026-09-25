@@ -160,7 +160,7 @@ for (const outcome of ["completed", "incomplete"] as const) test(`unknown delive
   assert.equal(await readFile(`${root}/plow-checkpoints/chat`, "utf8"), outcome === "completed" ? "next" : "uncertain");
 });
 
-for (const scenario of ["waited", "pending", "buffered", "buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history", "interrupted", "answered", "peer", "group", "fresh"]) test(`first contact and restart: ${scenario}`, async t => {
+for (const scenario of ["waited", "pending", "buffered", "buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history", "unanswered-before-connect", "newer-during-baseline", "interrupted", "answered", "peer", "group", "fresh"]) test(`first contact and restart: ${scenario}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   if (scenario === "waited") {
     await mkdir(`${root}/plow-checkpoints`);
@@ -173,18 +173,18 @@ for (const scenario of ["waited", "pending", "buffered", "buffered-before-read",
     sender: scenario === "peer" ? { type: "agent", relationship: "peer", line: { uid: "peer" } } : sender };
   const older = { ...first, uid: "older", direction: "outbound" };
   const newer = { ...first, uid: "newer" };
-  const twoMessages = ["buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history"].includes(scenario);
+  const twoMessages = ["buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history", "unanswered-before-connect", "newer-during-baseline"].includes(scenario);
   let boot = 0;
   if (["buffered", "fresh", "interrupted"].includes(scenario)) server.on("connection", (socket: { send: (text: string) => void }) => {
     if (scenario !== "interrupted" || !boot) socket.send(JSON.stringify({ event_type: "message_received", event_id: "first", chat_id: "home", data: { message: first } }));
   });
   t.mock.method(globalThis, "fetch", async (url: string) => {
-    if (!boot && ((scenario === "buffered-before-read" && url.endsWith("/chats")) ||
+    if (!boot && (((scenario === "buffered-before-read" || scenario === "newer-during-baseline") && url.endsWith("/chats")) ||
       (scenario === "buffered-after-read" && url.includes("limit=1")) ||
       (scenario === "two-during-baseline" && url.includes("limit=1")) ||
       (scenario === "two-during-history" && url.includes("limit=20")))) {
       for (const socket of server.clients) {
-        for (const message of scenario === "buffered-after-read" ? [newer] : [first, newer]) {
+        for (const message of ["buffered-after-read", "newer-during-baseline"].includes(scenario) ? [newer] : [first, newer]) {
           socket.send(JSON.stringify({ event_type: "message_received", event_id: message.uid, chat_id: "home", data: { message } }));
         }
         // A pong confirms the client has processed the preceding frames.
@@ -196,7 +196,7 @@ for (const scenario of ["waited", "pending", "buffered", "buffered-before-read",
     return Response.json(
       url.endsWith("/chats") ? { data: scenario === "fresh" || (scenario === "interrupted" && !boot) ? [] : [chat], has_more: false } :
       url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? {
-        data: url.includes("limit=1") ? [["buffered-before-read", "two-during-baseline"].includes(scenario) ? newer : first] :
+        data: url.includes("limit=1") ? [["buffered-before-read", "two-during-baseline", "unanswered-before-connect", "newer-during-baseline"].includes(scenario) ? newer : first] :
           scenario === "waited" ? [first] : twoMessages ? [newer, first, older] : [first, older], has_more: false,
       } : { ticket: "ticket" });
   });
@@ -219,29 +219,6 @@ test("first-contact recovery includes its message and newer arrivals, excluding 
     data: [message("newer"), message("pending"), message("old")], has_more: false,
   }));
   assert.deepEqual((await recover(account, "home", "first:pending")).map(m => m.uid), ["pending", "newer"]);
-});
-
-test("first connect answers both unanswered owner texts in order", async t => {
-  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
-  const controller = abortAfter();
-  const sender = { type: "member", uid: "owner", role: "owner", display_name: "Owner" };
-  const chat = { uid: "home", status: "active", participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
-  const older = { uid: "older", direction: "inbound", sender };
-  const newer = { ...older, uid: "newer" };
-  const answered = { uid: "answered", direction: "outbound", sender: chat.participants[1] };
-  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
-    url.endsWith("/chats") ? { data: [chat], has_more: false } :
-    url.endsWith("/chats/home") ? chat :
-    url.includes("/messages?") ? { data: url.includes("limit=1") ? [newer] : [newer, older, answered], has_more: false } :
-    { ticket: "ticket" }));
-  const turns: { uid: string; firstContact: boolean }[] = [];
-  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message, firstContact) => {
-    turns.push({ uid: message.uid, firstContact });
-    if (message.uid === "newer") controller.abort();
-    return "completed";
-  });
-  assert.deepEqual(turns, [{ uid: "older", firstContact: true }, { uid: "newer", firstContact: false }]);
-  assert.equal(await readFile(`${root}/plow-checkpoints/home`, "utf8"), "newer");
 });
 
 for (const failure of ["incomplete", "throws", "notice-unknown"] as const) test(`a turn that ${failure} is acked without disconnecting or replaying later turns`, async t => {

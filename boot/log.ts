@@ -9,8 +9,8 @@ export function installBootLog() {
   if (!state) throw new Error("OPENCLAW_STATE_DIR is required");
   const file = join(state, "boot.log");
   let size = existsSync(file) ? statSync(file).size : 0;
-  const write = (args: unknown[]) => {
-    let line = Buffer.from(format(...args) + "\n");
+  const write = (chunk: Buffer) => {
+    let line = chunk;
     if (line.length > maxBytes) line = line.subarray(line.length - maxBytes);
     if (size + line.length > maxBytes) {
       if (size) renameSync(file, `${file}.1`);
@@ -21,6 +21,7 @@ export function installBootLog() {
   };
   for (const method of ["log", "warn", "error"] as const) {
     const original = console[method].bind(console);
-    console[method] = (...args: unknown[]) => { original(...args); write(args); };
+    console[method] = (...args: unknown[]) => { original(...args); write(Buffer.from(format(...args) + "\n")); };
   }
+  return write;
 }

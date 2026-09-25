@@ -8,7 +8,7 @@ import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
 
 try {
-  installBootLog();
+  const writeLog = installBootLog();
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
   if (!base) throw new Error("PLOW_API_BASE is required");
   process.env.PLOW_AGENT_TOKEN ||= "proxied";
@@ -28,7 +28,7 @@ try {
   await writeFile("/var/lib/plow/openclaw.json", JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex();
-  await startGateway(false, identity.mcp_url ?? undefined);
+  await startGateway(false, identity.mcp_url ?? undefined, writeLog);
 } catch (error) {
   console.error(`plow-boot: parked: ${error instanceof Error ? error.message : String(error)}`);
   setInterval(() => {}, 2 ** 30);

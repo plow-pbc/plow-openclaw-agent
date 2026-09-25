@@ -252,22 +252,15 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           try { checkpoint = await readFile(`${dir}/${encodeURIComponent(chat.uid)}`, "utf8"); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            const bufferedBeforeRead = bufferedChats.get(chat.uid)?.values().next().value;
             const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
             const newest = page.data[0];
             checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
               ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest)}` : newest?.uid ?? "";
             const buffered = bufferedChats.get(chat.uid);
-            // HTTP history can include a newer message whose socket frame is delayed.
-            // Compare history order when buffer membership cannot order the candidates.
-            let first = bufferedBeforeRead ?? (!checkpoint.startsWith("first:") || buffered?.has(newest.uid)
-              ? buffered?.values().next().value : undefined);
-            const candidate = buffered?.values().next().value;
-            if (!first && candidate && checkpoint.startsWith("first:") &&
-              (await recover(account, chat.uid, `first:${candidate}`)).some(message => message.uid === newest.uid)) {
-              first = candidate;
-            }
-            if (first) checkpoint = `first:${first}`;
+            const first = buffered?.values().next().value;
+            // A buffered frame moves first contact back only when history proves it is older.
+            if (first && (!checkpoint.startsWith("first:") || (first !== checkpoint.slice(6) &&
+              (await recover(account, chat.uid, `first:${first}`)).some(message => message.uid === checkpoint.slice(6))))) checkpoint = `first:${first}`;
             await ack(chat.uid, checkpoint);
             // Late frames can include an exclusive baseline, but must not replace pending first contact.
             if (!checkpoint.startsWith("first:") && bufferedChats.has(chat.uid)) {
