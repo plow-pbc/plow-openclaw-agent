@@ -2,7 +2,7 @@ FROM ghcr.io/openclaw/openclaw:2026.9.6@sha256:0a5ff5e682e62afa19149df126aa50063
 ARG PLOW_REVISION
 LABEL org.opencontainers.image.revision=$PLOW_REVISION co.plow.probe=/opt/plow/probe
 USER root
-RUN mkdir -p /opt/plow/skills /var/lib/plow && chown node:node /var/lib/plow
+RUN mkdir -p /opt/plow/skills /var/lib/plow /etc/plow/openclaw && chown node:node /var/lib/plow /etc/plow/openclaw
 COPY boot /opt/plow/boot
 COPY boot/gateway-password.sh /etc/profile.d/plow-openclaw.sh
 RUN printf '\n. /etc/profile.d/plow-openclaw.sh\n' >> /home/node/.bashrc
@@ -43,7 +43,7 @@ RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scrip
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.
 ENV AGENT_RUNTIME=OpenClaw
-ENV OPENCLAW_STATE_DIR=/var/lib/plow OPENCLAW_CONFIG_PATH=/var/lib/plow/openclaw.json OPENCLAW_NO_RESPAWN=1 NODE_DISABLE_COMPILE_CACHE=1
+ENV OPENCLAW_STATE_DIR=/var/lib/plow OPENCLAW_CONFIG_PATH=/var/lib/plow/openclaw.json OPENCLAW_INCLUDE_ROOTS=/etc/plow/openclaw OPENCLAW_NO_RESPAWN=1 NODE_DISABLE_COMPILE_CACHE=1
 # The inherited healthcheck loads config and can race the boot state lock.
 HEALTHCHECK NONE
 USER node

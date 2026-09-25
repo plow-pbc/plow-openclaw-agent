@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
-import { renderConfig } from "./config.js";
+import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
@@ -23,7 +23,7 @@ try {
   }
   const prompt = await readFile("/opt/plow/prompt/AGENTS.md", "utf8");
   await writeFile("/var/lib/plow/workspace/AGENTS.md", await renderPrompt(prompt, identity.mcp_url, process.env.PLOW_AGENT_TOKEN));
-  await writeFile("/var/lib/plow/openclaw.json", JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex();
   await startGateway(false, identity.mcp_url ?? undefined);

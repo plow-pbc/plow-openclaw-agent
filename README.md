@@ -96,10 +96,22 @@ pass refreshes the collector before reporting. The client is
 commit and checksum in the `Dockerfile` and fetched at build; its key and ledger live in the state
 volume, so a rebuilt container keeps one install rather than registering a second.
 Without `AGENT_ID` there is nothing to report for and nothing runs.
-`openclaw.json` is boot-owned: runtime config edits (`config set`, `set-identity` emoji/avatar changes, and plugin installs) do not survive a restart.
+`openclaw.json` belongs to the owner. Changes made through the Control UI or
+`openclaw config set` to other channels, model providers, plugins, agent defaults,
+skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
+volume, then refreshes its own settings through `$include` files under
+`/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
+connected), channel, plugin entry and load path, tools, commands, main agent
+identity, owner DM binding, session routing, and cross-conversation memory policy
+are Plow-owned. OpenClaw refuses edits to those included settings; edits made by
+hand beside an include are removed at the next boot. Additional bindings survive.
+An existing volume with a fully rendered config is converted on its next boot.
+OpenClaw skips automatic legacy-key migration when a config uses `$include`, so
+runtime upgrades must review and update both Plow's rendered settings and any
+owner settings that use changed keys before starting the new version.
 Workspace `BOOTSTRAP.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` are also boot-owned
 and removed at every startup; `AGENTS.md` is boot-rendered.
-Do not store durable agent state in these files.
+Do not store durable agent state in these workspace files.
 
 The gateway starts after one bounded identity lookup, even before the owner has a
 chat. Identity lookup tolerates 401/403 for 120 seconds and retries network/429/5xx

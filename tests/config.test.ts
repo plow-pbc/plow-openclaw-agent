@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { renderConfig, type Identity } from "../boot/config.ts";
+import JSON5 from "json5";
+import { renderConfig, syncConfig, type Identity } from "../boot/config.ts";
 
 const identity: Identity = {
   agent: { name: "Juniper" },
@@ -51,7 +55,7 @@ test("provider and optional MCP use environment references, never credential val
   assert.equal(config.gateway.auth.mode, "trusted-proxy");
   assert.equal("password" in config.gateway.auth, false);
   assert.equal(config.mcp?.servers.plow.url, "http://127.0.0.1:18790/mcp");
-  assert.equal(renderConfig(identity, "http://api:8000").mcp, undefined);
+  assert.deepEqual(renderConfig(identity, "http://api:8000").mcp, { sessionIdleTtlMs: 300_000 });
 });
 
 test("GLM falls back to Sonnet on the Plow provider with explicit capacity and pricing", () => {
@@ -124,4 +128,69 @@ test("the dashboard uses the proxy's port and accepts origins checked by the pro
     trustedProxies: ["127.0.0.1"],
     reload: { mode: "off" },
   });
+});
+
+test("fresh boot seeds owner defaults and external includes for Plow-owned settings", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
+  t.after(async () => { const { rm } = await import("node:fs/promises"); await rm(dir, { recursive: true, force: true }); });
+  const path = join(dir, "openclaw.json");
+  const includes = join(dir, "includes");
+  await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
+  const owner = JSON5.parse(await readFile(path, "utf8"));
+  assert.deepEqual(owner.meta, {});
+  assert.equal(owner.agents.defaults.model.primary, "plow/z-ai/glm-5.2");
+  assert.equal(owner.skills.load.extraDirs[0], "/opt/plow/skills");
+  assert.deepEqual(owner.gateway, { $include: join(includes, "gateway.json5") });
+  assert.deepEqual(owner.bindings, [{ $include: join(includes, "binding.json5") }]);
+  assert.deepEqual(JSON5.parse(await readFile(join(includes, "gateway.json5"), "utf8")).port, 3000);
+});
+
+test("restart migrates a full render and keeps owner edits outside Plow-owned paths", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
+  t.after(async () => { const { rm } = await import("node:fs/promises"); await rm(dir, { recursive: true, force: true }); });
+  const path = join(dir, "openclaw.json");
+  const includes = join(dir, "includes");
+  const old = renderConfig(identity, "http://old-api:8000") as Record<string, any>;
+  old.channels.telegram = { enabled: true };
+  old.models.providers.extra = { baseUrl: "https://example.com" };
+  old.plugins.entries.extra = { enabled: true };
+  old.agents.defaults.model.primary = "extra/model";
+  old.agents.entries.main.identity.emoji = "old";
+  old.bindings.push({ agentId: "extra", match: { channel: "telegram" } });
+  await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
+  await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
+  const owner = JSON5.parse(await readFile(path, "utf8"));
+  assert.deepEqual(owner.channels.telegram, { enabled: true });
+  assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
+  assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
+  assert.equal(owner.agents.defaults.model.primary, "extra/model");
+  assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
+  assert.equal(owner.bindings.length, 2);
+  assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });
+  assert.equal(JSON5.parse(await readFile(join(includes, "plow-provider.json5"), "utf8")).baseUrl, "http://new-api:8000/v1");
+  owner.gateway.port = 9999;
+  owner.channels.plow.enabled = false;
+  await writeFile(path, JSON.stringify(owner));
+  await syncConfig(renderConfig(identity, "http://newer-api:8000"), path, includes);
+  const again = JSON5.parse(await readFile(path, "utf8"));
+  assert.deepEqual(again.gateway, { $include: join(includes, "gateway.json5") });
+  assert.deepEqual(again.channels.plow, { $include: join(includes, "plow-channel.json5") });
+  assert.deepEqual(again.channels.telegram, { enabled: true });
+  assert.equal(again.agents.defaults.model.primary, "extra/model");
+});
+
+test("MCP Plow server include disappears without a relay while owner MCP settings remain", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "plow-config-"));
+  t.after(async () => { const { rm } = await import("node:fs/promises"); await rm(dir, { recursive: true, force: true }); });
+  const path = join(dir, "openclaw.json");
+  const includes = join(dir, "includes");
+  await syncConfig(renderConfig({ ...identity, mcp_url: "https://relay.example" }, "http://api:8000"), path, includes);
+  const owner = JSON5.parse(await readFile(path, "utf8"));
+  owner.mcp.servers.other = { url: "https://other.example" };
+  await writeFile(path, JSON.stringify(owner));
+  await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
+  const again = JSON5.parse(await readFile(path, "utf8"));
+  assert.equal(again.mcp.servers.plow, undefined);
+  assert.deepEqual(again.mcp.servers.other, { url: "https://other.example" });
+  assert.equal(again.mcp.sessionIdleTtlMs, 300_000);
 });

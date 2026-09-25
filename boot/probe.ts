@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { probeIdentity } from "./probe-fixture.js";
-import { renderConfig } from "./config.js";
+import { renderConfig, syncConfig } from "./config.js";
 import { startGateway } from "./process.js";
 
 process.env.PLOW_AGENT_TOKEN = "probe-" + randomBytes(16).toString("hex");
@@ -13,7 +13,7 @@ const serialized = JSON.stringify(config, null, 2);
 if ([process.env.PLOW_AGENT_TOKEN, process.env.OPENCLAW_GATEWAY_PASSWORD].some(token => token && serialized.includes(token))) {
   throw new Error("Credential leaked into rendered config");
 }
-await writeFile("/var/lib/plow/openclaw.json", serialized + "\n", { mode: 0o600 });
+await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
 const child = await startGateway(true);
 let succeeded = false;
 let timedOut = false;
