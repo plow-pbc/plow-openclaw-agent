@@ -11,6 +11,9 @@ main's first-contact replay and boot-log changes.
   plugin entry. These are the same config methods used by the Control UI.
 - The `config.patch` gateway-port edit was refused with `Config mutation cannot
   update external $include target /etc/plow/openclaw/gateway.json5`.
+- Patches to the main agent's identity and binding entry were also refused at
+  their external includes; the binding replacement returned
+  `CONFIG_INCLUDE_OWNERSHIP`.
 - `openclaw plugins install --link` refused an additional local plugin because
   `plugins.load` uses an include.
 - A replacement container started on the same state volume. `config.get`
