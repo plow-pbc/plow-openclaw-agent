@@ -31,9 +31,8 @@ its release commit `eb377ac59e6c9fd6c7705028034812becf00271b`.
 | Channel registration and inbound dispatch | [Plugin entry](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/plugin-sdk/core.ts), [turn contract](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/channels/turn/types.ts) |
 | Session isolation and owner binding | [Routing schema](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/zod-schema.agents.ts) |
 | Tool registration, requester and deny policy | [Tool API](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/plugins/plugin-api.types.ts), [hook context](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/plugins/hook-types.ts), [policy schema](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/zod-schema.agent-runtime.ts) |
-| MCP configuration | [MCP server schema](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/zod-schema.mcp-server.ts) |
+| MCP configuration | [MCP server type](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/types.mcp.ts) |
 | Native MCP catalog omits server instructions | [Catalog construction](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/agents/agent-bundle-mcp-runtime.ts) |
-| Channel identity and personal USER.md | [Identity methods](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/gateway/server-methods/users-channel-identities.ts), [session ownership](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/gateway/server-methods/sessions-mutations.ts) |
 
 ## Defaults we inherit
 
@@ -43,25 +42,10 @@ those defaults when changing the runtime pin or adding channels. Host concurrenc
 is separate from Plow's per-chat scheduling; Plow's send adapter still validates
 that destinations are active and belong to its served lines.
 
-OpenClaw 2026.9.6 still executes `plow_start_thread` without the channel module's
-`AsyncLocalStorage` context. Channel receipt and tool execution load separate
-instances of the plugin module. Plow shares its active turn by session key across
-those instances; the current-chat send refusal and message delivery latch still
-use their live outbound context. The dashboard owner profile is linked to the
-`plow-owner` channel identity after first sign-in, and the owner DM session is
-assigned to that profile so its personal `USER.md` loads on later turns.
-OpenClaw 2026.9.6 enables Tool Search by default, which
-would hide plugin and MCP schemas behind `tool_search` and `tool_call`; boot
-sets `tools.toolSearch` to false to retain the tested tool surface. The 9.6
-messaging profile also includes the new `gateway` and `theme` tools.
-The trusted proxy grants the signed dashboard connection read, write and admin
-scopes. The base image leaves Gateway roles unset because the channel sender
-sentinel is not a dashboard profile ID.
-Boot uses its local password for identity reads and the idempotent link;
-`sessions.assignOwner` requires an identified human, so boot uses a signed
-trusted-proxy connection for that assignment. It polls every five minutes until
-both records exist, then stops. A profile or session shape that cannot be linked
-stops the polling with an error. The signing key stays in the state volume.
+On 2026.9.6, OpenClaw loads channel receipt and tool execution in separate plugin
+module instances. Plow shares the active turn by session key so `plow_start_thread`
+can use its owner context. Tool Search is disabled to retain the tested plugin and
+MCP tool surface.
 
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local

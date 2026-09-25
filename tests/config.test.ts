@@ -112,14 +112,14 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   assert.deepEqual(config.meta, {});
 });
 
-test("the dashboard proxy grants admin without applying a profile role to the channel sender sentinel", () => {
+test("the dashboard uses the proxy's port and accepts origins checked by the proxy", () => {
   const config = renderConfig(identity, "http://api:8000");
   assert.deepEqual(config.gateway, {
     mode: "local", bind: "loopback", port: 3000,
     controlUi: { enabled: true, allowedOrigins: ["*"] },
     auth: { mode: "trusted-proxy", trustedProxy: {
       userHeader: "x-plow-user", allowLoopback: true,
-      deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.write", "operator.admin"] },
+      deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
     } },
     trustedProxies: ["127.0.0.1"],
     reload: { mode: "off" },

@@ -19,7 +19,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
       mode: "local", bind: "loopback", port: 3000, controlUi: { enabled: true, allowedOrigins: ["*"] },
       auth: { mode: "trusted-proxy", trustedProxy: {
         userHeader: "x-plow-user", allowLoopback: true,
-        deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.write", "operator.admin"] },
+        deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
       } },
       trustedProxies: ["127.0.0.1"],
       reload: { mode: "off" },
