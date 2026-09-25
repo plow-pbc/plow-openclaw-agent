@@ -67,3 +67,36 @@ test("gateway and bridge output reaches the console and boot log", async t => {
   const log = await readFile(join(state, "boot.log"), "utf8");
   for (const line of ["bridge started", "bridge warning", "gateway started", "gateway failure"]) assert.match(log, new RegExp(line));
 });
+
+test("Agent Index client and collector errors reach the console and boot log", async t => {
+  const state = await mkdtemp(join(tmpdir(), "plow-index-log-"));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const logUrl = new URL("../boot/log.ts", import.meta.url).href;
+  const indexUrl = new URL("../boot/agent-index.ts", import.meta.url).href;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import childProcess from "node:child_process";
+    import { EventEmitter } from "node:events";
+    import { syncBuiltinESMExports } from "node:module";
+    import { PassThrough } from "node:stream";
+    childProcess.spawn = (command, args) => {
+      const child = Object.assign(new EventEmitter(), { stderr: new PassThrough() });
+      queueMicrotask(() => {
+        child.stderr.write(command === "agentsview" ? "collector failure\\n" : "index client failure\\n");
+        child.emit("close", command === "agentsview" || args.includes("status") ? 0 : 1, null);
+      });
+      return child;
+    };
+    syncBuiltinESMExports();
+    const { installBootLog } = await import(${JSON.stringify(logUrl)});
+    const { startAgentIndex } = await import(${JSON.stringify(indexUrl)});
+    const timer = startAgentIndex(300_000, installBootLog());
+    clearInterval(timer);
+  `], { env: { ...process.env, AGENT_ID: "my-agent", OPENCLAW_STATE_DIR: state }, encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  assert.match(child.stderr, /collector failure/);
+  assert.match(child.stderr, /index client failure/);
+  assert.match(child.stderr, /see the line above/);
+  const log = await readFile(join(state, "boot.log"), "utf8");
+  for (const line of ["collector failure", "index client failure", "see the line above"]) assert.match(log, new RegExp(line));
+  assert.ok(log.indexOf("index client failure") < log.indexOf("see the line above"));
+});
