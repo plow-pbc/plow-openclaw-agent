@@ -32,9 +32,13 @@ export function linkSessions(state = "/var/lib/plow") {
 // No switch. The reporter is here because this image carries it; an owner who
 // does not want their usage on the Index builds without AGENT_ID, and then
 // there is nothing to report for and this stands down.
-export function startAgentIndex(interval = 300_000) {
+export function startAgentIndex(interval = 300_000, writeLog?: (chunk: Buffer) => void) {
   const agent = process.env.AGENT_ID;
   if (!agent) return undefined;
+  const logStderr = (child: ReturnType<typeof spawn>) => child.stderr?.on("data", (chunk: Buffer) => {
+    process.stderr.write(chunk);
+    writeLog?.(chunk);
+  });
   // The Plow bearer is passed to the register pass only, the same split the
   // client documents: registration exchanges it once for an Index key, and
   // every report after that uses the key the client stored.
@@ -45,7 +49,7 @@ export function startAgentIndex(interval = 300_000) {
   // strands the usage already published.
   const run = (args: string[], token?: string) => new Promise<number>(resolve => {
     const child = spawn("python3", [CLIENT, ...args], {
-      stdio: ["ignore", "ignore", "inherit"],
+      stdio: ["ignore", "ignore", "pipe"],
       // OPENCLAW_STATE_DIR names the store the client reads. Told, not left to
       // find it through the link below: this env is built rather than
       // inherited, and a client that finds nothing at its GUESSED default
@@ -53,6 +57,7 @@ export function startAgentIndex(interval = 300_000) {
       // the correct answer for a machine that simply does not run OpenClaw.
       env: { PATH: process.env.PATH!, HOME: "/var/lib/plow", OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR!, AGENT_ID: agent, PLOW_API_BASE: process.env.PLOW_API_BASE!, ...(token ? { PLOW_AGENT_TOKEN: token } : {}) },
     });
+    logStderr(child);
     child.on("error", error => { console.error(`agent-index: ${error.message}`); resolve(1); });
     child.on("close", code => resolve(code ?? 1));
   });
@@ -60,7 +65,8 @@ export function startAgentIndex(interval = 300_000) {
   // database only when told to: without this the collector is installed, the
   // sessions are linked, and every report is still a day of zeros.
   const sync = () => new Promise<void>(resolve => {
-    const child = spawn("agentsview", ["sync"], { stdio: ["ignore", "ignore", "inherit"], env: { PATH: process.env.PATH!, HOME: "/var/lib/plow" } });
+    const child = spawn("agentsview", ["sync"], { stdio: ["ignore", "ignore", "pipe"], env: { PATH: process.env.PATH!, HOME: "/var/lib/plow" } });
+    logStderr(child);
     child.on("error", error => { console.error(`agent-index: no collector sync, usage will read zero: ${error.message}`); resolve(); });
     child.on("close", () => resolve());
   });

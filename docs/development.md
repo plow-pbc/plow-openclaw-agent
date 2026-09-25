@@ -52,5 +52,5 @@ Restore a pre-upgrade backup, or use a fresh state volume (which resets local
 profiles, sessions and memory); do not attempt an in-place database downgrade.
 Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`.
 Restore that directory into the replacement volume before booting the agent.
-Without checkpoints, boot silently skips group messages from the outage window
-and all but the newest pending owner DM.
+Without checkpoints, boot silently skips group messages from the outage window;
+trailing unanswered owner DMs replay in order.

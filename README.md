@@ -84,6 +84,7 @@ deletes it, so the next boot starts with fresh agent state.
 Set `PLOW_API_BASE` to the API root without `/v1`. Local runs also need
 `PLOW_AGENT_TOKEN`; cloud hosts can inject it. Use an API endpoint you control.
 Agent state lives in the persistent `/var/lib/plow` volume.
+Boot diagnostics also appear in `/var/lib/plow/boot.log`, rotated at 256 KiB.
 
 Set `AGENT_ID` to the Agent Index id to put this agent on
 [the index](https://aiworthusing.com/agent-index): boot then registers the listing,
@@ -125,8 +126,8 @@ Without a cached owner, the fallback lookup refuses truncated listings.
 The API currently returns complete listings.
 Socket drops reconnect with backoff; the plugin never re-reads identity.
 
-Without a checkpoint, an earlier owner-DM message buffered during baseline recovery runs first.
-Otherwise, the newest inbound member message is first contact, even if sent before the plugin connects.
+Without a checkpoint, the earliest unanswered owner-DM message is first contact,
+including texts sent before the plugin connects. Later unanswered texts run in order.
 Chat checkpoints survive restarts. Chats omitted from a truncated listing
 recover on their first live frame. Optional history failures still dispatch the
 current message. Email threads have separate sessions, shared by their senders,

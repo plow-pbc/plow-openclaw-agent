@@ -3,10 +3,12 @@ import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
+import { installBootLog } from "./log.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
 
 try {
+  const writeLog = installBootLog();
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
   if (!base) throw new Error("PLOW_API_BASE is required");
   process.env.PLOW_AGENT_TOKEN ||= "proxied";
@@ -25,8 +27,8 @@ try {
   await writeFile("/var/lib/plow/workspace/AGENTS.md", await renderPrompt(prompt, identity.mcp_url, process.env.PLOW_AGENT_TOKEN));
   await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
-  startAgentIndex();
-  await startGateway(false, identity.mcp_url ?? undefined);
+  startAgentIndex(300_000, writeLog);
+  await startGateway(false, identity.mcp_url ?? undefined, writeLog);
 } catch (error) {
   console.error(`plow-boot: parked: ${error instanceof Error ? error.message : String(error)}`);
   setInterval(() => {}, 2 ** 30);
