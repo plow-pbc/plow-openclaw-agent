@@ -175,11 +175,11 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     const enqueue = (chat: string, work: () => Promise<void>) => {
       const previous = queues.get(chat) ?? Promise.resolve();
       const next = previous.then(async () => {
-        if ((!accepting && account.accountId === "chat") || signal.aborted || queueFailed) return;
+        if (!accepting || signal.aborted || queueFailed) return;
         if (active === 4) await new Promise<void>(resolve => slots.push(resolve));
         else active++;
         try {
-          if ((accepting || account.accountId === "email") && !signal.aborted && !queueFailed) await work();
+          if (accepting && !signal.aborted && !queueFailed) await work();
         } catch (error) {
           queueFailed = true;
           queueError = error;
@@ -297,17 +297,17 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           if (account.accountId === "chat" && !recoveredChats.has(event.chat_id)) {
             await replay(event.chat_id);
           }
-          if ((!accepting && account.accountId === "chat") || signal.aborted) return;
+          if (!accepting || signal.aborted) return;
           if (!replayed.has(event.data.message.uid)) await consume(event.chat_id, event.data.message);
           remember(event.event_id);
         });
       }
-      accepting = false;
+      accepting = account.accountId === "email";
       await Promise.all(queues.values());
       if (queueFailed) throw queueError;
       if (unauthorized) throw new HttpError(401);
     } catch (error) {
-      accepting = false;
+      accepting = account.accountId === "email";
       if (signal.aborted) break;
       if (error instanceof AmbiguousOwnerChatError || (error instanceof HttpError && error.status === 401)) {
         log(error.message + "; stopped until restart");
