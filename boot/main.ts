@@ -3,6 +3,7 @@ import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
+import { startOwnerLink } from "./owner-link.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
 
@@ -27,6 +28,7 @@ try {
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex();
   await startGateway(false, identity.mcp_url ?? undefined);
+  startOwnerLink();
 } catch (error) {
   console.error(`plow-boot: parked: ${error instanceof Error ? error.message : String(error)}`);
   setInterval(() => {}, 2 ** 30);

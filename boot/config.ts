@@ -19,7 +19,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
       mode: "local", bind: "loopback", port: 3000, controlUi: { enabled: true, allowedOrigins: ["*"] },
       auth: { mode: "trusted-proxy", trustedProxy: {
         userHeader: "x-plow-user", allowLoopback: true,
-        deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+        deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.write", "operator.admin"] },
       } },
       trustedProxies: ["127.0.0.1"],
       reload: { mode: "off" },
@@ -52,6 +52,6 @@ export function renderConfig(identity: Identity, apiBase: string) {
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { profile: "messaging", sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread"], deny: ["ask_user"] },
+    tools: { profile: "messaging", sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "automations", "plow_start_thread"], deny: ["ask_user"] },
   };
 }

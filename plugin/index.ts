@@ -5,10 +5,12 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-const activeTurn = new AsyncLocalStorage<{ chat: Chat; messageUid: string; deliveryUnknown?: boolean; replyDelivered?: boolean }>();
+type ActiveTurn = { chat: Chat; messageUid: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
+const activeTurn = new AsyncLocalStorage<ActiveTurn>();
+const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn> };
+const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
 
-async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown): Promise<T> {
-  const turn = activeTurn.getStore();
+async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore()): Promise<T> {
   if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
   try { return await request<T>(account, path, body); }
   catch (error) {
@@ -83,7 +85,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  return await activeTurn.run({ chat, messageUid: message.uid }, async () => {
+  const turn: ActiveTurn = { chat, messageUid: message.uid };
+  activeTurns.set(route.sessionKey, turn);
+  return await activeTurn.run(turn, async () => {
     let failure: unknown;
     let completed = false;
     if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
@@ -121,6 +125,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     } finally {
       if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "stop" }).catch(() => log("typing stop failed"));
     }
+  }).finally(() => {
+    if (activeTurns.get(route.sessionKey) === turn) activeTurns.delete(route.sessionKey);
   });
 }
 
@@ -175,7 +181,7 @@ export default defineChannelPluginEntry({
           isError: true, content: [{ type: "text", text: "Plow configuration is unavailable." }], details: {},
         };
         const account = plugin.config.resolveAccount(context.config, "chat");
-        const turn = activeTurn.getStore();
+        const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
         const owner = (turn && accepts(account, turn.chat)
           ? turn.chat.participants.find(p => p.type === "member" && p.role === "owner") : undefined)
           ?? (await ownerChat(account)).participants.find(p => p.type === "member" && p.role === "owner");
@@ -186,7 +192,7 @@ export default defineChannelPluginEntry({
         const chat = await requestWithDeliveryState<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
           body: args.body, trusted: true, idempotency_key: idempotencyKey,
-        });
+        }, turn);
         api.logger.info(`plow started thread chat=${chat.uid}`);
         const result = { chat_uid: chat.uid, message_sent: true };
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
