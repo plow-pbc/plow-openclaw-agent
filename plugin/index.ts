@@ -93,7 +93,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     try {
       const result = await runtime.channel.inbound.dispatch({
         cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
-        replyOptions: { onAgentRunTerminalOutcome: outcome => { completed = outcome === "completed"; if (!completed) failure = new Error("Agent turn failed"); } },
+        replyOptions: { sourceReplyDeliveryMode: "automatic", onAgentRunTerminalOutcome: outcome => { completed = outcome === "completed"; if (!completed) failure = new Error("Agent turn failed"); } },
         delivery: {
           observeMessageSent: true,
           preparePayload: payload => {
