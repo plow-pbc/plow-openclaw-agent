@@ -92,6 +92,20 @@ export async function recover(account: Account, chat: string, checkpoint: string
   }
 }
 
+async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message): Promise<string> {
+  let earliest = newest.uid;
+  let cursor = newest.uid;
+  for (;;) {
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50&starting_after=${cursor}`);
+    for (const message of page.data) {
+      if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
+      earliest = message.uid;
+    }
+    if (!page.has_more || !page.data.length) return earliest;
+    cursor = page.data.at(-1)!.uid;
+  }
+}
+
 export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[]) => Promise<TurnOutcome>) {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
@@ -242,7 +256,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
             const newest = page.data[0];
             checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
-              ? `first:${newest.uid}` : newest?.uid ?? "";
+              ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest)}` : newest?.uid ?? "";
             const buffered = bufferedChats.get(chat.uid);
             // HTTP history can include a newer message whose socket frame is delayed.
             // Compare history order when buffer membership cannot order the candidates.

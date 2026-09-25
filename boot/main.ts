@@ -3,10 +3,12 @@ import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
+import { installBootLog } from "./log.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
 
 try {
+  installBootLog();
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
   if (!base) throw new Error("PLOW_API_BASE is required");
   process.env.PLOW_AGENT_TOKEN ||= "proxied";
