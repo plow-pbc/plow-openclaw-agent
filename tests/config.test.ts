@@ -87,7 +87,8 @@ test("phone turns cannot block on ask_user", () => {
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    profile: "messaging", sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "automations", "plow_start_thread"], deny: ["ask_user"],
+    profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "automations", "plow_start_thread"], deny: ["ask_user"],
+    toolsBySender: { "id:plow-owner": { alsoAllow: ["automations"] }, "*": { deny: ["automations"] } },
   });
 });
 

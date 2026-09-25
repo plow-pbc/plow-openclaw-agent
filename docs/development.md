@@ -51,14 +51,19 @@ use their live outbound context. The dashboard owner profile is linked to the
 `plow-owner` channel identity after first sign-in, and the owner DM session is
 assigned to that profile so its personal `USER.md` loads on later turns.
 The messaging tool profile excludes OpenClaw's `automations` scheduler, so
-Plow explicitly allows it for owner reminders.
+Plow explicitly allows it for owner reminders and denies it for other senders
+with `toolsBySender`. OpenClaw 2026.9.6 enables Tool Search by default, which
+would hide plugin and MCP schemas behind `tool_search` and `tool_call`; boot
+sets `tools.toolSearch` to false to retain the tested tool surface. The 9.6
+messaging profile also includes the new `gateway` and `theme` tools.
 The trusted proxy grants the signed dashboard connection read, write and admin
 scopes. A Gateway role would treat the channel sender sentinel as a profile ID
 when an owner-created automation runs, so the base image leaves roles unset.
 Boot uses its local password for identity reads and the idempotent link;
 `sessions.assignOwner` requires an identified human, so boot uses a signed
-trusted-proxy connection for that assignment. It polls every 30 seconds until
-both records exist, then stops. The signing key stays in the state volume.
+trusted-proxy connection for that assignment. It polls every five minutes until
+both records exist, then stops. A profile or session shape that cannot be linked
+stops the polling with an error. The signing key stays in the state volume.
 
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local

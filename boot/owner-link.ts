@@ -1,7 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { networkInterfaces } from "node:os";
 import { promisify } from "node:util";
 import WebSocket from "ws";
 
@@ -12,6 +11,7 @@ type Session = { key: string; isMain?: boolean; channel?: string; origin?: { acc
 const identity = { channelId: "plow", accountId: "chat", senderId: "plow-owner" };
 const scopes = ["operator.read", "operator.write", "operator.admin"];
 const devicePath = "/var/lib/plow/owner-link-device.pem";
+class PermanentOwnerLinkError extends Error {}
 const execFileAsync = promisify(execFile);
 
 async function deviceKey() {
@@ -35,11 +35,9 @@ export async function gatewayCall(method: string, params: object, user?: string)
   const key = await deviceKey();
   const rawPublicKey = createPublicKey(key).export({ type: "spki", format: "der" }).subarray(-32);
   const deviceId = createHash("sha256").update(rawPublicKey).digest("hex");
-  const clientIp = Object.values(networkInterfaces()).flat().find(address => address?.family === "IPv4" && !address.internal)?.address;
-  if (!clientIp) throw new Error("No non-loopback address for owner profile connection");
   return await new Promise((resolve, reject) => {
     // The real dashboard also reaches this loopback gateway from a different origin.
-    const ws = new WebSocket("ws://127.0.0.1:3000", { origin: "https://localhost", headers: { "X-Plow-User": user, "X-Forwarded-For": clientIp } });
+    const ws = new WebSocket("ws://127.0.0.1:3000", { origin: "https://localhost", headers: { "X-Plow-User": user, "X-Forwarded-For": "192.0.2.1" } });
     const timeout = setTimeout(() => finish(new Error(`Gateway ${method} timed out`)), 15_000);
     let done = false;
     const finish = (error?: Error, value?: unknown) => {
@@ -78,7 +76,7 @@ export async function gatewayCall(method: string, params: object, user?: string)
 export async function linkOwner(call: GatewayCall = gatewayCall): Promise<boolean> {
   const { profiles } = await call("users.list", {}) as { profiles: Profile[] };
   if (!profiles.length) return false;
-  if (profiles.length !== 1 || profiles[0].emails.length !== 1) throw new Error("Expected one dashboard owner profile and login identity");
+  if (profiles.length !== 1 || profiles[0].emails.length !== 1) throw new PermanentOwnerLinkError("Expected one dashboard owner profile and login identity");
   const profile = profiles[0];
   const { links } = await call("users.listChannelIdentities", { profileId: profile.id }) as { links: { identity: typeof identity }[] };
   if (!links.some(link => link.identity.channelId === identity.channelId && link.identity.accountId === identity.accountId && link.identity.senderId === identity.senderId)) {
@@ -86,19 +84,22 @@ export async function linkOwner(call: GatewayCall = gatewayCall): Promise<boolea
   }
   const { session } = await call("sessions.describe", { key: "agent:main:main" }, profile.emails[0]) as { session: Session | null };
   if (!session) return false;
-  if (!session.isMain || session.channel !== "plow" || session.origin?.accountId !== "chat") throw new Error("Main session is not the owner Plow chat");
+  if (!session.isMain || session.channel !== "plow" || session.origin?.accountId !== "chat") throw new PermanentOwnerLinkError("Main session is not the owner Plow chat");
   if (session.owner?.actor.type !== "human" || session.owner.actor.id !== profile.id) {
     await call("sessions.assignOwner", { key: session.key, owner: { type: "human", id: profile.id } }, profile.emails[0]);
   }
   return true;
 }
 
-export function startOwnerLink() {
+export function startOwnerLink(call: GatewayCall = gatewayCall) {
   const poll = async () => {
     try {
-      if (await linkOwner()) { console.log("plow-boot: owner profile linked to chat and session"); return; }
-    } catch (error) { console.error(`plow-boot: owner link: ${error instanceof Error ? error.message : String(error)}`); }
-    setTimeout(poll, 30_000).unref();
+      if (await linkOwner(call)) { console.log("plow-boot: owner profile linked to chat and session"); return; }
+    } catch (error) {
+      console.error(`plow-boot: owner link: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof PermanentOwnerLinkError) return;
+    }
+    setTimeout(poll, 300_000).unref();
   };
-  setTimeout(poll, 30_000).unref();
+  setTimeout(poll, 300_000).unref();
 }

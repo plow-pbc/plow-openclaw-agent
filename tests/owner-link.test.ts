@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { linkOwner } from "../boot/owner-link.ts";
+import { linkOwner, startOwnerLink } from "../boot/owner-link.ts";
 
 test("owner link waits for sign-in and the owner DM, then survives restart without duplicate writes", async () => {
   const calls: { method: string; params: object; user?: string }[] = [];
@@ -33,4 +33,25 @@ test("owner link waits for sign-in and the owner DM, then survives restart witho
   assert.equal(await linkOwner(call), true);
   assert.equal(calls.filter(call => call.method === "users.linkChannelIdentity").length, 1);
   assert.equal(calls.filter(call => call.method === "sessions.assignOwner").length, 1);
+});
+
+test("owner linking polls at five minutes and stops after a permanent profile error", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const calls: string[] = [];
+  startOwnerLink(async method => {
+    calls.push(method);
+    if (calls.length === 1) return { profiles: [] };
+    return { profiles: [{ id: "first", emails: ["one"] }, { id: "second", emails: ["two"] }] };
+  });
+  t.mock.timers.tick(299_999);
+  assert.deepEqual(calls, []);
+  t.mock.timers.tick(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ["users.list"]);
+  t.mock.timers.tick(300_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ["users.list", "users.list"]);
+  t.mock.timers.tick(300_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ["users.list", "users.list"]);
 });
