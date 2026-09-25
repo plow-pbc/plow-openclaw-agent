@@ -22,10 +22,9 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
   }
 }
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], reply = false) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
   if (to === "plow-owner") to = (await ownerChat(account)).uid;
   const turn = activeTurn.getStore();
-  if (!reply && turn?.chat.uid === to) throw new Error("To reply in the current conversation, reply normally instead of using message(action=send).");
   if (!accepts(account, await request<Chat>(account, `/chats/${to}`))) {
     throw new Error("Plow account does not serve this conversation");
   }
@@ -105,7 +104,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
             return failure || payload.isFallbackNotice ? null : payload;
           },
           deliver: async payload => {
-            const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []), true);
+            const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
             log(`delivered chat=${chat.uid} message=${sent.messageId}`);
             return { messageIds: [sent.messageId] };
           },
@@ -140,7 +139,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Plow message(action=send) is for OTHER conversations; to reply in the current conversation, just answer normally."] },
+  agentPrompt: { messageToolHints: () => ["Plow message(action=send) can reply in the current conversation or send to another conversation on your Plow line."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),

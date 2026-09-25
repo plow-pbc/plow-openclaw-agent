@@ -12,7 +12,7 @@ type Dispatch = {
   delivery: { observeMessageSent?: boolean; preparePayload?: (payload: { text: string; isError?: boolean; isFallbackNotice?: boolean }) => unknown; deliver: (payload: { text: string }) => Promise<unknown> };
 };
 
-for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "silent", "duplicate", "native-source", "native-other", "error-notice", "fallback-notice", "terminal-notice"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
+for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "silent", "duplicate", "native-source", "native-source-final", "native-other", "error-notice", "fallback-notice", "terminal-notice"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -45,23 +45,25 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
           else await dispatch.delivery.deliver({ text: "fallback answer" });
         }
         if (outcome === "delivered") { observation = dispatch.delivery.observeMessageSent; await dispatch.delivery.deliver({ text: "reply" }); }
-        if (outcome === "native-source") {
-          await assert.rejects(channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "chat", text: "native reply" }), /reply normally/i);
-          await dispatch.delivery.deliver({ text: "ordinary reply" });
+        if (outcome === "native-source" || outcome === "native-source-final") {
+          await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "chat", text: "native reply" });
         }
         if (outcome === "native-other") await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "other", text: "native reply" });
         if (outcome === "duplicate") emitDiagnosticEvent({ type: "message.processed", channel: "plow", messageId: "inbound", sessionKey: "main", outcome: "skipped", reason: "duplicate" });
         if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice") controller.abort();
-        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent" } };
+        // The host withholds final text after a message-tool send.
+        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", finalText: outcome === "native-source-final" ? "final reply" : undefined } };
       } },
     } },
   });
   assert.ok(channel);
   await channel.gateway.startAccount({ account, cfg: {}, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); if (text.startsWith("acked")) controller.abort(); } } });
-  if (outcome === "native-source") {
+  if (outcome === "native-source" || outcome === "native-source-final") {
     const sends = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages"));
     assert.equal(sends.length, 1);
-    assert.equal(JSON.parse((sends[0].arguments[1] as RequestInit).body as string).body, "ordinary reply");
+    assert.equal(JSON.parse((sends[0].arguments[1] as RequestInit).body as string).body, "native reply");
+    assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
+    assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
   if (outcome === "error-notice" || outcome === "fallback-notice" || outcome === "terminal-notice") {
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
