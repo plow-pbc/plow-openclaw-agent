@@ -119,7 +119,7 @@ test("the dashboard uses the proxy's port and accepts origins checked by the pro
     controlUi: { enabled: true, allowedOrigins: ["*"] },
     auth: { mode: "trusted-proxy", trustedProxy: {
       userHeader: "x-plow-user", allowLoopback: true,
-      deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+      deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.write", "operator.admin"] },
     } },
     trustedProxies: ["127.0.0.1"],
     reload: { mode: "off" },
