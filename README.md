@@ -103,9 +103,10 @@ skills, and other owner settings survive restarts. Plow seeds defaults on a fres
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
-identity, owner DM binding, session routing, and cross-conversation memory policy
-are Plow-owned. OpenClaw refuses edits to those included settings; edits made by
-hand beside an include are removed at the next boot. Additional bindings survive.
+identity, owner DM binding, session routing, `messages.visibleReplies`, and
+cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
+those included settings; edits made by hand beside an include are removed at
+the next boot. Additional bindings survive.
 An existing volume with a fully rendered config is converted on its next boot.
 OpenClaw skips automatic legacy-key migration when a config uses `$include`, so
 runtime upgrades must review and update both Plow's rendered settings and any
@@ -135,9 +136,9 @@ but no history backfill. The owner's phone DM uses the main session; other DMs
 and groups have separate sessions.
 
 Shutdown-interrupted chat turns can recover. Incomplete live turns are logged
-and acknowledged, with one neutral notice that the request may have partly
-happened. A failed or uncertain notice is not retried. An ambiguous delivery is
-not retried; a crash after sending but before checkpointing can duplicate a reply.
+and acknowledged. OpenClaw handles no-reply fallback delivery. An ambiguous
+delivery is not retried; a crash after sending but before checkpointing can
+duplicate a reply.
 
 Replies stay in their source conversation. The agent can start trusted groups
 with the owner and send follow-ups to active conversations on its own lines.

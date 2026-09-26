@@ -138,7 +138,6 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     discovered.set(chat.uid, chat);
     const owner = findOwnerChat(account, [...discovered.values()]);
     const sender = message.sender;
-    let notifyFailure = false;
     if (message.direction === "inbound" && (sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
       let outcome: TurnOutcome = "incomplete";
       try {
@@ -165,17 +164,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           log(`turn aborted chat=${chat.uid} message=${message.uid}; left unacked`);
           return;
         }
-        notifyFailure = true;
-        log(`turn incomplete chat=${chat.uid} message=${message.uid}; acknowledging and notifying`);
+        log(`turn incomplete chat=${chat.uid} message=${message.uid}; acknowledging`);
       }
     }
     if (account.accountId === "chat") await ack(chatUid, message.uid);
     remember(message.uid);
     log(`acked chat=${chatUid} message=${message.uid}`);
-    if (notifyFailure) await request(account, `/chats/${chatUid}/messages`, {
-      body: "I couldn't finish handling your last message. Part of the request may have already happened, so please check before resending.",
-      attachment_uids: [],
-    }).catch(error => log(`failure notice failed chat=${chatUid}: ${(error as Error).name}; not retrying`));
   };
   while (!signal.aborted) {
     let socket: WebSocket | undefined;

@@ -56,6 +56,8 @@ test("the prompt directs existing-chat sends to the native tool", () => {
   assert.ok(!prompt.includes("Do not use message"));
   assert.doesNotMatch(prompt, /message\(action="send"\) is for OTHER conversations/i);
   assert.match(prompt, /message\(action="send"\).*current conversation/i);
+  assert.match(prompt, /omit target for\s+the current conversation/i);
+  assert.match(prompt, /chat uid as target for another conversation/i);
   assert.match(prompt, /accountId/);
   assert.match(prompt, /plow_start_thread/);
 });
