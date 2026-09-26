@@ -33,11 +33,11 @@ export class DeliveryUnknownError extends Error {
   constructor() { super("Plow delivery is unknown; stopped to avoid resending"); }
 }
 
-export async function request<T>(account: Pick<Account, "apiBase">, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function request<T>(account: Pick<Account, "apiBase">, path: string, body?: unknown, signal?: AbortSignal, method: "POST" | "PUT" = "POST"): Promise<T> {
   const token = process.env.PLOW_AGENT_TOKEN;
   if (!token) throw new Error("PLOW_AGENT_TOKEN is required");
   const response = await fetch(`${account.apiBase}/v1${path}`, {
-    method: body === undefined ? "GET" : "POST",
+    method: body === undefined ? "GET" : method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: signal ?? AbortSignal.timeout(10_000),
@@ -145,7 +145,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const checkpoint = checkpoints.get(chat.uid);
         const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
         let history: Message[] = [];
-        let historyLoaded = contextualized.has(chat.uid);
+        let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
         if (!historyLoaded) {
           try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
           catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }

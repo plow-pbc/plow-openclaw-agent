@@ -14,7 +14,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     const account = { apiBase, accountId: "chat", lineUid: "line" };
     const cfg = { channels: { plow: account }, commands: { ownerAllowFrom: ["owner"] } };
     const sender = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
-    const chat = { uid: "home", status: "active", participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
+    const chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
     const posts: Record<string, unknown>[] = [];
     const results: unknown[] = [], errors: string[] = [], logs: string[] = [];
     t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
@@ -39,10 +39,10 @@ for (const toolName of ["plow_start_thread", "message"]) {
     const api = { registrationMode: "full", logger: { info() {} }, on() {},
       registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
       registerTool() {},
-      runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "main" }) }, inbound: {
+      runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
         buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
           for (let retry = 0; retry < 4; retry++) {
-            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "target", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 3 ? ["+15550000003"] : retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], chat_uid: "home", body: retry === 2 ? "Meet Saturday?" : "Meet Friday?" })))); }
+            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "target", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", ...(retry === 3 ? { trusted: true } : {}) })))); }
             catch (error) { errors.push((error as Error).message); }
           }
           replyOptions.onAgentRunTerminalOutcome("completed");
@@ -54,7 +54,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     };
     entry.register(api);
     toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) {
-      const candidate = factory({ config: cfg, sessionKey: "main", nativeChannelId: "home" });
+      const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home" });
       if (candidate.name === toolName) tool = candidate;
     } });
     await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
@@ -64,10 +64,12 @@ for (const toolName of ["plow_start_thread", "message"]) {
       assert.equal(results.length, 8);
       if (toolName === "plow_start_thread") {
         assert.deepEqual(posts[0].members, ["+15550000001", "+15550000002"]);
-        assert.equal(posts[0].trusted, true);
+        assert.equal(posts[0].trusted, false);
+        assert.equal(posts[3].trusted, true);
         assert.equal(posts[0].line_uid, "line");
         assert.equal(posts[0].body, "Meet Friday?");
         assert.equal(posts[0].idempotency_key, posts[1].idempotency_key);
+        assert.notEqual(posts[0].idempotency_key, posts[3].idempotency_key);
         assert.equal(posts[4].idempotency_key, posts[5].idempotency_key);
         assert.equal(new Set(posts.map(post => post.idempotency_key)).size, 6);
         assert.deepEqual((results[0] as { details: unknown }).details, { chat_uid: "created", message_sent: true });

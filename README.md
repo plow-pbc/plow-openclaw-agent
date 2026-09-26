@@ -139,8 +139,10 @@ and acknowledged, with one neutral notice that the request may have partly
 happened. A failed or uncertain notice is not retried. An ambiguous delivery is
 not retried; a crash after sending but before checkpointing can duplicate a reply.
 
-Replies stay in their source conversation. The agent can start trusted groups
-with the owner and send follow-ups to active conversations on its own lines.
+Replies stay in their source conversation. The agent can start groups only from
+an active owner message in the main Plow DM and send follow-ups to active
+conversations on its own lines. The dashboard shares `agent:main:main`, but a
+dashboard turn has no active owner DM and cannot start a group.
 Clarifications are ordinary replies. When connected through Latch, the owner's
 Mac provides its tools and instructions. Mac unavailability does not prevent
 texting. Long-running MCP responses stream without a fixed bridge timeout;
@@ -162,6 +164,15 @@ ENV AGENT_ID=your-agent-id
 COPY prompt/AGENTS.md /opt/plow/prompt/AGENTS.md
 COPY skills/ /opt/plow/skills/
 ```
+
+Set `PLOW_THREAD_TRUST` in the variant image to choose how new groups are
+created: `ask` (the default) makes the agent ask the owner whether the group
+gets full trust, including Mac, mail and file access, or is a normal chat;
+`trusted` creates trusted groups without asking; `untrusted` creates normal
+groups without asking. For example, add `ENV PLOW_THREAD_TRUST=untrusted` to
+the Dockerfile. The setting is rendered into the workspace prompt at boot.
+The `plow_start_thread` tool defaults to untrusted when its `trusted` argument
+is omitted.
 
 Keep the inherited boot and reporter to use Plow's maintained reporting: it
 registers the listing, reads OpenClaw's transcripts and reports every five
@@ -193,10 +204,20 @@ Any process on the same host, including the agent's shell, can forge
 `X-Plow-User` over loopback. Keep direct gateway access limited to the host's
 loopback interface.
 
-This agent does not isolate hostile users. Every turn retains its tools; the
-model judges authority from the fetched roster, trust flag, conversation and
-owner instructions. Only trust people who may use the owner's resources,
-including their Mac. Explicit sends can target other served conversations.
+Trust controls tool access per turn. In a trusted group, every sender can
+use the agent's tools, including the owner's Mac, mail and files. In any
+untrusted conversation, the owner still has full tools; other senders can reply
+and use only `plow_ask_owner`, which posts their request, source account and chat uid
+to the owner's main DM. This includes direct chats and email threads, whose
+senders can be anyone. The agent can answer in the source conversation and see
+its history. The owner can switch a
+group with `plow_set_thread_trust` from their main DM, or with the app toggle.
+New groups default to untrusted unless the configured creation mode chooses
+otherwise. `PLOW_THREAD_TRUST=trusted` is the image creator's preset; it does
+not mean the owner answered a trust question for each group.
+
+Only trust people who may use the owner's resources. Explicit sends can target
+other served conversations on turns that have full tools.
 
 Groups use their own history and omit root MEMORY.md. Cross-conversation recall
 is disabled, and native session tools cannot read unrelated conversations from

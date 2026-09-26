@@ -1,14 +1,25 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; messageUid: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
+type ActiveTurn = { chat: Chat; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
 const activeTurn = new AsyncLocalStorage<ActiveTurn>();
 const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn> };
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
+
+function ownerDmTurn(account: Account, context: { sessionKey?: string; messageChannel?: string; agentAccountId?: string; nativeChannelId?: string }): ActiveTurn {
+  const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
+  if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow"
+    || context.agentAccountId !== "chat" || !turn || !turn.senderIsOwner
+    || context.nativeChannelId !== turn.chat.uid || findOwnerChat(account, [turn.chat]) !== turn.chat) {
+    throw new Error("This action requires an active message in the owner's main Plow DM.");
+  }
+  return turn;
+}
 
 async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore()): Promise<T> {
   if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
@@ -22,9 +33,8 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
   }
 }
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], turn = activeTurn.getStore()) {
   if (to === "plow-owner") to = (await ownerChat(account)).uid;
-  const turn = activeTurn.getStore();
   if (!accepts(account, await request<Chat>(account, `/chats/${to}`))) {
     throw new Error("Plow account does not serve this conversation");
   }
@@ -39,7 +49,7 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
-  const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments });
+  const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments }, turn);
   if (turn?.chat.uid === to) turn.replyDelivered = true;
   return { channel: "plow" as const, messageId: sent.uid };
 }
@@ -48,7 +58,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const sender = message.sender;
   const senderId = sender.type === "member" ? sender.uid : sender.line.uid;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === senderId && p.role === "owner");
-  const senderName = sender.type === "member" ? sender.display_name : sender.line.display_name;
+  const senderName = (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? senderId;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
   const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderIsOwner ? "plow-owner" : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
@@ -69,8 +79,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
     from: senderId, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
-    conversation: { kind, id: chat.uid, label: chat.display_name, routePeer: peer },
-    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, replyToId: message.reply_to?.uid },
+    conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
+    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
+    ...(!chat.trusted && !senderIsOwner ? { access: { toolPolicy: { allow: ["plow_ask_owner"] } } } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
@@ -84,7 +95,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, messageUid: message.uid };
+  const turn: ActiveTurn = { chat, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
@@ -139,7 +150,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Plow message(action=send) can reply in the current conversation or send to another conversation on your Plow line."] },
+  agentPrompt: { messageToolHints: () => ["Use Plow message(action=send) only in the current conversation. Use plow_reply_to with the account and chat uid for an owner-approved reply to another conversation."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
@@ -167,34 +178,135 @@ export default defineChannelPluginEntry({
   registerCapabilities(api) {
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "Start a group text on your own Plow line with the owner and the supplied phone numbers. Sends the first message and returns the chat uid; use message with action send, channel plow, accountId chat and that uid as target for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. Set trusted according to the configured group trust choice. Sends the first message and returns the chat uid; use plow_reply_to with account chat and that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
           members: { type: "array", minItems: 1, items: { type: "string", pattern: "^\\+[1-9][0-9]{1,14}$" }, description: "Recipient phone numbers in E.164 format. The owner is included automatically." },
           body: { type: "string", minLength: 1, description: "The first message to send." },
+          trusted: { type: "boolean", description: "Whether everyone in this group gets full tools. Defaults to false." },
         },
       },
-      async execute(_id, args: { members: string[]; body: string }) {
+      async execute(_id, args: { members: string[]; body: string; trusted?: boolean }) {
         if (!context.config) return {
           isError: true, content: [{ type: "text", text: "Plow configuration is unavailable." }], details: {},
         };
         const account = plugin.config.resolveAccount(context.config, "chat");
-        const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-        const owner = (turn && accepts(account, turn.chat)
-          ? turn.chat.participants.find(p => p.type === "member" && p.role === "owner") : undefined)
-          ?? (await ownerChat(account)).participants.find(p => p.type === "member" && p.role === "owner");
+        const turn = ownerDmTurn(account, context);
+        const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
-        if (!turn) throw new Error("Starting a thread requires an active message");
         const members = [...new Set([owner.provider_key, ...args.members])].sort();
-        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, turn.messageUid, members, args.body])).digest("hex");
+        const trusted = args.trusted ?? false;
+        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, turn.messageUid, members, args.body, trusted])).digest("hex");
         const chat = await requestWithDeliveryState<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
-          body: args.body, trusted: true, idempotency_key: idempotencyKey,
+          body: args.body, trusted, idempotency_key: idempotencyKey,
         }, turn);
         api.logger.info(`plow started thread chat=${chat.uid}`);
         const result = { chat_uid: chat.uid, message_sent: true };
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+    }));
+    api.registerTool(context => ({
+      name: "plow_set_thread_trust", label: "Set Plow group trust",
+      description: "From the owner's main Plow DM, set whether an existing group gives every member full access to tools, including the owner's Mac, mail and files. Use only when the owner asks to change that group's trust.",
+      parameters: {
+        type: "object", required: ["chat_uid", "trusted"], additionalProperties: false,
+        properties: {
+          chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "The existing Plow group chat uid." },
+          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to replies and asking the owner." },
+        },
+      },
+      async execute(_id, args: { chat_uid: string; trusted: boolean }) {
+        if (!context.config) throw new Error("Plow configuration is unavailable.");
+        const account = plugin.config.resolveAccount(context.config, "chat");
+        ownerDmTurn(account, context);
+        const target = await request<Chat>(account, `/chats/${encodeURIComponent(args.chat_uid)}`);
+        if (!accepts(account, target) || target.participants.length <= 2) throw new Error("Target must be a served Plow group.");
+        const result = await request<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, undefined, "PUT");
+        const details = { chat_uid: args.chat_uid, trusted: result.trusted };
+        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      },
+    }));
+    api.registerTool(context => ({
+      name: "plow_ask_owner", label: "Ask the Plow owner",
+      description: "From an untrusted non-owner turn in a group, direct chat, or email thread, send the sender's request to the owner's main DM. The owner decides there; tell the sender you are checking with them.",
+      parameters: {
+        type: "object", required: ["text"], additionalProperties: false,
+        properties: { text: { type: "string", minLength: 1, description: "What the member wants the owner to decide or do." } },
+      },
+      async execute(_id, args: { text: string }) {
+        const cfg = context.config;
+        if (!cfg) throw new Error("Plow configuration is unavailable.");
+        const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
+        if (context.messageChannel !== "plow" || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")
+          || !turn || turn.senderIsOwner || turn.chat.trusted
+          || context.nativeChannelId !== turn.chat.uid) {
+          throw new Error("Asking the owner requires an active untrusted non-owner turn.");
+        }
+        const [name, role] = [turn.senderName, turn.senderRole].map(value =>
+          JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`));
+        const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(account="${context.agentAccountId}", chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
+        const ownerSessionKey = "agent:main:main";
+        await runtime.channel.session.updateLastRoute({
+          storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: "main" }),
+          sessionKey: ownerSessionKey, channel: "plow", accountId: "chat", to: "plow-owner", createIfMissing: true,
+        });
+        const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
+          cfg, channel: "plow", accountId: "chat", to: "plow-owner", payloads: [{ text: escalation }],
+          session: buildOutboundSessionContext({ cfg, agentId: "main", sessionKey: ownerSessionKey, conversationType: "direct" }),
+          mirror: { sessionKey: ownerSessionKey, agentId: "main" }, skipQueue: true,
+        }));
+        if (result.status !== "sent") {
+          turn.deliveryUnknown = true;
+          throw new DeliveryUnknownError();
+        }
+        return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
+      },
+    }));
+    api.registerTool(context => ({
+      name: "plow_reply_to", label: "Reply to a Plow conversation",
+      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat or email conversation on this agent's line. Use the source account and chat uid from the owner escalation.",
+      parameters: {
+        type: "object", required: ["account", "chat_uid", "text"], additionalProperties: false,
+        properties: {
+          account: { type: "string", enum: ["chat", "email"], description: "Source account from the escalation." },
+          chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Source chat uid from the escalation." },
+          text: { type: "string", minLength: 1, description: "The approved reply to send." },
+        },
+      },
+      async execute(_id, args: { account: "chat" | "email"; chat_uid: string; text: string }) {
+        const cfg = context.config;
+        if (!cfg) throw new Error("Plow configuration is unavailable.");
+        const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
+        const turn = ownerDmTurn(ownerAccount, context);
+        if (turn.deliveryUnknown) throw new DeliveryUnknownError();
+        const destination = plugin.config.resolveAccount(cfg, args.account);
+        const chat = await request<Chat>(destination, `/chats/${encodeURIComponent(args.chat_uid)}`);
+        if (!accepts(destination, chat)) throw new Error("Plow account does not serve this conversation");
+        const kind = destination.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
+        const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
+        const peerId = destination.accountId === "email" || kind === "group" ? chat.uid
+          : findOwnerChat(destination, [chat]) === chat ? "plow-owner"
+          : peer?.type === "member" ? peer.uid : peer?.line.uid;
+        if (!peerId) throw new Error("Plow conversation has no peer");
+        const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: args.account, peer: { kind, id: peerId } });
+        await runtime.channel.session.updateLastRoute({
+          storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+          sessionKey: route.sessionKey, channel: "plow", accountId: args.account,
+          to: peerId === "plow-owner" ? peerId : args.chat_uid, createIfMissing: true,
+        });
+        const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
+          cfg, channel: "plow", accountId: args.account, to: args.chat_uid, payloads: [{ text: args.text }],
+          session: buildOutboundSessionContext({ cfg, agentId: route.agentId, sessionKey: route.sessionKey, conversationType: kind }),
+          mirror: { sessionKey: route.sessionKey, agentId: route.agentId }, skipQueue: true,
+        }));
+        if (result.status !== "sent") {
+          turn.deliveryUnknown = true;
+          throw new DeliveryUnknownError();
+        }
+        const details = { message_uid: result.results[0].messageId };
+        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
     }));
   },
