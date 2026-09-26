@@ -3,7 +3,7 @@ import { test } from "node:test";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "member"]) for (const trusted of [false, true]) test(`roster identity preserves routing without restricting tools: ${kind}, ${role}, trusted=${trusted}`, async t => {
+for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "member"]) for (const trusted of [false, true]) test(`roster identity scopes tools: ${kind}, ${role}, trusted=${trusted}`, async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const account = { apiBase, accountId: kind === "email" ? "email" : "chat", lineUid: "line", emailLineUid: "line" };
@@ -33,7 +33,7 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   await channel.gateway.startAccount({ account, cfg: { commands: { ownerAllowFrom: ["plow-owner"] } }, abortSignal: controller.signal, log: { info() {} } });
   assert.ok(context);
   assert.equal(context.sender.id, role === "owner" ? "plow-owner" : "local-sender");
-  assert.deepEqual(context.access?.toolPolicy, undefined);
+  assert.deepEqual(context.access?.toolPolicy, !trusted && role === "member" ? { allow: ["plow_ask_owner"] } : undefined);
   assert.equal(toolsDisabled, undefined);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);

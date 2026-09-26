@@ -2,7 +2,7 @@
   "id": "plow",
   "name": "Plow",
   "channels": ["plow"],
-  "contracts": { "tools": ["plow_start_thread"] },
+  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_ask_owner"] },
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false },
   "channelConfigs": {
