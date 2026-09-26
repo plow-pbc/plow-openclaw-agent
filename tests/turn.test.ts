@@ -94,7 +94,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const facts = JSON.parse(JSON.stringify(factsEntry.payload));
   assert.equal(facts.trusted, trusted);
   assert.deepEqual(facts.participants, [
-    { name: "Owner", type: "member", role: "owner" },
+    { name: "owner", type: "member", role: "owner" },
     { name: "Member", type: "member", role: "member" },
     { type: "agent", role: "self" },
   ]);
