@@ -111,3 +111,12 @@ test("heartbeat owner discovery identifies only the sentinel as a direct destina
   assert.equal(channel!.messaging.inferTargetChatType?.({ to: "plow-owner" }), "direct");
   assert.equal(channel!.messaging.inferTargetChatType?.({ to: "cht_unknown" }), undefined);
 });
+
+test("message tool hint keeps sends in the current conversation", () => {
+  let channel: { agentPrompt: { messageToolHints: () => string[] } };
+  entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} }, on() {},
+    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
+  const hint = channel!.agentPrompt.messageToolHints().join(" ");
+  assert.match(hint, /message\(action=send\).*current conversation/);
+  assert.match(hint, /plow_reply_to.*another conversation/);
+});

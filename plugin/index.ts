@@ -150,7 +150,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Plow message(action=send) can reply in the current conversation or send to another conversation on your Plow line."] },
+  agentPrompt: { messageToolHints: () => ["Use Plow message(action=send) only in the current conversation. Use plow_reply_to with the account and chat uid for an owner-approved reply to another conversation."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
@@ -178,7 +178,7 @@ export default defineChannelPluginEntry({
   registerCapabilities(api) {
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. Set trusted according to the configured group trust choice. Sends the first message and returns the chat uid; use message with action send, channel plow, accountId chat and that uid as target for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. Set trusted according to the configured group trust choice. Sends the first message and returns the chat uid; use plow_reply_to with account chat and that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
@@ -244,7 +244,9 @@ export default defineChannelPluginEntry({
           || context.nativeChannelId !== turn.chat.uid) {
           throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
-        const escalation = `A member asked for your decision.\nMember: ${turn.senderName} (${turn.senderRole})\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(account="${context.agentAccountId}", chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
+        const [name, role] = [turn.senderName, turn.senderRole].map(value =>
+          JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`));
+        const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(account="${context.agentAccountId}", chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
         const ownerSessionKey = "agent:main:main";
         await runtime.channel.session.updateLastRoute({
           storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: "main" }),
@@ -274,12 +276,36 @@ export default defineChannelPluginEntry({
         },
       },
       async execute(_id, args: { account: "chat" | "email"; chat_uid: string; text: string }) {
-        if (!context.config) throw new Error("Plow configuration is unavailable.");
-        const ownerAccount = plugin.config.resolveAccount(context.config, "chat");
+        const cfg = context.config;
+        if (!cfg) throw new Error("Plow configuration is unavailable.");
+        const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         const turn = ownerDmTurn(ownerAccount, context);
-        const destination = plugin.config.resolveAccount(context.config, args.account);
-        const sent = await send(destination, args.chat_uid, args.text, [], turn);
-        const details = { message_uid: sent.messageId };
+        if (turn.deliveryUnknown) throw new DeliveryUnknownError();
+        const destination = plugin.config.resolveAccount(cfg, args.account);
+        const chat = await request<Chat>(destination, `/chats/${encodeURIComponent(args.chat_uid)}`);
+        if (!accepts(destination, chat)) throw new Error("Plow account does not serve this conversation");
+        const kind = destination.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
+        const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
+        const peerId = destination.accountId === "email" || kind === "group" ? chat.uid
+          : findOwnerChat(destination, [chat]) === chat ? "plow-owner"
+          : peer?.type === "member" ? peer.uid : peer?.line.uid;
+        if (!peerId) throw new Error("Plow conversation has no peer");
+        const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: args.account, peer: { kind, id: peerId } });
+        await runtime.channel.session.updateLastRoute({
+          storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+          sessionKey: route.sessionKey, channel: "plow", accountId: args.account,
+          to: peerId === "plow-owner" ? peerId : args.chat_uid, createIfMissing: true,
+        });
+        const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
+          cfg, channel: "plow", accountId: args.account, to: args.chat_uid, payloads: [{ text: args.text }],
+          session: buildOutboundSessionContext({ cfg, agentId: route.agentId, sessionKey: route.sessionKey, conversationType: kind }),
+          mirror: { sessionKey: route.sessionKey, agentId: route.agentId }, skipQueue: true,
+        }));
+        if (result.status !== "sent") {
+          turn.deliveryUnknown = true;
+          throw new DeliveryUnknownError();
+        }
+        const details = { message_uid: result.results[0].messageId };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
     }));
