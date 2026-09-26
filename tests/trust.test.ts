@@ -77,7 +77,8 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   });
   assert.ok(tool);
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
-  return { apiBase, chat, result, failure, retryFailure, posts, updates };
+  return { apiBase, chat, result, failure, retryFailure, posts, updates,
+    reply: (replyAccountId: string) => channel!.outbound.sendText({ cfg, accountId: replyAccountId, to: chat.uid, text: "Approved; I booked it." }) };
 }
 
 for (const scene of ["owner DM", "owner group", "member group", "owner email"] as const) test(`set trust from ${scene}`, async t => {
@@ -92,12 +93,23 @@ for (const scene of ["owner DM", "owner group", "member group", "owner email"] a
   }
 });
 
-for (const scene of ["member group", "member DM", "member email"] as const) test(`an untrusted ${scene} can ask the owner with the source chat uid`, async t => {
+for (const scene of ["member group", "member DM", "member email"] as const) test(`an untrusted ${scene} can ask the owner with the source account and chat uid`, async t => {
   const { apiBase, chat, failure, posts } = await runInboundTool(t, scene, "plow_ask_owner", { text: "Joe proposed lunch Monday at 1. Want me to book it?" });
   assert.equal(failure, undefined);
   assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/cht_home/messages`, body: {
-    body: `In Lunch crew (${chat.uid}), Joe asks: Joe proposed lunch Monday at 1. Want me to book it?`, attachment_uids: [],
+    body: `In Lunch crew (${scene === "member email" ? "email" : "chat"} ${chat.uid}), Joe asks: Joe proposed lunch Monday at 1. Want me to book it?`, attachment_uids: [],
   } }]);
+});
+
+test("an owner can send an approved outcome to the email source", async t => {
+  const { apiBase, chat, failure, posts, reply } = await runInboundTool(t, "member email", "plow_ask_owner", { text: "Can you book lunch?" });
+  assert.equal(failure, undefined);
+  assert.equal((posts[0].body as { body: string }).body, `In Lunch crew (email ${chat.uid}), Joe asks: Can you book lunch?`);
+  await assert.rejects(reply("chat"), /does not serve this conversation/);
+  assert.deepEqual(await reply("email"), { channel: "plow", messageId: "sent" });
+  assert.deepEqual(posts[1], { url: `${apiBase}/v1/chats/${chat.uid}/messages`, body: {
+    body: "Approved; I booked it.", attachment_uids: [],
+  } });
 });
 
 test("an ambiguous owner notification latches delivery for the rest of the turn", async t => {
@@ -105,5 +117,5 @@ test("an ambiguous owner notification latches delivery for the rest of the turn"
   assert.match((failure as Error)?.message, /delivery is unknown/);
   assert.match((retryFailure as Error)?.message, /delivery is unknown/);
   assert.equal(posts.length, 1);
-  assert.equal((posts[0].body as { body: string }).body, `In Lunch crew (${chat.uid}), Joe asks: Please ask.`);
+  assert.equal((posts[0].body as { body: string }).body, `In Lunch crew (chat ${chat.uid}), Joe asks: Please ask.`);
 });

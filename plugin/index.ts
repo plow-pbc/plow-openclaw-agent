@@ -244,7 +244,7 @@ export default defineChannelPluginEntry({
           || context.nativeChannelId !== turn.chat.uid) {
           throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
-        await activeTurn.run(turn, () => send(account, "plow-owner", `In ${turn.chat.display_name ?? turn.chat.uid} (${turn.chat.uid}), ${turn.senderName} asks: ${args.text}`));
+        await activeTurn.run(turn, () => send(account, "plow-owner", `In ${turn.chat.display_name ?? turn.chat.uid} (${context.agentAccountId} ${turn.chat.uid}), ${turn.senderName} asks: ${args.text}`));
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));
