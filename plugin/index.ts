@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { createBuzzChannel, join as joinBuzz, resolveBuzzAccount } from "./buzz.ts";
 
 let runtime: PluginRuntime;
 type ActiveTurn = { chat: Chat; messageUid: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
@@ -158,13 +159,37 @@ const plugin: ChannelPlugin<Account> = {
   },
 };
 
-export default defineChannelPluginEntry({
+// Buzz is opt-in (boot/config.ts); enrollment links and revocation notices reach the owner on the Plow line.
+const buzz = createBuzzChannel({
+  notifyOwner: async (cfg, text) => { await send(plugin.config.resolveAccount(cfg, "chat"), "plow-owner", text); },
+});
+
+const entry = defineChannelPluginEntry({
   id: "plow", name: "Plow", description: "Plow channel", plugin,
   setRuntime: value => { runtime = value; },
   registerFull(api) {
     if (api.registrationMode === "full") api.logger.info("plow channel registered");
   },
   registerCapabilities(api) {
+    // Only an agent opted into Buzz gets this tool; for the rest the factory yields nothing.
+    api.registerTool(context => {
+      const account = resolveBuzzAccount(context.config);
+      if (!account || !context.config) return null;
+      const config = context.config;
+      return {
+        name: "buzz_enroll", label: "Ask to join Buzz",
+        description: "Ask the attestation provider to let you into your owner's Buzz community. Returns an approval link for the owner, or says you are already in or were revoked. Use it when the owner asks for a new enrollment link.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+        async execute() {
+          const texts: string[] = [];
+          const joined = await joinBuzz(config, account, { force: true, notifyOwner: async text => { texts.push(text); } });
+          const text = joined.status === "attested" ? "You are already in Buzz."
+            : joined.status === "revoked" ? "You were revoked from Buzz; only the owner can undo that."
+            : texts[0] ?? "An approval link was already sent and has not expired yet.";
+          return { content: [{ type: "text", text }], details: { status: joined.status } };
+        },
+      };
+    });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
       description: "Start a group text on your own Plow line with the owner and the supplied phone numbers. Sends the first message and returns the chat uid; use message with action send, channel plow, accountId chat and that uid as target for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
@@ -199,3 +224,13 @@ export default defineChannelPluginEntry({
     }));
   },
 });
+
+// Both channels come from this one plugin. Buzz is registered first so that plow, the owner's line, stays
+// the entry's primary channel; with no channels.buzz config it has no account and starts nothing.
+export default {
+  ...entry,
+  register(api: Parameters<typeof entry.register>[0]) {
+    if (api.registrationMode !== "cli-metadata" && api.registrationMode !== "tool-discovery") api.registerChannel({ plugin: buzz });
+    entry.register(api);
+  },
+};

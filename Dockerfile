@@ -1,3 +1,28 @@
+# Buzz (opt-in, see plugin/buzz.ts): buzz-acp, Block's harness between a Buzz relay and an ACP agent, and
+# the buzz CLI the agent answers with. Block publishes no Linux builds, so both are compiled here from a
+# pinned commit. The stage runs on the build machine's platform and cross-compiles to the target's,
+# because building Rust under emulation is very slow. Debian bookworm on both sides, so the binaries'
+# glibc matches the runtime image.
+FROM --platform=$BUILDPLATFORM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS buzz-cli
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG BUILDARCH
+ARG TARGETARCH
+ARG BUZZ_COMMIT=d01e5f82058463709a22e93bb4cd795da5f53e10
+# A native build uses the image's own gcc; a cross build installs the target's gcc and libc.
+RUN case "$TARGETARCH" in amd64) echo x86_64 > /tmp/arch ;; arm64) echo aarch64 > /tmp/arch ;; *) exit 1 ;; esac \
+ && arch=$(cat /tmp/arch) \
+ && if [ "$BUILDARCH" = "$TARGETARCH" ]; then echo gcc > /tmp/cc; else \
+      apt-get update && apt-get install -y --no-install-recommends "gcc-${arch/_/-}-linux-gnu" "libc6-dev-${TARGETARCH}-cross" \
+      && echo "${arch}-linux-gnu-gcc" > /tmp/cc; fi \
+ && rustup target add "${arch}-unknown-linux-gnu"
+RUN git init -q /src && cd /src \
+ && git fetch -q --depth 1 https://github.com/block/buzz.git "$BUZZ_COMMIT" && git checkout -q FETCH_HEAD
+WORKDIR /src
+RUN arch=$(cat /tmp/arch) && triple="${arch}-unknown-linux-gnu" && cc=$(cat /tmp/cc) \
+ && env "CARGO_TARGET_$(echo "$triple" | tr a-z- A-Z_)_LINKER=$cc" "CC_$(echo "$triple" | tr - _)=$cc" \
+      cargo build --release --locked -p buzz-cli -p buzz-acp --target "$triple" \
+ && cp "target/$triple/release/buzz" "target/$triple/release/buzz-acp" /
+
 FROM ghcr.io/openclaw/openclaw:2026.9.6@sha256:0a5ff5e682e62afa19149df126aa50063bf65ef885b5c94713ce32dc0eb12e15
 ARG PLOW_REVISION
 LABEL org.opencontainers.image.revision=$PLOW_REVISION co.plow.probe=/opt/plow/probe
@@ -9,6 +34,10 @@ RUN printf '\n. /etc/profile.d/plow-openclaw.sh\n' >> /home/node/.bashrc
 COPY plugin /opt/plow/plugin
 COPY prompt /opt/plow/prompt
 COPY skills /opt/plow/skills
+# Dormant unless a variant opts into Buzz: the binaries built above and the wrapper that runs the CLI as this agent.
+COPY --from=buzz-cli /buzz /buzz-acp /opt/plow/libexec/
+COPY bin /opt/plow/bin
+RUN ln -s /opt/plow/bin/buzz /usr/local/bin/buzz
 COPY build.ts /opt/plow/build.ts
 COPY package.json package-lock.json tsconfig.json /opt/plow/
 

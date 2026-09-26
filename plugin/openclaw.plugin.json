@@ -1,8 +1,8 @@
 {
   "id": "plow",
   "name": "Plow",
-  "channels": ["plow"],
-  "contracts": { "tools": ["plow_start_thread"] },
+  "channels": ["plow", "buzz"],
+  "contracts": { "tools": ["buzz_enroll", "plow_start_thread"] },
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false },
   "channelConfigs": {
@@ -15,6 +15,21 @@
           "apiBase": { "type": "string" },
           "lineUid": { "type": "string" },
           "emailLineUid": { "type": "string" }
+        }
+      }
+    },
+    "buzz": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider", "respondTo", "name", "handle", "about"],
+        "properties": {
+          "provider": { "type": "string" },
+          "respondTo": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+          "name": { "type": "string" },
+          "handle": { "type": "string" },
+          "about": { "type": "string" },
+          "avatar": { "type": "string" }
         }
       }
     }

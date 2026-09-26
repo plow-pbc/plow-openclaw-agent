@@ -18,6 +18,14 @@ docker run --rm --user root --network none \
 docker run --rm --network none plow-openclaw:test /opt/plow/probe
 ```
 
+The Dockerfile's `buzz-cli` stage compiles Buzz's `buzz` and `buzz-acp` from a
+pinned block/buzz commit on the build machine's platform, cross-compiling when
+the target differs. To check a native build of that stage alone:
+
+```sh
+docker build --target buzz-cli .
+```
+
 ## Pinned OpenClaw contracts
 
 The Dockerfile pins OpenClaw `2026.9.6` by image digest. These source links target
