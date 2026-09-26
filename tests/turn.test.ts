@@ -101,7 +101,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   }
   if (outcome === "reminder-note") {
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
-    assert.deepEqual(texts, ["I'll follow up here."]);
+    assert.deepEqual(texts, ["I'll follow up here.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically."]);
   }
   if (outcome === "delivered") assert.equal(observation, true);
   if (outcome === "duplicate") assert.ok(logs.some(text => text.startsWith("turn incomplete")));
