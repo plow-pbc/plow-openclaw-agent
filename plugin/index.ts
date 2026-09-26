@@ -99,6 +99,12 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       },
       delivery: {
         observeMessageSent: true,
+        preparePayload: (payload, info) => {
+          if (payload.isFallbackNotice || (observedReplyDelivery && info.kind === "final")) return null;
+          const reminderNote = "\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.";
+          if (payload.text?.endsWith(reminderNote)) return { ...payload, text: payload.text.slice(0, -reminderNote.length) };
+          return payload;
+        },
         deliver: async payload => {
           const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []), deliveryState);
           log(`delivered chat=${chat.uid} message=${sent.messageId}`);
