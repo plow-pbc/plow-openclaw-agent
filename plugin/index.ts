@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { link, readFile, rm, writeFile } from "node:fs/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
@@ -9,6 +10,44 @@ type ActiveTurn = { chat: Chat; messageUid: string; deliveryUnknown?: boolean; r
 const activeTurn = new AsyncLocalStorage<ActiveTurn>();
 const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn> };
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
+
+async function personKey(): Promise<Buffer> {
+  const root = process.env.OPENCLAW_STATE_DIR;
+  if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
+  const path = `${root}/plow-person-key`;
+  const temporaryPath = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+  await writeFile(temporaryPath, randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 });
+  try {
+    try { await link(temporaryPath, path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  } finally { await rm(temporaryPath); }
+  const hex = await readFile(path, "utf8");
+  if (!/^[a-f0-9]{64}$/.test(hex)) throw new Error("Invalid Plow person key");
+  return Buffer.from(hex, "hex");
+}
+
+function normalizedHandle(handle: string): string {
+  const compact = handle.trim().replace(/[\s().-]/g, "");
+  return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
+}
+
+function memberName(member: { role?: string; display_name?: string; provider_key?: string }, isOwner = member.role === "owner"): string {
+  if (isOwner) return "owner";
+  return member.display_name && (!member.provider_key || normalizedHandle(member.display_name) !== normalizedHandle(member.provider_key))
+    ? member.display_name : "unnamed member";
+}
+
+function ownerFacingName(member: { role?: string; display_name?: string; provider_key?: string }, isOwner: boolean): string {
+  const name = memberName(member, isOwner);
+  if (name !== "unnamed member" || !member.provider_key) return name;
+  const normalized = normalizedHandle(member.provider_key);
+  const at = normalized.indexOf("@");
+  return at < 0 ? `member …${normalized.slice(-4)}` : `member ${normalized[0]}…${normalized[at - 1]}${normalized.slice(at)}`;
+}
+
+function personId(handle: string | undefined, uid: string, key: Buffer): string {
+  return `plow-person:${createHmac("sha256", key).update(handle ? normalizedHandle(handle) : `seat:${uid}`).digest("hex")}`;
+}
 
 async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore()): Promise<T> {
   if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
@@ -44,13 +83,13 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   return { channel: "plow" as const, messageId: sent.uid };
 }
 
-async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
+async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], key: Buffer, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
-  const senderId = sender.type === "member" ? sender.uid : sender.line.uid;
-  const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === senderId && p.role === "owner");
-  const senderName = sender.type === "member" ? sender.display_name : sender.line.display_name;
+  const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
+  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : personId(sender.provider_key, sender.uid, key) : sender.line.uid;
+  const senderName = sender.type === "member" ? ownerFacingName(sender, senderIsOwner) : sender.line.display_name;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
-  const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderIsOwner ? "plow-owner" : senderId } as const;
+  const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   if (account.accountId === "chat") {
@@ -63,20 +102,20 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   }
   const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const participants = chat.participants.map(p => ({
-    ...(p.type === "agent" && p.relationship === "self" ? { name: cfg.agents?.entries?.[route.agentId]?.identity?.name } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
+    ...(p.type === "agent" && p.relationship === "self" ? { name: cfg.agents?.entries?.[route.agentId]?.identity?.name } : { name: p.type === "member" ? memberName(p) : p.line.display_name || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
   }));
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
-    from: senderId, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
+    from: senderId, sender: { id: senderId, name: sender.type === "member" ? memberName(sender, senderIsOwner) : senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, replyToId: message.reply_to?.uid },
     message: { inboundHistory: history.map(m => ({
-      sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
+      sender: m.sender.type === "member" ? memberName(m.sender) : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
     })), rawBody: body },
     supplemental: {
-      ...(message.reply_to ? { quote: { id: message.reply_to.uid, body: message.reply_to.body, sender: message.reply_to.sender.type === "member" ? message.reply_to.sender.display_name : message.reply_to.sender.line.uid } } : {}),
+      ...(message.reply_to ? { quote: { id: message.reply_to.uid, body: message.reply_to.body, sender: message.reply_to.sender.type === "member" ? memberName(message.reply_to.sender) : message.reply_to.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
         payload: { first_contact: firstContact, trusted: chat.trusted, participants } }],
@@ -148,7 +187,8 @@ const plugin: ChannelPlugin<Account> = {
   gateway: {
     startAccount: async ctx => {
       const log = (text: string) => ctx.log?.info(text);
-      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, log));
+      const key = await personKey();
+      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, key, log));
     },
   },
   outbound: {

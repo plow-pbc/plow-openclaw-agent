@@ -12,7 +12,7 @@ const { resolveAgentRoute } = await import(require.resolve("openclaw/plugin-sdk/
 test("native routing isolates email threads and shares one thread across senders", async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
-  const sender = (uid: string) => ({ type: "member", uid, display_name: uid, role: "member" });
+  const sender = (uid: string) => ({ type: "member", uid, display_name: uid, role: "member", provider_key: [uid, "example.test"].join("@") });
   const chat = (uid: string) => ({ uid, status: "active", trusted: false, participants: [
     { type: "agent", relationship: "self", line: { uid: "mail" } }, sender("alice"), sender("bob"),
   ] });
