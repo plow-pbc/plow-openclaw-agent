@@ -60,6 +60,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     }
   }
   const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
+  const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const participants = chat.participants.map(p => ({
     ...(p.type === "agent" && p.relationship === "self" ? { name: cfg.agents?.entries?.[route.agentId]?.identity?.name } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
@@ -70,6 +71,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     conversation: { kind, id: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, replyToId: message.reply_to?.uid },
     access: { commands: { authorized: senderIsOwner } },
+    ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
@@ -91,6 +93,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     const result = await outboundDeliveryState.run(deliveryState, () => runtime.channel.inbound.dispatch({
       cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
       replyOptions: {
+        sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
         onObservedReplyDelivery: () => { observedReplyDelivery = true; },
         onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
       },

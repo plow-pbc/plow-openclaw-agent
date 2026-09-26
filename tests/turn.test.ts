@@ -48,7 +48,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
         }
         if (outcome === "delivered") { observation = dispatch.delivery.observeMessageSent; await dispatch.delivery.deliver({ text: "reply" }); }
         if (outcome === "plain-final") {
-          if (dispatch.cfg.messages?.visibleReplies === "automatic") await dispatch.delivery.deliver({ text: "plain reply" });
+          if (dispatch.replyOptions.sourceReplyDeliveryMode === "automatic") await dispatch.delivery.deliver({ text: "plain reply" });
           else strandedRetry = () => channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "chat", text: "plain reply" });
         }
         if (outcome === "native-source" || outcome === "native-source-final") {
@@ -67,6 +67,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   assert.match(channel.agentPrompt.messageToolHints()[0], /omit target.*current conversation|current conversation.*omit target/);
   await channel.gateway.startAccount({ account, cfg: { messages: { visibleReplies: "automatic" } }, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); if (text.startsWith("acked")) controller.abort(); } } });
   if (outcome === "plain-final") {
+    assert.equal(strandedRetry, undefined);
     await strandedRetry?.();
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
     assert.deepEqual(texts, ["plain reply"]);
