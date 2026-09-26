@@ -31,14 +31,22 @@ function normalizedHandle(handle: string): string {
   return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
 }
 
-function memberName(member: { display_name?: string; provider_key?: string }): string {
+function memberName(member: { role?: string; display_name?: string; provider_key?: string }, isOwner = member.role === "owner"): string {
+  if (isOwner) return "owner";
   return member.display_name && (!member.provider_key || normalizedHandle(member.display_name) !== normalizedHandle(member.provider_key))
     ? member.display_name : "unnamed member";
 }
 
-function personId(handle: string | undefined, key: Buffer): string {
-  if (!handle) throw new Error("Member is missing provider_key");
-  return `plow-person:${createHmac("sha256", key).update(normalizedHandle(handle)).digest("hex")}`;
+function ownerFacingName(member: { role?: string; display_name?: string; provider_key?: string }, isOwner: boolean): string {
+  const name = memberName(member, isOwner);
+  if (name !== "unnamed member" || !member.provider_key) return name;
+  const normalized = normalizedHandle(member.provider_key);
+  const at = normalized.indexOf("@");
+  return at < 0 ? `member …${normalized.slice(-4)}` : `member ${normalized[0]}…${normalized[at - 1]}${normalized.slice(at)}`;
+}
+
+function personId(handle: string | undefined, uid: string, key: Buffer): string {
+  return `plow-person:${createHmac("sha256", key).update(handle ? normalizedHandle(handle) : `seat:${uid}`).digest("hex")}`;
 }
 
 async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore()): Promise<T> {
@@ -78,8 +86,8 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], key: Buffer, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
-  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : personId(sender.provider_key, key) : sender.line.uid;
-  const senderName = sender.type === "member" ? memberName(sender) : sender.line.display_name;
+  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : personId(sender.provider_key, sender.uid, key) : sender.line.uid;
+  const senderName = sender.type === "member" ? ownerFacingName(sender, senderIsOwner) : sender.line.display_name;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
   const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
@@ -99,7 +107,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   }));
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
-    from: senderId, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
+    from: senderId, sender: { id: senderId, name: sender.type === "member" ? memberName(sender, senderIsOwner) : senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, replyToId: message.reply_to?.uid },
     message: { inboundHistory: history.map(m => ({

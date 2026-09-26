@@ -133,7 +133,8 @@ recover on their first live frame. Optional history failures still dispatch the
 current message. Email threads have separate sessions, shared by their senders,
 but no history backfill. The owner's phone DM uses the main session; other DMs
 and groups have separate sessions. Member sender IDs are keyed hashes of normalized handles,
-stable across chats without exposing a phone number or email in that field.
+stable across chats without exposing a phone number or email in that field. If a member has
+no handle, their chat seat ID is hashed instead, so identity is stable only within that chat.
 
 Shutdown-interrupted chat turns can recover. Incomplete live turns are logged
 and acknowledged, with one neutral notice that the request may have partly
