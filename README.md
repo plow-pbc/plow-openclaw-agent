@@ -135,9 +135,9 @@ but no history backfill. The owner's phone DM uses the main session; other DMs
 and groups have separate sessions.
 
 Shutdown-interrupted chat turns can recover. Incomplete live turns are logged
-and acknowledged, with one neutral notice that the request may have partly
-happened. A failed or uncertain notice is not retried. An ambiguous delivery is
-not retried; a crash after sending but before checkpointing can duplicate a reply.
+and acknowledged. OpenClaw handles no-reply fallback delivery. An ambiguous
+delivery is not retried; a crash after sending but before checkpointing can
+duplicate a reply.
 
 Replies stay in their source conversation. The agent can start trusted groups
 with the owner and send follow-ups to active conversations on its own lines.

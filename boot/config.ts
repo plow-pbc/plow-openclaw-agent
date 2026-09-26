@@ -45,6 +45,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
+    messages: { visibleReplies: "automatic" },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid,
       ...(email?.type === "agent" ? { emailLineUid: email.line.uid } : {}),
@@ -69,6 +70,7 @@ const ownedPaths = [
   ["plugin-load", ["plugins", "load"]],
   ["tools", ["tools"]],
   ["commands", ["commands"]],
+  ["visible-replies", ["messages", "visibleReplies"]],
   ["identity", ["agents", "entries", "main", "identity"]],
   ["session", ["session"]],
   ["memory", ["memory"]],

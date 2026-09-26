@@ -8,11 +8,12 @@ import { websocketFixture } from "./ws-fixture.ts";
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
 const { emitDiagnosticEvent } = await import(require.resolve("openclaw/plugin-sdk/diagnostic-runtime"));
 type Dispatch = {
-  replyOptions: { sourceReplyDeliveryMode?: "automatic" | "message_tool_only"; onAgentRunTerminalOutcome: (outcome: string) => void };
+  cfg: { messages?: { visibleReplies?: string } };
+  replyOptions: { sourceReplyDeliveryMode?: "automatic" | "message_tool_only"; onAgentRunTerminalOutcome: (outcome: string) => void; onObservedReplyDelivery?: () => void };
   delivery: { observeMessageSent?: boolean; preparePayload?: (payload: { text: string; isError?: boolean; isFallbackNotice?: boolean }) => unknown; deliver: (payload: { text: string }) => Promise<unknown> };
 };
 
-for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "silent", "duplicate", "native-source", "native-source-final", "native-other", "error-notice", "fallback-notice", "terminal-notice"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
+for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "silent", "duplicate", "native-source", "native-source-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "observed", "queued", "deferred"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -25,8 +26,8 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const logs: string[] = [];
   let observation: boolean | undefined;
   let strandedRetry: (() => Promise<unknown>) | undefined;
-  let context: { sender: { id: string }; message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
-  let channel: { outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
+  let context: { from: string; reply: { to: string; originatingTo?: string }; access?: { commands?: { authorized?: boolean } }; sender: { id: string }; message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
+  let channel: { agentPrompt: { messageToolHints: () => string[] }; outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
@@ -47,22 +48,24 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
         }
         if (outcome === "delivered") { observation = dispatch.delivery.observeMessageSent; await dispatch.delivery.deliver({ text: "reply" }); }
         if (outcome === "plain-final") {
-          if (dispatch.replyOptions.sourceReplyDeliveryMode === "automatic") await dispatch.delivery.deliver({ text: "plain reply" });
+          if (dispatch.cfg.messages?.visibleReplies === "automatic") await dispatch.delivery.deliver({ text: "plain reply" });
           else strandedRetry = () => channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "chat", text: "plain reply" });
         }
         if (outcome === "native-source" || outcome === "native-source-final") {
-          await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "chat", text: "native reply" });
+          await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "plow:chat", text: "native reply" });
         }
         if (outcome === "native-other") await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "other", text: "native reply" });
+        if (outcome === "observed") dispatch.replyOptions.onObservedReplyDelivery?.();
         if (outcome === "duplicate") emitDiagnosticEvent({ type: "message.processed", channel: "plow", messageId: "inbound", sessionKey: "main", outcome: "skipped", reason: "duplicate" });
         if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice" && outcome !== "plain-final") controller.abort();
         // The host withholds final text after a message-tool send.
-        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", finalText: outcome === "native-source-final" ? "final reply" : undefined } };
+        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", observedReplyDelivery: outcome === "native-source" || outcome === "native-source-final", queuedFinal: outcome === "queued", counts: { final: ["delivered", "plain-final", "fallback-notice", "error-notice", "terminal-notice"].includes(outcome) ? 1 : 0 }, deferredToActiveRun: outcome === "deferred" ? "followup" : undefined, finalText: outcome === "native-source-final" ? "final reply" : undefined } };
       } },
     } },
   });
   assert.ok(channel);
-  await channel.gateway.startAccount({ account, cfg: {}, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); if (text.startsWith("acked")) controller.abort(); } } });
+  assert.match(channel.agentPrompt.messageToolHints()[0], /omit target.*current conversation|current conversation.*omit target/);
+  await channel.gateway.startAccount({ account, cfg: { messages: { visibleReplies: "automatic" } }, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); if (text.startsWith("acked")) controller.abort(); } } });
   if (outcome === "plain-final") {
     await strandedRetry?.();
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
@@ -76,14 +79,21 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
     assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
+  if (["observed", "queued", "deferred"].includes(outcome)) {
+    assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
+    assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
+  }
   if (outcome === "error-notice" || outcome === "fallback-notice" || outcome === "terminal-notice") {
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
-    assert.equal(texts.length, 1);
-    assert.equal(texts[0], outcome === "fallback-notice" ? "fallback answer" : "I couldn't finish handling your last message. Part of the request may have already happened, so please check before resending.");
+    assert.deepEqual(texts, outcome === "fallback-notice" ? ["runtime diagnostic", "fallback answer"] : [outcome === "error-notice" ? "runtime diagnostic" : "runtime terminal fallback"]);
   }
   if (outcome === "delivered") assert.equal(observation, true);
   if (outcome === "duplicate") assert.ok(logs.some(text => text.startsWith("turn incomplete")));
   assert.ok(context);
+  assert.equal(context.from, "plow:group:chat");
+  assert.equal(context.reply.to, "plow:chat");
+  assert.equal(context.reply.originatingTo, "plow:chat");
+  assert.equal(context.access?.commands?.authorized, false);
   assert.equal(context.sender.id, "member");
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
   assert.equal(context.message.bodyForAgent, undefined);

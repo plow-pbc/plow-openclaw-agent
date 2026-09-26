@@ -24,10 +24,10 @@ test("start-thread refuses an owner's chat without an owner handle", async t => 
   assert.ok(factory);
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const calls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (url: string) => { calls.push(url); return Response.json({ data: [{ uid: "home", status: "active", participants: [{ type: "agent", relationship: "self", line: { uid: "line" } }, { type: "member", role: "owner" }] }], has_more: false }); });
-  const tool = factory({ config: { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } } });
+  t.mock.method(globalThis, "fetch", async (url: string) => { calls.push(url); return Response.json({ uid: "home", status: "active", participants: [{ type: "agent", relationship: "self", line: { uid: "line" } }, { type: "member", role: "owner" }] }); });
+  const tool = factory({ config: { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } }, sessionId: "session", deliveryContext: { channel: "plow", to: "plow:home" } });
   await assert.rejects(tool.execute("call", { members: ["+15550000002"], body: "Meet Friday?" }), /no owner handle/);
-  assert.deepEqual(calls, ["http://fixture/v1/chats"]);
+  assert.deepEqual(calls, ["http://fixture/v1/chats/home"]);
 });
 
 test("start-thread returns a tool error without config and makes no request", async t => {

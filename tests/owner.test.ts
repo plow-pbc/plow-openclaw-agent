@@ -17,7 +17,7 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   type Peer = { kind: string; id: string };
   let routingPeer: Peer | undefined;
   let toolsDisabled: boolean | undefined;
-  let context: { access?: { toolPolicy?: { deny: string[] } }; from: string; sender: { id: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string }[] } }[] } } | undefined;
+  let context: { access?: { toolPolicy?: { deny: string[] }; commands?: { authorized?: boolean } }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -38,7 +38,10 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
   assert.equal(facts.participants[0].role, role);
-  assert.equal(context.from, "local-sender");
+  assert.equal(context.from, kind === "group" ? "plow:group:chat" : "plow:local-sender");
+  assert.equal(context.reply.to, "plow:chat");
+  assert.equal(context.reply.originatingTo, "plow:chat");
+  assert.equal(context.access?.commands?.authorized, role === "owner");
   assert.equal(context.conversation.id, "chat");
   const peer = { kind: kind === "group" ? "group" : "direct", id: kind === "direct" ? role === "owner" ? "plow-owner" : "local-sender" : "chat" };
   assert.deepEqual(routingPeer, peer);
