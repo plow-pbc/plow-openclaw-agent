@@ -6,8 +6,11 @@ import { renderPrompt } from "../boot/prompt.ts";
 
 const prompt = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");
 
-test("no Mac leaves the prompt unchanged", async () => {
-  assert.equal(await renderPrompt(prompt, null, "test-token"), prompt);
+test("dashboard address comes from agent identity, including absence", async () => {
+  assert.equal(await renderPrompt(prompt, null, "test-token", "https://dashboard.example/agent"),
+    `${prompt}\nYour dashboard is https://dashboard.example/agent. Give that exact address when asked; never guess a dashboard URL.\n`);
+  assert.equal(await renderPrompt(prompt, null, "test-token", null),
+    `${prompt}\nYou have no dashboard. Say so when asked for its URL; never guess one.\n`);
 });
 
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
@@ -40,9 +43,10 @@ for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavail
       const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token");
       const expectedInstructions = format === "oversized" ? "A".repeat(8_000)
         : "Use plow_list_skills to discover the owner's Mac skills.";
+      const base = `${prompt}\nYou have no dashboard. Say so when asked for its URL; never guess one.\n`;
       assert.equal(rendered, ["json", "sse", "oversized"].includes(format)
-        ? `${prompt}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${expectedInstructions}\n\`\`\`\n`
-        : prompt);
+        ? `${base}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${expectedInstructions}\n\`\`\`\n`
+        : base);
       assert.ok(rendered.length <= 20_000, "workspace instructions fit the per-file context cap");
       assert.equal(requests, 1);
     } finally {
