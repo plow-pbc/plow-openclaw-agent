@@ -39,7 +39,7 @@ RUN curl -fsS --max-time 120 -L -o /tmp/agentsview.tgz \
  && tar -xzf /tmp/agentsview.tgz -C /usr/local/bin agentsview \
  && rm /tmp/agentsview.tgz \
  && chmod 0755 /usr/local/bin/agentsview
-RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && node /opt/plow/build.ts && chmod +x /opt/plow/probe
+RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && ln -s /app /opt/plow/node_modules/openclaw && node /opt/plow/build.ts && chmod +x /opt/plow/probe
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.
 ENV AGENT_RUNTIME=OpenClaw

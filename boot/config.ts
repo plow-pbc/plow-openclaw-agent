@@ -6,7 +6,7 @@ export type Participant =
   | { type: "member"; uid: string; role: string }
   | { type: "agent"; relationship: string; line: { uid: string; provider_type?: string } };
 export type Identity = {
-  agent?: { name?: string | null };
+  agent?: { name?: string | null; web_url?: string | null };
   line: { uid: string };
   chats: { uid: string; status: string; participants: Participant[] }[];
   mcp_url?: string | null;
