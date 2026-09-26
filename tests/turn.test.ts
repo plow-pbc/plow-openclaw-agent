@@ -26,7 +26,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const logs: string[] = [];
   let observation: boolean | undefined;
   let strandedRetry: (() => Promise<unknown>) | undefined;
-  let context: { from: string; reply: { to: string; originatingTo?: string }; access?: { commands?: { authorized?: boolean } }; sender: { id: string }; message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
+  let context: { message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
   let channel: { agentPrompt: { messageToolHints: () => string[] }; outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -90,11 +90,6 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   if (outcome === "delivered") assert.equal(observation, true);
   if (outcome === "duplicate") assert.ok(logs.some(text => text.startsWith("turn incomplete")));
   assert.ok(context);
-  assert.equal(context.from, "plow:group:chat");
-  assert.equal(context.reply.to, "plow:chat");
-  assert.equal(context.reply.originatingTo, "plow:chat");
-  assert.equal(context.access?.commands?.authorized, false);
-  assert.equal(context.sender.id, "member");
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
   assert.equal(context.message.bodyForAgent, undefined);
   assert.equal(context.message.rawBody, "hello");

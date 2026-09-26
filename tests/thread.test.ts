@@ -41,7 +41,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       registerTool() {},
       runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "main" }) }, inbound: {
         buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
-          const tool = toolFactory({ config: cfg, sessionId: `session-${turns}`, deliveryContext: { channel: "plow", to: "plow:home" }, senderIsOwner: true, requesterSenderId: "owner" });
+          const tool = toolFactory({ config: cfg, sessionId: `session-${turns}`, deliveryContext: { channel: "plow", to: "plow:home" } });
           for (let retry = 0; retry < 4; retry++) {
             try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "target", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 3 ? ["+15550000003"] : retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], chat_uid: "home", body: retry === 2 ? "Meet Saturday?" : "Meet Friday?" })))); }
             catch (error) { errors.push((error as Error).message); }
@@ -59,7 +59,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     } });
     await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
     assert.equal(turns, 2);
-    assert.equal(posts.length, toolName === "message" || status === 200 || status === 403 ? 8 : 2);
+    assert.equal(posts.length, status === 200 || status === 403 ? 8 : 2);
     if (status === 200) {
       assert.equal(results.length, 8);
       if (toolName === "plow_start_thread") {

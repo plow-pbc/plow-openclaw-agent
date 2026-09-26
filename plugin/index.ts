@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
@@ -6,6 +7,7 @@ import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, t
 
 let runtime: PluginRuntime;
 type DeliveryState = { unknown: boolean };
+const outboundDeliveryState = new AsyncLocalStorage<DeliveryState>();
 
 async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, state?: DeliveryState): Promise<T> {
   if (state?.unknown) throw new DeliveryUnknownError();
@@ -86,7 +88,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   let observedReplyDelivery = false;
   if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
   try {
-    const result = await runtime.channel.inbound.dispatch({
+    const result = await outboundDeliveryState.run(deliveryState, () => runtime.channel.inbound.dispatch({
       cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
       replyOptions: {
         onObservedReplyDelivery: () => { observedReplyDelivery = true; },
@@ -101,7 +103,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         },
         onError: error => { failure = error; },
       },
-    });
+    }));
     if (deliveryState.unknown) throw new DeliveryUnknownError();
     if (failure) throw failure;
     if (!result.dispatched) throw new Error("Turn was not dispatched");
@@ -144,8 +146,8 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text),
-    sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
+    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [], outboundDeliveryState.getStore()),
+    sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : [], outboundDeliveryState.getStore()),
   },
 };
 
@@ -178,9 +180,7 @@ export default defineChannelPluginEntry({
           if (!currentChatUid || !context.sessionId) throw new Error("Starting a thread requires an active Plow message");
           const currentChat = await request<Chat>(account, `/chats/${currentChatUid}`);
           if (!accepts(account, currentChat)) throw new Error("Plow account does not serve this conversation");
-          const owner = (context.senderIsOwner
-            ? currentChat.participants.find(p => p.type === "member" && p.uid === context.requesterSenderId && p.role === "owner")
-            : currentChat.participants.find(p => p.type === "member" && p.role === "owner"))
+          const owner = currentChat.participants.find(p => p.type === "member" && p.role === "owner")
             ?? (await ownerChat(account)).participants.find(p => p.type === "member" && p.role === "owner");
           if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
           const members = [...new Set([owner.provider_key, ...args.members])].sort();
