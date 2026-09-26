@@ -145,7 +145,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const checkpoint = checkpoints.get(chat.uid);
         const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
         let history: Message[] = [];
-        let historyLoaded = contextualized.has(chat.uid);
+        let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
         if (!historyLoaded) {
           try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
           catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }

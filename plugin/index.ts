@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
@@ -236,17 +237,29 @@ export default defineChannelPluginEntry({
         properties: { text: { type: "string", minLength: 1, description: "What the member wants the owner to decide or do." } },
       },
       async execute(_id, args: { text: string }) {
-        if (!context.config) throw new Error("Plow configuration is unavailable.");
-        const account = plugin.config.resolveAccount(context.config, "chat");
+        const cfg = context.config;
+        if (!cfg) throw new Error("Plow configuration is unavailable.");
         const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
         if (context.messageChannel !== "plow" || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")
           || !turn || turn.senderIsOwner || turn.chat.trusted
           || context.nativeChannelId !== turn.chat.uid) {
           throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
-        const escalation = `In ${turn.chat.display_name ?? turn.chat.uid} (${context.agentAccountId} ${turn.chat.uid}), ${turn.senderName} asks: ${args.text}`;
-        await activeTurn.run(turn, () => send(account, "plow-owner", escalation));
-        runtime.system.enqueueSystemEvent(escalation, { sessionKey: "agent:main:main" });
+        const escalation = `A member asked for your decision.\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
+        const ownerSessionKey = "agent:main:main";
+        await runtime.channel.session.updateLastRoute({
+          storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: "main" }),
+          sessionKey: ownerSessionKey, channel: "plow", accountId: "chat", to: "plow-owner", createIfMissing: true,
+        });
+        const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
+          cfg, channel: "plow", accountId: "chat", to: "plow-owner", payloads: [{ text: escalation }],
+          session: buildOutboundSessionContext({ cfg, agentId: "main", sessionKey: ownerSessionKey, conversationType: "direct" }),
+          mirror: { sessionKey: ownerSessionKey, agentId: "main" }, skipQueue: true,
+        }));
+        if (result.status !== "sent") {
+          turn.deliveryUnknown = true;
+          throw new DeliveryUnknownError();
+        }
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));
