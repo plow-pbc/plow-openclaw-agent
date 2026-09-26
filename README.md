@@ -103,7 +103,7 @@ skills, and other owner settings survive restarts. Plow seeds defaults on a fres
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
-identity, owner DM binding, session routing, visible-reply policy, and
+identity, owner DM binding, session routing, `messages.visibleReplies`, and
 cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
