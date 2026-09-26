@@ -204,11 +204,13 @@ Any process on the same host, including the agent's shell, can forge
 `X-Plow-User` over loopback. Keep direct gateway access limited to the host's
 loopback interface.
 
-Group trust controls tool access per turn. In a trusted group, every sender can
-use the agent's tools, including the owner's Mac, mail and files. In an
-untrusted group, the owner still has full tools; other members can reply and
-use only `plow_ask_owner`, which posts their request to the owner's main DM.
-The agent can answer in the group and see its history. The owner can switch a
+Trust controls tool access per turn. In a trusted group, every sender can
+use the agent's tools, including the owner's Mac, mail and files. In any
+untrusted conversation, the owner still has full tools; other senders can reply
+and use only `plow_ask_owner`, which posts their request and source chat uid
+to the owner's main DM. This includes direct chats and email threads, whose
+senders can be anyone. The agent can answer in the source conversation and see
+its history. The owner can switch a
 group with `plow_set_thread_trust` from their main DM, or with the app toggle.
 New groups default to untrusted unless the configured creation mode chooses
 otherwise. `PLOW_THREAD_TRUST=trusted` is the image creator's preset; it does

@@ -230,7 +230,7 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_ask_owner", label: "Ask the Plow owner",
-      description: "From an untrusted group member's turn, send that member's proposal to the owner in the owner's main DM. The owner decides there; tell the group you are checking with them.",
+      description: "From an untrusted non-owner turn in a group, direct chat, or email thread, send the sender's request to the owner's main DM. The owner decides there; tell the sender you are checking with them.",
       parameters: {
         type: "object", required: ["text"], additionalProperties: false,
         properties: { text: { type: "string", minLength: 1, description: "What the member wants the owner to decide or do." } },
@@ -239,12 +239,12 @@ export default defineChannelPluginEntry({
         if (!context.config) throw new Error("Plow configuration is unavailable.");
         const account = plugin.config.resolveAccount(context.config, "chat");
         const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-        if (context.messageChannel !== "plow" || context.agentAccountId !== "chat"
-          || !turn || turn.senderIsOwner || turn.chat.trusted || turn.chat.participants.length <= 2
+        if (context.messageChannel !== "plow" || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")
+          || !turn || turn.senderIsOwner || turn.chat.trusted
           || context.nativeChannelId !== turn.chat.uid) {
-          throw new Error("Asking the owner requires an active untrusted group member turn.");
+          throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
-        await send(account, "plow-owner", `In ${turn.chat.display_name ?? turn.chat.uid}, ${turn.senderName} asks: ${args.text}`);
+        await activeTurn.run(turn, () => send(account, "plow-owner", `In ${turn.chat.display_name ?? turn.chat.uid} (${turn.chat.uid}), ${turn.senderName} asks: ${args.text}`));
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));
