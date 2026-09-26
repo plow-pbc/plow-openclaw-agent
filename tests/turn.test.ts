@@ -84,7 +84,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   if (outcome === "delivered") assert.equal(observation, true);
   if (outcome === "duplicate") assert.ok(logs.some(text => text.startsWith("turn incomplete")));
   assert.ok(context);
-  assert.equal(context.sender.id, "member");
+  assert.match(context.sender.id, /^plow-person:[a-f0-9]{64}$/);
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
   assert.equal(context.message.bodyForAgent, undefined);
   assert.equal(context.message.rawBody, "hello");
