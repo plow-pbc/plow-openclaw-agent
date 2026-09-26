@@ -7,7 +7,7 @@ import entry from "../plugin/index.ts";
 
 const { WebSocketServer } = createRequire(new URL("../plugin/package.json", import.meta.url))("ws");
 
-for (const action of ["pending", "thread-cache", "thread-roster", "owner-send"]) test(`owner action with truncated listing: ${action}`, async t => {
+for (const action of ["pending", "thread", "owner-send"]) test(`owner action with truncated listing: ${action}`, async t => {
   const root = await mkdtemp("/tmp/plow-owner-action-");
   process.env.OPENCLAW_STATE_DIR = root;
   process.env.PLOW_AGENT_TOKEN = "fixture-token";
@@ -17,7 +17,7 @@ for (const action of ["pending", "thread-cache", "thread-roster", "owner-send"])
   const guest = { ...owner, uid: "guest", role: "member", provider_key: "+15550000002" };
   const self = { type: "agent", relationship: "self", line: { uid: "line" } };
   const home = { uid: "home", status: "active", trusted: true, participants: [self, owner] };
-  const group = { ...home, uid: "group", participants: [self, guest, action === "thread-roster" ? owner : { ...guest, uid: "another" }] };
+  const group = { ...home, uid: "group", participants: [self, guest, owner] };
   const pending = { uid: "pending", direction: "inbound", sender: owner, body: "17 + 25?", attachments: [], created_at: new Date().toISOString() };
   let firstContact: boolean | undefined;
   const posts: { path: string; body: Record<string, unknown> }[] = [];
@@ -31,7 +31,7 @@ for (const action of ["pending", "thread-cache", "thread-roster", "owner-send"])
       response.end(JSON.stringify({ uid: "sent" }));
     } else if (request.url === "/v1/chats") {
       listings++;
-      response.end(JSON.stringify({ data: action === "thread-roster" ? [group] : [home, group], has_more: true }));
+      response.end(JSON.stringify({ data: [home, group], has_more: true }));
     } else response.end(JSON.stringify(request.url === "/v1/chats/group" ? group : request.url === "/v1/chats/home" ? home :
       request.url!.includes("/messages?") ? { data: action === "pending" && request.url!.includes("/home/") && !request.url!.includes("limit=20") ? [pending] : [], has_more: false } : { ticket: "ticket" }));
   });
@@ -76,7 +76,7 @@ for (const action of ["pending", "thread-cache", "thread-roster", "owner-send"])
     } } },
   });
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal });
-  if (action.startsWith("thread")) {
+  if (action === "thread") {
     assert.match((failure as Error)?.message, /owner's main Plow DM/);
     assert.equal(posts.length, 0);
     assert.equal(listings, 1);

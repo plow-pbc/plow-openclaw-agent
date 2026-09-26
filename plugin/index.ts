@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
 type ActiveTurn = { chat: Chat; messageUid: string; senderIsOwner: boolean; deliveryUnknown?: boolean; replyDelivered?: boolean };
@@ -184,8 +184,7 @@ export default defineChannelPluginEntry({
         const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
         if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow"
           || context.agentAccountId !== "chat" || !turn || !turn.senderIsOwner
-          || context.nativeChannelId !== turn.chat.uid || turn.chat.participants.length !== 2
-          || !accepts(account, turn.chat)) {
+          || context.nativeChannelId !== turn.chat.uid || findOwnerChat(account, [turn.chat]) !== turn.chat) {
           throw new Error("Starting a thread requires an active message in the owner's main Plow DM.");
         }
         const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
