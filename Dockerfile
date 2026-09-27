@@ -23,7 +23,7 @@ COPY package.json package-lock.json tsconfig.json /opt/plow/
 # Root-owned, outside the state volume the agent writes: a copy the agent could
 # write is a copy a turn can replace.
 RUN curl -fsS --max-time 60 -o /opt/plow/agent-index-client.py \
-      "https://raw.githubusercontent.com/plow-pbc/agent-index-client/202e59438a4cdd8424adbca9d27b5de0c6f1eb60/standalone/agent_index_client.py" \
+      "https://raw.githubusercontent.com/plow-pbc/agent-index-client/fbfe8b635c1f20ce1f0152497abb419623f53329/standalone/agent_index_client.py" \
  && echo "5be521644ade0f041e83370ac457edc8ad85410e14265f1b1243807772de9a5b  /opt/plow/agent-index-client.py" | sha256sum -c - \
  && chmod 0644 /opt/plow/agent-index-client.py
 
