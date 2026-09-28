@@ -56,6 +56,12 @@ const validChatId = (uid: unknown): uid is string => typeof uid === "string" && 
 class AmbiguousOwnerChatError extends Error {}
 
 const discoveredChats = new Map<string, Map<string, Chat>>();
+const contextualizedChats = new Map<string, Set<string>>();
+const historyKey = (account: Account) => `${account.apiBase}/${account.accountId}/${account.accountId === "email" ? account.emailLineUid : account.lineUid}`;
+
+export function invalidateContextualizedHistory(account: Account, chatUid: string) {
+  contextualizedChats.get(historyKey(account))?.delete(chatUid);
+}
 
 export function findOwnerChat(account: Account, chats: Chat[]): Chat | undefined {
   const owners = chats.filter(chat => chat.status === "active" && chat.participants.length === 2 &&
@@ -116,6 +122,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   if (account.accountId === "chat") discoveredChats.set(`${account.apiBase}/${account.lineUid}`, discovered);
   const seen = new Set<string>();
   const contextualized = new Set<string>();
+  const accountHistoryKey = historyKey(account);
+  contextualizedChats.set(accountHistoryKey, contextualized);
   let attempt = 0;
   const remember = (id: string) => {
     seen.add(id);
@@ -332,4 +340,5 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
+  if (contextualizedChats.get(accountHistoryKey) === contextualized) contextualizedChats.delete(accountHistoryKey);
 }

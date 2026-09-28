@@ -154,32 +154,25 @@ test("an ambiguous owner notification latches delivery for the rest of the turn"
   assert.equal((posts[0].body as { body: string }).body, expectedEscalation("chat", chat.uid, "Please ask."));
 });
 
-for (const scene of ["owner DM", "owner group", "member group", "owner email"] as const) test(`reply tool from ${scene}`, async t => {
-  const { apiBase, result, failure, posts, transcript } = await runInboundTool(t, scene, "plow_reply_to", {
+for (const scene of ["owner group", "member group", "owner email"] as const) test(`reply tool from ${scene}`, async t => {
+  const { failure, posts } = await runInboundTool(t, scene, "plow_reply_to", {
     account: "email", chat_uid: "cht_email_target", text: "Robin approved lunch at noon.",
   });
-  if (scene === "owner DM") {
-    assert.equal(failure, undefined);
-    assert.deepEqual((result as { details: unknown }).details, { message_uid: "sent" });
-    assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/cht_email_target/messages`, body: {
-      body: "Robin approved lunch at noon.", attachment_uids: [],
-    } }]);
-    assert.deepEqual((await transcript("agent:main:plow:direct:cht_email_target")).map(entry => [entry.role, entry.message.content[0].text]),
-      [["assistant", "Robin approved lunch at noon."]]);
-  } else {
-    assert.match((failure as Error)?.message, /owner's main Plow DM/);
-    assert.deepEqual(posts, []);
-  }
+  assert.match((failure as Error)?.message, /owner's main Plow DM/);
+  assert.deepEqual(posts, []);
 });
 
-test("an approved reply is visible in the destination direct chat's next session", async t => {
-  const { failure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
-    account: "chat", chat_uid: "cht_direct_target", text: "I booked lunch for two.",
+for (const { account, chatUid, text, sessionKey } of [
+  { account: "email", chatUid: "cht_email_target", text: "Robin approved lunch at noon.", sessionKey: "agent:main:plow:direct:cht_email_target" },
+  { account: "chat", chatUid: "cht_direct_target", text: "I booked lunch for two.", sessionKey: "agent:main:plow:direct:member" },
+] as const) test(`approved reply destination ${account}`, async t => {
+  const { apiBase, result, failure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
+    account, chat_uid: chatUid, text,
   });
   assert.equal(failure, undefined);
-  assert.equal((posts[0].body as { body: string }).body, "I booked lunch for two.");
-  assert.deepEqual((await transcript("agent:main:plow:direct:member")).map(entry => [entry.role, entry.message.content[0].text]),
-    [["assistant", "I booked lunch for two."]]);
+  assert.deepEqual((result as { details: unknown }).details, { message_uid: "sent" });
+  assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/${chatUid}/messages`, body: { body: text, attachment_uids: [] } }]);
+  assert.deepEqual((await transcript(sessionKey)).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", text]]);
 });
 
 test("an ambiguous approved reply latches delivery without mirroring", async t => {

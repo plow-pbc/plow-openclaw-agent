@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
 type ActiveTurn = { chat: Chat; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
@@ -52,6 +52,23 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments }, turn);
   if (turn?.chat.uid === to) turn.replyDelivered = true;
   return { channel: "plow" as const, messageId: sent.uid };
+}
+
+async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group") {
+  await runtime.channel.session.updateLastRoute({
+    storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+    sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
+  });
+  const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
+    cfg, channel: "plow", accountId, to, payloads: [{ text }],
+    session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
+    mirror: route, skipQueue: true,
+  }));
+  if (result.status !== "sent") {
+    turn.deliveryUnknown = true;
+    throw new DeliveryUnknownError();
+  }
+  return result.results[0].messageId;
 }
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
@@ -248,19 +265,7 @@ export default defineChannelPluginEntry({
           JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`));
         const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(account="${context.agentAccountId}", chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
         const ownerSessionKey = "agent:main:main";
-        await runtime.channel.session.updateLastRoute({
-          storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: "main" }),
-          sessionKey: ownerSessionKey, channel: "plow", accountId: "chat", to: "plow-owner", createIfMissing: true,
-        });
-        const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
-          cfg, channel: "plow", accountId: "chat", to: "plow-owner", payloads: [{ text: escalation }],
-          session: buildOutboundSessionContext({ cfg, agentId: "main", sessionKey: ownerSessionKey, conversationType: "direct" }),
-          mirror: { sessionKey: ownerSessionKey, agentId: "main" }, skipQueue: true,
-        }));
-        if (result.status !== "sent") {
-          turn.deliveryUnknown = true;
-          throw new DeliveryUnknownError();
-        }
+        await durableSend(cfg, turn, { agentId: "main", sessionKey: ownerSessionKey }, "chat", "plow-owner", "plow-owner", escalation, "direct");
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));
@@ -291,21 +296,15 @@ export default defineChannelPluginEntry({
           : peer?.type === "member" ? peer.uid : peer?.line.uid;
         if (!peerId) throw new Error("Plow conversation has no peer");
         const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: args.account, peer: { kind, id: peerId } });
-        await runtime.channel.session.updateLastRoute({
-          storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
-          sessionKey: route.sessionKey, channel: "plow", accountId: args.account,
-          to: peerId === "plow-owner" ? peerId : args.chat_uid, createIfMissing: true,
-        });
-        const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
-          cfg, channel: "plow", accountId: args.account, to: args.chat_uid, payloads: [{ text: args.text }],
-          session: buildOutboundSessionContext({ cfg, agentId: route.agentId, sessionKey: route.sessionKey, conversationType: kind }),
-          mirror: { sessionKey: route.sessionKey, agentId: route.agentId }, skipQueue: true,
-        }));
-        if (result.status !== "sent") {
-          turn.deliveryUnknown = true;
-          throw new DeliveryUnknownError();
+        let messageUid: string;
+        try {
+          messageUid = await durableSend(cfg, turn, route, args.account, args.chat_uid,
+            peerId === "plow-owner" ? peerId : args.chat_uid, args.text, kind);
+        } catch (error) {
+          if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, args.chat_uid);
+          throw error;
         }
-        const details = { message_uid: result.results[0].messageId };
+        const details = { message_uid: messageUid };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
     }));

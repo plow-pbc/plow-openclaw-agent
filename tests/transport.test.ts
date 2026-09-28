@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { websocketFixture } from "./ws-fixture.ts";
 import fs, { mkdir, readFile, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, type Account, type Chat, type Message } from "../plugin/transport.ts";
+import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, invalidateContextualizedHistory, type Account, type Chat, type Message } from "../plugin/transport.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat" } as Account;
 const message = (uid: string) => ({ uid }) as Message;
@@ -397,7 +397,7 @@ test("optional history failure still dispatches the message with empty history",
   assert.equal(await readFile(`${root}/plow-checkpoints/chat`, "utf8"), "second");
 });
 
-test("reconnecting does not re-inject history into an already contextualized chat", { timeout: 40_000 }, async t => {
+test("reconnecting skips contextualized history until an ambiguous send invalidates it", { timeout: 40_000 }, async t => {
   const { server, apiBase } = await websocketFixture(t);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 35_000);
@@ -416,14 +416,21 @@ test("reconnecting does not re-inject history into an already contextualized cha
       data: { message: { uid, direction: "inbound", sender: { type: "member" } } } }));
   });
   const delivered: string[] = [];
-  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message) => {
+  const listeningAccount = { ...account, apiBase, lineUid: "line" };
+  await listen(listeningAccount, controller.signal, text => {
+    if (text === "acked chat=chat message=2") {
+      invalidateContextualizedHistory(listeningAccount, chat.uid);
+      for (const socket of server.clients) socket.send(JSON.stringify({ event_type: "message_received", event_id: "3", chat_id: chat.uid,
+        data: { message: { uid: "3", direction: "inbound", sender: { type: "member" } } } }));
+    }
+  }, async (_chat, message) => {
     delivered.push(message.uid);
     if (delivered.length === 1) for (const socket of server.clients) socket.close();
-    else controller.abort();
+    if (delivered.length === 3) controller.abort();
     return "completed";
   });
-  assert.deepEqual(delivered, ["1", "2"]);
-  assert.equal(historyReads, 1);
+  assert.deepEqual(delivered, ["1", "2", "3"]);
+  assert.equal(historyReads, 2);
 });
 
 test("owner discovery requires the unique active self-line DM with an owner", async t => {
