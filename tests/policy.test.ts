@@ -46,25 +46,16 @@ test("start-thread returns a tool error without config and makes no request", as
   assert.equal(fetch.mock.callCount(), 0);
 });
 
-for (const accountId of ["chat", "email"]) for (const status of [200, 403, 503, "unserved", "inactive"] as const) test(`native send checks account reach and reports only confirmed sends: ${accountId}, ${status}`, async t => {
+test("native sends without an active conversation are rejected", async t => {
   let channel: { outbound: { sendText: (context: object) => Promise<unknown> } };
   entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
-  process.env.PLOW_AGENT_TOKEN = "test-token";
-  const posts: unknown[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
-    if (options.method === "POST") {
-      posts.push(JSON.parse(options.body as string));
-      return Response.json({ uid: "sent-message" }, { status: typeof status === "number" ? status : 200 });
-    }
-    return Response.json({ uid: "target", status: status === "inactive" ? "inactive" : "active", participants: [
-      { type: "agent", relationship: "self", line: { uid: status === "unserved" ? "other-line" : accountId } },
-    ] });
-  });
-  const result = channel!.outbound.sendText({ cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "chat", emailLineUid: "email" } } }, accountId, to: "target", text: "Friday at noon." });
-  if (status === 200) assert.deepEqual(await result, { channel: "plow", messageId: "sent-message" });
-  else await assert.rejects(result, typeof status === "string" ? /does not serve/ : status === 503 ? /delivery is unknown/ : /HTTP 403/);
-  assert.deepEqual(posts, typeof status === "string" ? [] : [{ body: "Friday at noon.", attachment_uids: [] }]);
+  const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
+  for (const accountId of ["chat", "email"]) await assert.rejects(channel!.outbound.sendText({
+    cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "chat", emailLineUid: "email" } } },
+    accountId, to: "target", text: "Friday at noon.",
+  }), /current conversation/);
+  assert.equal(fetch.mock.callCount(), 0);
 });
 
 test("native targets preserve opaque UID case and reject names and non-chat IDs", () => {
@@ -82,26 +73,14 @@ test("native targets preserve opaque UID case and reject names and non-chat IDs"
   }
 });
 
-test("owner-targeted delivery resolves the sentinel to the owner's phone chat", async t => {
+test("owner sentinel cannot bypass the active-conversation requirement", async t => {
   let channel: { outbound: { sendText: (context: object) => Promise<unknown> } };
   entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
-  process.env.PLOW_AGENT_TOKEN = "test-token";
-  const chat = { uid: "cht_home", status: "active", participants: [
-    { type: "agent", relationship: "self", line: { uid: "line" } },
-    { type: "member", uid: "member", role: "owner" },
-  ] };
-  const urls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (url: string) => {
-    urls.push(url);
-    if (url.endsWith("/chats")) return Response.json({ data: [chat], has_more: false });
-    if (url.endsWith("/chats/cht_home")) return Response.json(chat);
-    if (url.endsWith("/chats/cht_home/messages")) return Response.json({ uid: "delivered" });
-    return new Response(null, { status: 404 });
-  });
-  assert.deepEqual(await channel!.outbound.sendText({ cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } },
-    accountId: "chat", to: "plow-owner", text: "Reminder" }), { channel: "plow", messageId: "delivered" });
-  assert.equal(urls.at(-1), "http://fixture/v1/chats/cht_home/messages");
+  const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
+  await assert.rejects(channel!.outbound.sendText({ cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } },
+    accountId: "chat", to: "plow-owner", text: "Reminder" }), /current conversation/);
+  assert.equal(fetch.mock.callCount(), 0);
 });
 
 test("heartbeat owner discovery identifies only the sentinel as a direct destination", () => {

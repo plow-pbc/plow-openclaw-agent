@@ -24,7 +24,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
         return Response.json({ uid: "created" }, { status });
       }
       return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
-        url.endsWith("/chats/home") || url.endsWith("/chats/target") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+        url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
     });
     server.on("connection", (socket: { send: (text: string) => void }) => {
       for (const uid of ["first-request", "later-identical-request"]) socket.send(JSON.stringify({
@@ -42,7 +42,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
         buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
           for (let retry = 0; retry < 4; retry++) {
-            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "target", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", ...(retry === 3 ? { trusted: true } : {}) })))); }
+            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", ...(retry === 3 ? { trusted: true } : {}) })))); }
             catch (error) { errors.push((error as Error).message); }
           }
           replyOptions.onAgentRunTerminalOutcome("completed");

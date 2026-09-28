@@ -397,7 +397,7 @@ test("optional history failure still dispatches the message with empty history",
   assert.equal(await readFile(`${root}/plow-checkpoints/chat`, "utf8"), "second");
 });
 
-test("reconnecting skips contextualized history until an ambiguous send invalidates it", { timeout: 40_000 }, async t => {
+test("invalidation during a contextualized turn reloads history on the next turn", { timeout: 40_000 }, async t => {
   const { server, apiBase } = await websocketFixture(t);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 35_000);
@@ -419,13 +419,16 @@ test("reconnecting skips contextualized history until an ambiguous send invalida
   const listeningAccount = { ...account, apiBase, lineUid: "line" };
   await listen(listeningAccount, controller.signal, text => {
     if (text === "acked chat=chat message=2") {
-      invalidateContextualizedHistory(listeningAccount, chat.uid);
       for (const socket of server.clients) socket.send(JSON.stringify({ event_type: "message_received", event_id: "3", chat_id: chat.uid,
         data: { message: { uid: "3", direction: "inbound", sender: { type: "member" } } } }));
     }
   }, async (_chat, message) => {
     delivered.push(message.uid);
     if (delivered.length === 1) for (const socket of server.clients) socket.close();
+    if (message.uid === "2") {
+      assert.equal(historyReads, 1);
+      invalidateContextualizedHistory(listeningAccount, chat.uid);
+    }
     if (delivered.length === 3) controller.abort();
     return "completed";
   });

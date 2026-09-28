@@ -79,8 +79,8 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
     } } },
   });
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal });
-  if (action === "thread") {
-    assert.match((failure as Error)?.message, /owner's main Plow DM/);
+  if (action === "thread" || action === "owner-send") {
+    assert.match((failure as Error)?.message, action === "thread" ? /owner's main Plow DM/ : /current conversation/);
     assert.equal(posts.length, 0);
     assert.equal(listings, 1);
     return;
@@ -88,7 +88,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
   assert.equal(failure, undefined);
   assert.equal(posts.length, 1);
   assert.equal(posts[0].path, "/v1/chats/home/messages");
-  assert.equal(posts[0].body.body, action === "pending" ? "42" : "Ready");
+  assert.equal(posts[0].body.body, "42");
   if (action === "pending") assert.equal(firstContact, true);
   assert.equal(listings, 1, "actions use discovered facts instead of listing again");
   t.diagnostic(`HTTP received ${posts[0].path}: ${JSON.stringify(posts[0].body)}`);

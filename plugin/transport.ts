@@ -56,11 +56,14 @@ const validChatId = (uid: unknown): uid is string => typeof uid === "string" && 
 class AmbiguousOwnerChatError extends Error {}
 
 const discoveredChats = new Map<string, Map<string, Chat>>();
-const contextualizedChats = new Map<string, Set<string>>();
+type HistoryState = { contextualized: Set<string>; versions: Map<string, number> };
+const historyStates = new Map<string, HistoryState>();
 const historyKey = (account: Account) => `${account.apiBase}/${account.accountId}/${account.accountId === "email" ? account.emailLineUid : account.lineUid}`;
 
 export function invalidateContextualizedHistory(account: Account, chatUid: string) {
-  contextualizedChats.get(historyKey(account))?.delete(chatUid);
+  const state = historyStates.get(historyKey(account));
+  state?.contextualized.delete(chatUid);
+  if (state) state.versions.set(chatUid, (state.versions.get(chatUid) ?? 0) + 1);
 }
 
 export function findOwnerChat(account: Account, chats: Chat[]): Chat | undefined {
@@ -121,9 +124,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const discovered = new Map<string, Chat>();
   if (account.accountId === "chat") discoveredChats.set(`${account.apiBase}/${account.lineUid}`, discovered);
   const seen = new Set<string>();
-  const contextualized = new Set<string>();
+  const state: HistoryState = { contextualized: new Set(), versions: new Map() };
+  const contextualized = state.contextualized;
   const accountHistoryKey = historyKey(account);
-  contextualizedChats.set(accountHistoryKey, contextualized);
+  historyStates.set(accountHistoryKey, state);
   let attempt = 0;
   const remember = (id: string) => {
     seen.add(id);
@@ -153,13 +157,14 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const checkpoint = checkpoints.get(chat.uid);
         const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
         let history: Message[] = [];
+        const historyVersion = state.versions.get(chat.uid) ?? 0;
         let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
         if (!historyLoaded) {
           try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
           catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
         }
         outcome = await turn(chat, message, firstContact, history);
-        if (historyLoaded) contextualized.add(chat.uid);
+        if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
       }
       catch (error) {
         if (error instanceof DeliveryUnknownError) {
@@ -340,5 +345,5 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
-  if (contextualizedChats.get(accountHistoryKey) === contextualized) contextualizedChats.delete(accountHistoryKey);
+  if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
 }

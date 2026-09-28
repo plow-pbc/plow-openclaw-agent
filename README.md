@@ -216,8 +216,7 @@ New groups default to untrusted unless the configured creation mode chooses
 otherwise. `PLOW_THREAD_TRUST=trusted` is the image creator's preset; it does
 not mean the owner answered a trust question for each group.
 
-Only trust people who may use the owner's resources. Explicit sends can target
-other served conversations on turns that have full tools.
+Only trust people who may use the owner's resources.
 
 Groups use their own history and omit root MEMORY.md. Cross-conversation recall
 is disabled, and native session tools cannot read unrelated conversations from

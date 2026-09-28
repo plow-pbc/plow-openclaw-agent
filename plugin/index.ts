@@ -6,10 +6,20 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
+type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
 const activeTurn = new AsyncLocalStorage<ActiveTurn>();
-const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn> };
+type SendPermit = { accountId: string; to: string; text: string };
+const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
+// The SDK loads the outbound adapter separately, so durable dispatch grants one exact send across module instances.
+const durableSendPermits = (shared.plowDurableSendPermits ??= new Set<SendPermit>());
+function consumeDurablePermit(accountId: string | null | undefined, to: string, text: string) {
+  for (const permit of durableSendPermits) if (permit.accountId === accountId && permit.to === to && permit.text === text) {
+    durableSendPermits.delete(permit);
+    return true;
+  }
+  return false;
+}
 
 function ownerDmTurn(account: Account, context: { sessionKey?: string; messageChannel?: string; agentAccountId?: string; nativeChannelId?: string }): ActiveTurn {
   const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
@@ -33,7 +43,11 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
   }
 }
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], turn = activeTurn.getStore()) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable = false, turn = activeTurn.getStore()) {
+  if (!durable && (!turn || account.accountId !== turn.accountId ||
+    (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)))) {
+    throw new Error("Native Plow sends must stay in the current conversation.");
+  }
   if (to === "plow-owner") to = (await ownerChat(account)).uid;
   if (!accepts(account, await request<Chat>(account, `/chats/${to}`))) {
     throw new Error("Plow account does not serve this conversation");
@@ -59,11 +73,15 @@ async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agent
     storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
-  const result = await activeTurn.run(turn, () => sendDurableMessageBatch({
-    cfg, channel: "plow", accountId, to, payloads: [{ text }],
-    session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
-    mirror: route, skipQueue: true,
-  }));
+  const permit = { accountId, to, text };
+  let result;
+  try {
+    result = await activeTurn.run(turn, () => sendDurableMessageBatch({
+      cfg, channel: "plow", accountId, to, payloads: [{ text }],
+      session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
+      mirror: route, skipQueue: true, onPlatformSendDispatch: async () => { durableSendPermits.add(permit); },
+    }));
+  } finally { durableSendPermits.delete(permit); }
   if (result.status !== "sent") {
     turn.deliveryUnknown = true;
     throw new DeliveryUnknownError();
@@ -112,7 +130,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
+  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
@@ -181,7 +199,8 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text),
+    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [],
+      typeof ctx.onPlatformSendDispatch === "function" && consumeDurablePermit(ctx.accountId, ctx.to, ctx.text)),
     sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },
 };
