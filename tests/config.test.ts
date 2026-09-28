@@ -119,6 +119,7 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
+  assert.deepEqual(config.messages, { visibleReplies: "automatic" });
   assert.deepEqual(config.meta, {});
 });
 
@@ -144,6 +145,8 @@ test("fresh boot seeds owner defaults and external includes for Plow-owned setti
   assert.equal(owner.agents.defaults.model.primary, "plow/z-ai/glm-5.2");
   assert.equal(owner.skills.load.extraDirs[0], "/opt/plow/skills");
   assert.deepEqual(owner.gateway, { $include: join(includes, "gateway.json5") });
+  assert.deepEqual(owner.messages.visibleReplies, { $include: join(includes, "visible-replies.json5") });
+  assert.equal(JSON5.parse(await readFile(join(includes, "visible-replies.json5"), "utf8")), "automatic");
   assert.deepEqual(owner.bindings, [{ $include: join(includes, "binding.json5") }]);
   assert.deepEqual(JSON5.parse(await readFile(join(includes, "gateway.json5"), "utf8")).port, 3000);
 });
@@ -156,6 +159,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.plugins.entries.extra = { enabled: true };
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
+  old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
@@ -163,6 +167,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.channels.telegram, { enabled: true });
   assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
+  assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
@@ -177,6 +182,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(again.gateway, { $include: join(includes, "gateway.json5") });
   assert.deepEqual(again.channels.plow, { $include: join(includes, "plow-channel.json5") });
   assert.deepEqual(again.channels.telegram, { enabled: true });
+  assert.deepEqual(again.messages.groupChat, { visibleReplies: "message_tool" });
   assert.equal(again.agents.defaults.model.primary, "extra/model");
 });
 

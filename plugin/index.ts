@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
+import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
@@ -44,6 +45,7 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
 }
 
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable = false, turn = activeTurn.getStore()) {
+  to = to.replace(/^plow:/i, "");
   if (!durable && (!turn || account.accountId !== turn.accountId ||
     (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)))) {
     throw new Error("Native Plow sends must stay in the current conversation.");
@@ -107,16 +109,18 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     }
   }
   const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
+  const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const participants = chat.participants.map(p => ({
     ...(p.type === "agent" && p.relationship === "self" ? { name: cfg.agents?.entries?.[route.agentId]?.identity?.name } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
   }));
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
-    from: senderId, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
+    from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
-    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: chat.uid, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
-    ...(!chat.trusted && !senderIsOwner ? { access: { toolPolicy: { allow: ["plow_ask_owner"] } } } : {}),
+    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
+    access: { commands: { authorized: senderIsOwner }, ...(!chat.trusted && !senderIsOwner ? { toolPolicy: { allow: ["plow_ask_owner"] } } : {}) },
+    ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
@@ -134,21 +138,19 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
-    let completed = false;
+    let observedReplyDelivery = false;
     if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
     try {
       const result = await runtime.channel.inbound.dispatch({
         cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
-        replyOptions: { sourceReplyDeliveryMode: "automatic", onAgentRunTerminalOutcome: outcome => { completed = outcome === "completed"; if (!completed) failure = new Error("Agent turn failed"); } },
+        replyOptions: {
+          sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
+          onObservedReplyDelivery: () => { observedReplyDelivery = true; },
+          onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
+        },
         delivery: {
           observeMessageSent: true,
-          preparePayload: payload => {
-            if (payload.isError) {
-              failure = new Error("Agent reply failed");
-              return null;
-            }
-            return failure || payload.isFallbackNotice ? null : payload;
-          },
+          preparePayload: (payload, info) => payload.isFallbackNotice || (observedReplyDelivery && info.kind === "final") ? null : payload,
           deliver: async payload => {
             const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
             log(`delivered chat=${chat.uid} message=${sent.messageId}`);
@@ -160,8 +162,10 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       if (activeTurn.getStore()!.deliveryUnknown) throw new DeliveryUnknownError();
       if (failure) throw failure;
       if (!result.dispatched) throw new Error("Turn was not dispatched");
-      const outcome = completed && (activeTurn.getStore()!.replyDelivered || result.dispatchResult.deliberateSilentTerminalReply)
-        ? "completed" : "incomplete";
+      const dispatchResult = result.dispatchResult;
+      if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
+      const outcome = hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery: observedReplyDelivery || Boolean(turn.replyDelivered) })
+        || dispatchResult.deferredToActiveRun || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
       log(`${outcome} chat=${chat.uid} message=${message.uid}`);
       return outcome;
     } catch (error) {
@@ -185,7 +189,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Use Plow message(action=send) only in the current conversation. Use plow_reply_to with the account and chat uid for an owner-approved reply to another conversation."] },
+  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the account and chat uid for an owner-approved reply to another conversation."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
