@@ -60,7 +60,7 @@ The proxy removes browser-supplied `X-Plow-*`, `X-Exedev-*`, `X-Forwarded-*`,
 `X-Forwarded-For` to the request's client address when present. The UID is an
 account identifier, not a phone number or a dashboard display name.
 Each boot generates a gateway password in `OPENCLAW_GATEWAY_PASSWORD` for local
-boot and OpenClaw CLI calls. It is never written to `openclaw.json`. OpenClaw accepts
+OpenClaw CLI calls. It is never written to `openclaw.json`. OpenClaw accepts
 this password only on direct loopback requests without forwarded headers.
 The runtime user's login and interactive shells load it from a private state
 file, so `openclaw` commands work over SSH without entering a password. Anyone
@@ -132,10 +132,7 @@ Chat checkpoints survive restarts. Chats omitted from a truncated listing
 recover on their first live frame. Optional history failures still dispatch the
 current message. Email threads have separate sessions, shared by their senders,
 but no history backfill. The owner's phone DM uses the main session; other DMs
-and groups have separate sessions. After dashboard sign-in and the first owner
-turn create the main session, boot links the profile to the Plow chat identity
-and assigns that session through the agent's `sessions` tool. It checks every
-five minutes until both exist.
+and groups have separate sessions.
 
 Shutdown-interrupted chat turns can recover. Incomplete live turns are logged
 and acknowledged, with one neutral notice that the request may have partly
@@ -190,7 +187,7 @@ registry itself:
 Dashboard access relies on Plow's proxy admitting only the owner. Every
 identity that reaches this gateway through that proxy receives admin access;
 `GET /v1/agents/cloud/me` does not provide the owner's account UID for a narrower
-gateway grant. The per-boot password lets boot and the agent's own CLI use the gateway
+gateway grant. The per-boot password lets the agent's own CLI use the gateway
 over loopback; it does not authenticate requests carrying forwarded headers.
 Any process on the same host, including the agent's shell, can forge
 `X-Plow-User` over loopback. Keep direct gateway access limited to the host's

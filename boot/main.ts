@@ -4,7 +4,6 @@ import { startAgentIndex } from "./agent-index.js";
 import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
 import { installBootLog } from "./log.js";
-import { startOwnerLink } from "./owner-link.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
 
@@ -30,7 +29,6 @@ try {
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex(300_000, writeLog);
   await startGateway(false, identity.mcp_url ?? undefined, writeLog);
-  startOwnerLink();
 } catch (error) {
   console.error(`plow-boot: parked: ${error instanceof Error ? error.message : String(error)}`);
   setInterval(() => {}, 2 ** 30);
