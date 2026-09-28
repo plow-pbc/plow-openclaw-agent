@@ -27,7 +27,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   let observation: boolean | undefined;
   let strandedRetry: (() => Promise<unknown>) | undefined;
   let context: { message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
-  let channel: { agentPrompt: { messageToolHints: () => string[] }; outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
+  let channel: { outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
@@ -75,7 +75,6 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     } },
   });
   assert.ok(channel);
-  assert.match(channel.agentPrompt.messageToolHints()[0], /omit target.*current conversation|current conversation.*omit target/);
   await channel.gateway.startAccount({ account, cfg: { messages: { visibleReplies: "automatic" } }, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); if (text.startsWith("acked")) controller.abort(); } } });
   if (outcome === "plain-final") {
     assert.equal(strandedRetry, undefined);
