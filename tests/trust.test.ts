@@ -14,7 +14,7 @@ function expectedEscalation(account: "chat" | "email", chatUid: string, text: st
   return `A member asked for your decision.\nMember: ${JSON.stringify(name)} (${JSON.stringify(role)})\nSource account: ${account}\nSource chat uid: ${chatUid}\nTo reply after approval: plow_reply_to(account="${account}", chat_uid="${chatUid}", text=<your reply>).\nUntrusted member request (quoted):\n${quoted}`;
 }
 
-async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, deliveryFails = false, senderName = "Joe") {
+async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, deliveryFails = false, senderName = "Joe", trustUpdateFails = false) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const accountId = scene.endsWith("email") ? "email" : "chat";
@@ -36,7 +36,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
     if (options.method === "PUT") {
       updates.push({ url, body: JSON.parse(options.body as string) });
-      return Response.json({ trusted: true });
+      return trustUpdateFails ? Response.json({}, { status: 503 }) : Response.json({ trusted: true });
     }
     if (options.method === "POST" && url.endsWith("/messages")) {
       posts.push({ url, body: JSON.parse(options.body as string) });
@@ -74,7 +74,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
       dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
         try { result = await tool!.execute("call", args); }
         catch (error) { failure = error; }
-        if (deliveryFails) {
+        if (deliveryFails || trustUpdateFails) {
           try { await channel!.outbound.sendText({ cfg, accountId, to: chat.uid, text: "Retry" }); }
           catch (error) { retryFailure = error; }
         }
@@ -111,6 +111,15 @@ for (const scene of ["owner DM", "owner group", "member group", "owner email"] a
     assert.match((failure as Error)?.message, /owner's main Plow DM/);
     assert.deepEqual(updates, []);
   }
+});
+
+test("an ambiguous trust change latches delivery for the rest of the turn", async t => {
+  const { apiBase, failure, retryFailure, updates, posts } = await runInboundTool(t, "owner DM", "plow_set_thread_trust",
+    { chat_uid: "cht_target", trusted: true }, false, "Joe", true);
+  assert.match((failure as Error)?.message, /delivery is unknown/);
+  assert.match((retryFailure as Error)?.message, /delivery is unknown/);
+  assert.deepEqual(updates, [{ url: `${apiBase}/v1/chats/cht_target/trusted`, body: { trusted: true } }]);
+  assert.deepEqual(posts, []);
 });
 
 for (const scene of ["member group", "member DM", "member email"] as const) test(`an untrusted ${scene} can ask the owner with the source account and chat uid`, async t => {

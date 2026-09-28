@@ -7,7 +7,7 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean; replyDelivered?: boolean };
+type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
 const activeTurn = new AsyncLocalStorage<ActiveTurn>();
 type SendPermit = { accountId: string; to: string; text: string };
 const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
@@ -32,9 +32,9 @@ function ownerDmTurn(account: Account, context: { sessionKey?: string; messageCh
   return turn;
 }
 
-async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore()): Promise<T> {
+async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore(), method: "POST" | "PUT" = "POST"): Promise<T> {
   if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
-  try { return await request<T>(account, path, body); }
+  try { return await request<T>(account, path, body, undefined, method); }
   catch (error) {
     if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
       if (turn) turn.deliveryUnknown = true;
@@ -66,7 +66,6 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     attachments.push(upload.uid);
   }
   const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments }, turn);
-  if (turn?.chat.uid === to) turn.replyDelivered = true;
   return { channel: "plow" as const, messageId: sent.uid };
 }
 
@@ -164,7 +163,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       if (!result.dispatched) throw new Error("Turn was not dispatched");
       const dispatchResult = result.dispatchResult;
       if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
-      const outcome = hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery: observedReplyDelivery || Boolean(turn.replyDelivered) })
+      const outcome = hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
         || dispatchResult.deferredToActiveRun || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
       log(`${outcome} chat=${chat.uid} message=${message.uid}`);
       return outcome;
@@ -260,10 +259,10 @@ export default defineChannelPluginEntry({
       async execute(_id, args: { chat_uid: string; trusted: boolean }) {
         if (!context.config) throw new Error("Plow configuration is unavailable.");
         const account = plugin.config.resolveAccount(context.config, "chat");
-        ownerDmTurn(account, context);
+        const turn = ownerDmTurn(account, context);
         const target = await request<Chat>(account, `/chats/${encodeURIComponent(args.chat_uid)}`);
         if (!accepts(account, target) || target.participants.length <= 2) throw new Error("Target must be a served Plow group.");
-        const result = await request<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, undefined, "PUT");
+        const result = await requestWithDeliveryState<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, turn, "PUT");
         const details = { chat_uid: args.chat_uid, trusted: result.trusted };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
