@@ -172,8 +172,9 @@ gets full trust, including Mac, mail and file access, or is a normal chat;
 `trusted` creates trusted groups without asking; `untrusted` creates normal
 groups without asking. For example, add `ENV PLOW_THREAD_TRUST=untrusted` to
 the Dockerfile. The setting is rendered into the workspace prompt at boot.
-The `plow_start_thread` tool defaults to untrusted when its `trusted` argument
-is omitted.
+In `ask` mode, `plow_start_thread` requires an explicit `trusted` choice. In
+the two preset modes, the configured choice is enforced even if a tool call
+supplies a different value.
 
 Keep the inherited boot and reporter to use Plow's maintained reporting: it
 registers the listing, reads OpenClaw's transcripts and reports every five

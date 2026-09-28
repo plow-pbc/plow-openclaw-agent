@@ -12,7 +12,10 @@ export type Identity = {
   mcp_url?: string | null;
 };
 
-export function renderConfig(identity: Identity, apiBase: string) {
+export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask") {
+  if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
+    throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
+  }
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
   const email = identity.chats.flatMap(chat => chat.participants).find(p =>
@@ -47,7 +50,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
     messages: { visibleReplies: "automatic" },
     channels: { plow: {
-      apiBase, lineUid: identity.line.uid,
+      apiBase, lineUid: identity.line.uid, threadTrust,
       ...(email?.type === "agent" ? { emailLineUid: email.line.uid } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },

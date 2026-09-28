@@ -22,7 +22,7 @@ export type Message = {
 };
 export type TurnOutcome = "completed" | "incomplete";
 export type Page<T> = { data: T[]; has_more: boolean };
-export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string };
+export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; threadTrust?: "ask" | "trusted" | "untrusted" };
 
 export class HttpError extends Error {
   status: number;

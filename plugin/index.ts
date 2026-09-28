@@ -217,13 +217,13 @@ export default defineChannelPluginEntry({
   registerCapabilities(api) {
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. Set trusted according to the configured group trust choice. Sends the first message and returns the chat uid; use plow_reply_to with account chat and that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with account chat and that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
           members: { type: "array", minItems: 1, items: { type: "string", pattern: "^\\+[1-9][0-9]{1,14}$" }, description: "Recipient phone numbers in E.164 format. The owner is included automatically." },
           body: { type: "string", minLength: 1, description: "The first message to send." },
-          trusted: { type: "boolean", description: "Whether everyone in this group gets full tools. Defaults to false." },
+          trusted: { type: "boolean", description: "The owner's full-trust choice, required in ask mode. Preset modes enforce their configured choice." },
         },
       },
       async execute(_id, args: { members: string[]; body: string; trusted?: boolean }) {
@@ -235,7 +235,13 @@ export default defineChannelPluginEntry({
         const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
         const members = [...new Set([owner.provider_key, ...args.members])].sort();
-        const trusted = args.trusted ?? false;
+        if (account.threadTrust !== "ask" && account.threadTrust !== "trusted" && account.threadTrust !== "untrusted") {
+          throw new Error("Plow group trust mode is unavailable.");
+        }
+        if (account.threadTrust === "ask" && typeof args.trusted !== "boolean") {
+          throw new Error("Starting a group requires an explicit trust choice.");
+        }
+        const trusted = account.threadTrust === "trusted" || (account.threadTrust === "ask" && args.trusted === true);
         const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, turn.messageUid, members, args.body, trusted])).digest("hex");
         const chat = await requestWithDeliveryState<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,

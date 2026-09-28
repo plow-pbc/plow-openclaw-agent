@@ -12,7 +12,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     const { server, apiBase, abortAfter } = await websocketFixture(t);
     const controller = abortAfter();
     const account = { apiBase, accountId: "chat", lineUid: "line" };
-    const cfg = { channels: { plow: account }, commands: { ownerAllowFrom: ["owner"] } };
+    const cfg = { channels: { plow: { ...account, threadTrust: "ask" } }, commands: { ownerAllowFrom: ["owner"] } };
     const sender = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
     const chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
     const posts: Record<string, unknown>[] = [];
@@ -42,7 +42,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
         buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
           for (let retry = 0; retry < 4; retry++) {
-            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", ...(retry === 3 ? { trusted: true } : {}) })))); }
+            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", trusted: retry === 3 })))); }
             catch (error) { errors.push((error as Error).message); }
           }
           replyOptions.onAgentRunTerminalOutcome("completed");

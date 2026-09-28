@@ -24,7 +24,7 @@ try {
     await rm(`/var/lib/plow/workspace/${name}`, { force: true });
   }
   const prompt = await readFile("/opt/plow/prompt/AGENTS.md", "utf8");
-  await writeFile("/var/lib/plow/workspace/AGENTS.md", await renderPrompt(prompt, identity.mcp_url, process.env.PLOW_AGENT_TOKEN));
+  await writeFile("/var/lib/plow/workspace/AGENTS.md", await renderPrompt(prompt, identity.mcp_url, process.env.PLOW_AGENT_TOKEN, config.channels.plow.threadTrust));
   await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex(300_000, writeLog);

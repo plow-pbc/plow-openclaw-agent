@@ -10,11 +10,12 @@
       "schema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["apiBase", "lineUid"],
+        "required": ["apiBase", "lineUid", "threadTrust"],
         "properties": {
           "apiBase": { "type": "string" },
           "lineUid": { "type": "string" },
-          "emailLineUid": { "type": "string" }
+          "emailLineUid": { "type": "string" },
+          "threadTrust": { "type": "string", "enum": ["ask", "trusted", "untrusted"] }
         }
       }
     }
