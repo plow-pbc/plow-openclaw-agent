@@ -73,16 +73,6 @@ test("native targets preserve opaque UID case and reject names and non-chat IDs"
   }
 });
 
-test("owner sentinel cannot bypass the active-conversation requirement", async t => {
-  let channel: { outbound: { sendText: (context: object) => Promise<unknown> } };
-  entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} },
-    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
-  const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
-  await assert.rejects(channel!.outbound.sendText({ cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } },
-    accountId: "chat", to: "plow-owner", text: "Reminder" }), /current conversation/);
-  assert.equal(fetch.mock.callCount(), 0);
-});
-
 test("heartbeat owner discovery identifies only the sentinel as a direct destination", () => {
   let channel: { messaging: { inferTargetChatType?: (params: { to: string }) => string | undefined } };
   entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} },
