@@ -4,23 +4,27 @@ import { readFile } from "node:fs/promises";
 import entry from "../plugin/index.ts";
 
 for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools without a tool-call gate`, async () => {
-  const names: string[] = [];
+  const factories: ((context: object) => { name: string } | null)[] = [];
   const hooks: string[] = [];
   entry.register({
     registrationMode: mode, registerChannel() {}, runtime: {}, logger: { info() {} },
-    registerTool(factory: (context: object) => { name: string }) { names.push(factory({}).name); },
+    registerTool(factory: (typeof factories)[number]) { factories.push(factory); },
     on(name: string) { hooks.push(name); },
   });
-  assert.deepEqual(names, ["plow_start_thread"]);
+  const names = (context: object) => factories.map(factory => factory(context)?.name).filter(Boolean);
+  // buzz_enroll exists only for an agent whose image opted into Buzz.
+  assert.deepEqual(names({}), ["plow_start_thread"]);
+  const buzz = { config: { channels: { buzz: { provider: "https://provider.test" } } } };
+  assert.deepEqual(names(buzz), ["buzz_enroll", "plow_start_thread"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
-  assert.deepEqual(manifest.contracts.tools, names);
+  assert.deepEqual(manifest.contracts.tools, names(buzz));
   assert.ok(!hooks.includes("before_tool_call"));
 });
 
 test("start-thread refuses an owner's chat without an owner handle", async t => {
   let factory: ((context: object) => { name: string; execute: (id: string, args: object) => Promise<unknown> }) | undefined;
   entry.register({ registrationMode: "full", runtime: {}, registerChannel() {}, logger: { info() {} }, on() {},
-    registerTool(value: typeof factory) { if (value?.({}).name === "plow_start_thread") factory = value; } });
+    registerTool(value: typeof factory) { if (value?.({})?.name === "plow_start_thread") factory = value; } });
   assert.ok(factory);
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const calls: string[] = [];
@@ -33,7 +37,7 @@ test("start-thread refuses an owner's chat without an owner handle", async t => 
 test("start-thread returns a tool error without config and makes no request", async t => {
   let factory: ((context: object) => { name: string; execute: (id: string, args: object) => Promise<unknown> }) | undefined;
   entry.register({ registrationMode: "full", runtime: {}, registerChannel() {}, logger: { info() {} }, on() {},
-    registerTool(value: typeof factory) { if (value?.({}).name === "plow_start_thread") factory = value; } });
+    registerTool(value: typeof factory) { if (value?.({})?.name === "plow_start_thread") factory = value; } });
   assert.ok(factory);
   const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
   assert.deepEqual(await factory({}).execute("call", { members: ["+15550000002"], body: "Hi" }), {

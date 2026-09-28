@@ -12,9 +12,31 @@ export type Identity = {
   mcp_url?: string | null;
 };
 
-export function renderConfig(identity: Identity, apiBase: string) {
+/**
+ * Buzz is opt-in per image: a variant that sets BUZZ_ATTESTATION_PROVIDER joins that provider's Buzz community
+ * (plugin/buzz.ts). Without it nothing about Buzz is configured.
+ */
+function buzzChannel(env: Record<string, string | undefined>, agentName: string) {
+  const provider = env.BUZZ_ATTESTATION_PROVIDER?.trim();
+  if (!provider) return undefined;
+  if (!/^https?:\/\//.test(provider)) throw new Error(`BUZZ_ATTESTATION_PROVIDER must be an http(s) URL: ${JSON.stringify(provider)}`);
+  const respondTo = (env.BUZZ_RESPOND_TO ?? "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const bad = respondTo.find(pk => !/^[0-9a-f]{64}$/.test(pk));
+  if (bad) throw new Error(`BUZZ_RESPOND_TO takes hex pubkeys: ${JSON.stringify(bad)}`);
+  // Plow names the agent after its image slug; AGENT_NAME, its Agent Index name, is who it is in Buzz.
+  const name = env.AGENT_NAME?.trim() || agentName.trim();
+  const avatar = env.AGENT_AVATAR?.trim();
+  return {
+    provider, respondTo, name, about: env.AGENT_BLURB?.trim() ?? "", ...(avatar ? { avatar } : {}),
+    // Attestation providers take 1-32 lowercase letters, digits and hyphens.
+    handle: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 32).replace(/-+$/, "") || "agent",
+  };
+}
+
+export function renderConfig(identity: Identity, apiBase: string, env: Record<string, string | undefined> = {}) {
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
+  const buzz = buzzChannel(env, name);
   const email = identity.chats.flatMap(chat => chat.participants).find(p =>
     p.type === "agent" && p.relationship === "self" && p.line.provider_type === "email");
   return {
@@ -48,7 +70,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
     channels: { plow: {
       apiBase, lineUid: identity.line.uid,
       ...(email?.type === "agent" ? { emailLineUid: email.line.uid } : {}),
-    } },
+    }, ...(buzz ? { buzz } : {}) },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
     bindings: [{ agentId: "main", match: { channel: "plow", accountId: "chat", peer: { kind: "direct", id: "plow-owner" } }, session: { dmScope: "main" } }],
     commands: { ownerAllowFrom: ["plow-owner"] },
@@ -56,7 +78,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread"], deny: ["ask_user"] },
+    tools: { profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", ...(buzz ? ["buzz_enroll"] : [])], deny: ["ask_user"] },
   };
 }
 
@@ -65,6 +87,7 @@ const ownedPaths = [
   ["plow-provider", ["models", "providers", "plow"]],
   ["plow-mcp", ["mcp", "servers", "plow"]],
   ["plow-channel", ["channels", "plow"]],
+  ["buzz-channel", ["channels", "buzz"]],
   ["plow-plugin", ["plugins", "entries", "plow"]],
   ["plugin-load", ["plugins", "load"]],
   ["tools", ["tools"]],

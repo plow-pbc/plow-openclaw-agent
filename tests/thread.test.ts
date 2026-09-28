@@ -55,7 +55,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     entry.register(api);
     toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) {
       const candidate = factory({ config: cfg, sessionKey: "main", nativeChannelId: "home" });
-      if (candidate.name === toolName) tool = candidate;
+      if (candidate?.name === toolName) tool = candidate;
     } });
     await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
     assert.equal(turns, 2);

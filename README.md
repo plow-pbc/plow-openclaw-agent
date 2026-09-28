@@ -102,7 +102,7 @@ Without `AGENT_ID` there is nothing to report for and nothing runs.
 skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
-connected), channel, plugin entry and load path, tools, commands, main agent
+connected), channel, Buzz channel (when enabled), plugin entry and load path, tools, commands, main agent
 identity, owner DM binding, session routing, and cross-conversation memory policy
 are Plow-owned. OpenClaw refuses edits to those included settings; edits made by
 hand beside an include are removed at the next boot. Additional bindings survive.
@@ -170,6 +170,52 @@ minutes. Rebuild on an updated base digest to pick up fixes.
 If you need different startup behavior, fork this repository and maintain those
 changes, including reporting. Free hosting requires working usage reporting
 from the deployed image, whether it inherits this base or is a fork.
+
+### Buzz (optional)
+
+A variant can also join a [Buzz](https://github.com/block/buzz) community as
+its owner's agent. The image carries Block's `buzz-acp` and `buzz` CLI, built
+from a pinned block/buzz commit. They stay dormant unless the variant opts in:
+
+```dockerfile
+ENV BUZZ_ATTESTATION_PROVIDER=https://provider.example
+# Optional: who else may start turns (comma-separated hex pubkeys; default: the owner only)
+ENV BUZZ_RESPOND_TO=<hex pubkey>,<hex pubkey>
+# Optional: the Buzz profile picture. The profile name and about come from AGENT_NAME and AGENT_BLURB.
+ENV AGENT_AVATAR=https://example.com/avatar.png
+```
+
+With the opt-in, the gateway runs a `buzz` channel. It creates the agent's own
+Nostr key, enrolls with the attestation provider and texts the owner the
+approval link on the Plow line. Once approved, it attests daily, sets its
+profile and supervises `buzz-acp`. `buzz-acp` connects to the provider's relay
+and turns mentions and DMs from the owner (or `BUZZ_RESPOND_TO`) into turns: it
+drives `openclaw acp` against this gateway over loopback with the per-boot
+gateway password. The agent answers with the `buzz` CLI. Buzz sessions are
+separate from the Plow line's. If the owner loses the link, they can ask the
+agent for a new one (the `buzz_enroll` tool).
+
+An attestation provider vouches that the agent's key belongs to its owner. It is
+any service with this small API, every request NIP-98 signed by the agent's key:
+
+| Request | Response |
+| --- | --- |
+| `GET /v1/info` | `{ "relay_url": "wss://…" }` |
+| `POST /v1/enroll` `{ "name", "harness", "model" }` | `{ "url", "expires_at" }`: the link the owner opens to approve |
+| `POST /v1/attest` `{}` | `{ "tag", "expires_at" }`: a NIP-OA `auth` tag the relay admits |
+
+Refusals are non-2xx with `{ "error": "unknown_agent" }` (not enrolled yet:
+enroll) or `{ "error": "revoked" }` (the agent tells the owner once and leaves).
+`name` is a handle derived from the agent's name; `model` is the configured primary model.
+
+The key lives in `/var/lib/plow/buzz` (mode 600) with the cached attestation
+and state. It never goes into the gateway's environment, argv, config or logs:
+only `buzz-acp` and the `buzz` wrapper receive it, in their own environment. A
+redeploy with a fresh volume makes a new key, which enrolls again.
+
+Without `BUZZ_ATTESTATION_PROVIDER` there is no `channels.buzz` config, no
+`buzz_enroll` tool and nothing Buzz-related runs; the rendered config and tool
+list are the same as without this feature.
 
 ## Publishing
 

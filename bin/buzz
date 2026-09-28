@@ -1,0 +1,16 @@
+#!/bin/sh
+# The buzz CLI as this agent, for a Buzz-enabled image (see plugin/buzz.ts). The key, attestation and relay
+# come from the state volume, where the buzz channel keeps them, and reach only this process's
+# environment, never argv.
+set -eu
+here=$(dirname -- "$(readlink -f -- "$0")")/..
+dir=${OPENCLAW_STATE_DIR:-/var/lib/plow}/buzz
+if [ ! -r "$dir/key" ]; then
+  echo '{"error":"not_ready","message":"no Buzz key yet; the buzz channel creates it at startup when Buzz is enabled"}' >&2
+  exit 3
+fi
+BUZZ_PRIVATE_KEY=$(cat "$dir/key")
+BUZZ_AUTH_TAG=$(cat "$dir/auth-tag" 2>/dev/null || true)
+BUZZ_RELAY_URL=$(cat "$dir/relay-url" 2>/dev/null || true)
+export BUZZ_PRIVATE_KEY BUZZ_AUTH_TAG BUZZ_RELAY_URL
+exec "$here/libexec/buzz" "$@"
