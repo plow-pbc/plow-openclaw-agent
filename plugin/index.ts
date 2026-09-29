@@ -255,7 +255,11 @@ export default defineChannelPluginEntry({
     });
     api.registerTool(context => {
       const deliveryState: DeliveryState = { unknown: false };
-      const refuse = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }], details: {} });
+      // Receipts match the Hermes image's plow_send_email: failures are {success: false, error, …}.
+      const refuse = (error: string, extra: object = {}) => {
+        const result = { success: false, error, ...extra };
+        return { isError: true, content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
+      };
       const receipt = (result: object) => ({ content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result });
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
@@ -271,51 +275,59 @@ export default defineChannelPluginEntry({
           },
         },
         async execute(_id, args: { action?: "send" | "list"; to?: string | string[]; subject?: string; body?: string }) {
-          if (!context.config) return refuse("Plow configuration is unavailable.");
-          if (deliveryState.unknown) throw new DeliveryUnknownError();
-          const phone = plugin.config.resolveAccount(context.config, "chat");
-          const mailbox = { ...phone, accountId: "email" };
-          if (!phone.emailLineUid) return refuse("You have no mailbox.");
-          const current = context.deliveryContext?.channel === "plow" ? context.deliveryContext.to?.replace(/^plow:/i, "") : undefined;
-          if (!current) return refuse("Sending email requires an active Plow message.");
-          const emailTurn = context.deliveryContext?.accountId === "email";
-          if (emailTurn && !context.senderIsOwner) {
-            if ((args.action ?? "send") !== "send" || args.to !== current) {
-              return refuse(`This email is not from the owner, so plow_send_email can only reply in this thread (to "${current}"). Your final text reaches the owner.`);
-            }
-          } else if (!context.senderIsOwner && (emailTurn || !(await request<Chat>(phone, `/chats/${current}`)).trusted)) {
-            return refuse("plow_send_email needs the owner's authority: the owner's own chat, a trusted group, or the owner's own email.");
+          try { return await sendEmail(args); }
+          catch (error) {
+            if (error instanceof DeliveryUnknownError) return refuse(`${error.message}. Do NOT retry; check the thread.`, { delivery_unknown: true });
+            if (error instanceof HttpError) return refuse(`${error.message}; nothing was sent`, { status: error.status });
+            throw error;
           }
-          if (args.action === "list") {
-            const listing = await request<Page<Chat>>(mailbox, "/chats");
-            const threads = [];
-            for (const chat of listing.data.filter(chat => accepts(mailbox, chat))) {
-              const newest = (await request<Page<Message>>(mailbox, `/chats/${chat.uid}/messages?limit=1`)).data[0];
-              threads.push({
-                chat_uid: chat.uid, subject: chat.display_name ?? null, last_activity: newest?.created_at ?? null,
-                participants: chat.participants.flatMap(p => p.type === "member" ? [{ name: p.display_name, email: p.provider_key ?? null, role: p.role }] : []),
-              });
-            }
-            return receipt({ threads });
-          }
-          if (!args.body) return refuse("body is required.");
-          if (typeof args.to === "string") {
-            if (!accepts(mailbox, await request<Chat>(mailbox, `/chats/${args.to}`))) return refuse(`${args.to} is not one of your email threads.`);
-            await requestWithDeliveryState(mailbox, `/chats/${args.to}/messages`, { body: args.body }, deliveryState);
-            api.logger.info(`plow sent email chat=${args.to}`);
-            return receipt({ sent: true, chat_uid: args.to });
-          }
-          if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
-          const sent = await requestWithDeliveryState<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
-            mailbox, `/email-lines/${phone.emailLineUid}/messages`, { to: args.to, subject: args.subject, body: args.body }, deliveryState);
-          // A thread started from an email turn reports to the owner's 1:1, the default.
-          if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, current);
-          api.logger.info(`plow started email status=${sent.status} chat=${sent.chat_uid ?? "none"}`);
-          if (sent.chat_uid) return receipt({ sent: true, chat_uid: sent.chat_uid });
-          return receipt({ sent: sent.status === "sent" ? true : "unknown", chat_uid: null, chat_unrecorded_reason: sent.chat_unrecorded_reason ?? null,
-            note: "Plow has no chat id for this thread. Do not resend and do not guess a chat id." });
         },
       };
+      async function sendEmail(args: { action?: "send" | "list"; to?: string | string[]; subject?: string; body?: string }) {
+        if (!context.config) return refuse("Plow configuration is unavailable.");
+        if (deliveryState.unknown) throw new DeliveryUnknownError();
+        const phone = plugin.config.resolveAccount(context.config, "chat");
+        const mailbox = { ...phone, accountId: "email" };
+        if (!phone.emailLineUid) return refuse("You have no mailbox.");
+        const current = context.deliveryContext?.channel === "plow" ? context.deliveryContext.to?.replace(/^plow:/i, "") : undefined;
+        if (!current) return refuse("Sending email requires an active Plow message.");
+        const emailTurn = context.deliveryContext?.accountId === "email";
+        if (emailTurn && !context.senderIsOwner) {
+          if ((args.action ?? "send") !== "send" || args.to !== current) {
+            return refuse(`This email is not from the owner, so plow_send_email can only reply in this thread (to "${current}"). Your final text reaches the owner.`);
+          }
+        } else if (!context.senderIsOwner && (emailTurn || !(await request<Chat>(phone, `/chats/${current}`)).trusted)) {
+          return refuse("plow_send_email needs the owner's authority: the owner's own chat, a trusted group, or the owner's own email.");
+        }
+        if (args.action === "list") {
+          const listing = await request<Page<Chat>>(mailbox, "/chats");
+          const threads = [];
+          for (const chat of listing.data.filter(chat => accepts(mailbox, chat))) {
+            const newest = (await request<Page<Message>>(mailbox, `/chats/${chat.uid}/messages?limit=1`)).data[0];
+            threads.push({
+              chat_uid: chat.uid, subject: chat.display_name ?? null, last_activity: newest?.created_at ?? null,
+              participants: chat.participants.flatMap(p => p.type === "member" ? [{ name: p.display_name, email: p.provider_key ?? null, role: p.role }] : []),
+            });
+          }
+          return receipt({ threads, has_more: listing.has_more });
+        }
+        if (!args.body) return refuse("body is required.");
+        if (typeof args.to === "string") {
+          if (!accepts(mailbox, await request<Chat>(mailbox, `/chats/${args.to}`))) return refuse(`${args.to} is not one of your email threads.`);
+          await requestWithDeliveryState(mailbox, `/chats/${args.to}/messages`, { body: args.body }, deliveryState);
+          api.logger.info(`plow sent email chat=${args.to}`);
+          return receipt({ sent: true, chat_uid: args.to });
+        }
+        if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
+        const sent = await requestWithDeliveryState<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
+          mailbox, `/email-lines/${phone.emailLineUid}/messages`, { to: args.to, subject: args.subject, body: args.body }, deliveryState);
+        // A thread started from an email turn reports to the owner's 1:1, the default.
+        if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, current);
+        api.logger.info(`plow started email status=${sent.status} chat=${sent.chat_uid ?? "none"}`);
+        if (sent.chat_uid) return receipt({ sent: true, chat_uid: sent.chat_uid });
+        return receipt({ sent: sent.status === "sent" ? true : "unknown", chat_uid: null, chat_unrecorded_reason: sent.chat_unrecorded_reason ?? null,
+          note: "Plow has no chat id for this thread. Do not resend and do not guess a chat id." });
+      }
     });
   },
 });

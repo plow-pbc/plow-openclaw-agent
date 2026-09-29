@@ -29,7 +29,7 @@ const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail" } } };
 // Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
 async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
   turn: (dispatch: Dispatch, tool: (context: object) => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }) => Promise<void>,
-  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
+  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
   const controller = abortAfter();
@@ -40,7 +40,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
     const path = new URL(url).pathname.replace(/^\/v1/, "");
     if (options.method === "POST" && path !== "/ws/ticket" && !path.endsWith("/typing")) {
       posts.push({ path, body: JSON.parse(options.body as string) });
-      return Response.json(path.startsWith("/email-lines/") ? newThread : { uid: `sent-${posts.length}` });
+      return path.startsWith("/email-lines/") ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
     }
     if (path === "/chats") return Response.json({ data: Object.values(chats), has_more: false });
     // Only an email thread's newest message is served: the listing reads it for last activity.
@@ -154,6 +154,7 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
     }
   });
   assert.deepEqual(results.map(result => Boolean(result.isError)), [true, true, true, false]);
+  assert.ok(results.slice(0, 3).every(result => JSON.parse(result.content[0].text).success === false));
   assert.deepEqual(JSON.parse(results[3].content[0].text), { sent: true, chat_uid: "thread" });
   assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted." } }]);
 });
@@ -200,4 +201,15 @@ test("plow_send_email lists threads for the owner and refuses a non-owner in an 
   });
   assert.equal(results[1].isError, true);
   assert.match(results[1].content[0].text, /owner's authority/);
+});
+
+test("a new thread whose send may have landed reports delivery unknown and is not resent", async t => {
+  let receipt: Record<string, unknown> = {};
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    const send = tool({ sessionId: "s", senderIsOwner: true, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } });
+    receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
+  }, { status: "error", chat_uid: null, http: 503 });
+  assert.equal(receipt.success, false);
+  assert.equal(receipt.delivery_unknown, true);
+  assert.deepEqual(posts.map(post => post.path), ["/email-lines/mail/messages"]);
 });
