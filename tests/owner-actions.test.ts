@@ -19,6 +19,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
   const home = { uid: "home", status: "active", trusted: true, participants: [self, owner] };
   const group = { ...home, uid: "group", participants: [self, guest, owner] };
   const pending = { uid: "pending", direction: "inbound", sender: owner, body: "17 + 25?", attachments: [], created_at: new Date().toISOString() };
+  const incoming = { ...pending, uid: "request", sender: guest, body: "Please send it" };
   let firstContact: boolean | undefined;
   const posts: { path: string; body: Record<string, unknown> }[] = [];
   let listings = 0;
@@ -33,7 +34,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
       listings++;
       response.end(JSON.stringify({ data: [home, group], has_more: true }));
     } else response.end(JSON.stringify(request.url === "/v1/chats/group" ? group : request.url === "/v1/chats/home" ? home :
-      request.url!.includes("/messages?") ? { data: action === "pending" && request.url!.includes("/home/") && !request.url!.includes("limit=20") ? [pending] : [], has_more: false } : { ticket: "ticket" }));
+      request.url!.includes("/messages?") ? { data: !request.url!.includes("limit=20") ? action === "pending" && request.url!.includes("/home/") ? [pending] : action !== "pending" && request.url!.includes("/group/") ? [incoming] : [] : [], has_more: false } : { ticket: "ticket" }));
   });
   const sockets = new WebSocketServer({ server });
   if (action !== "pending") sockets.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({

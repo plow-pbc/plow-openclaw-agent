@@ -32,6 +32,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     participants: scene.includes("group") || scene === "owner email" ? [self, owner, member] : [self, member],
   };
   const sender = scene.startsWith("member") ? member : owner;
+  const inbound = { uid: "inbound", direction: "inbound", sender, body: "Please ask the owner", attachments: [], created_at: new Date().toISOString() };
   const posts: { url: string; body: unknown }[] = [];
   const updates: { url: string; body: unknown }[] = [];
   const events: { text: string; sessionKey: string }[] = [];
@@ -50,7 +51,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     return Response.json(url.endsWith("/chats/cht_email_target") ? emailTarget : url.endsWith("/chats/cht_direct_target") ? directTarget : url.endsWith("/chats/cht_target") ? target :
       url.endsWith("/chats") ? { data: chat === home ? [home] : [home, chat], has_more: false } :
       url.endsWith(`/chats/${chat.uid}`) ? chat : url.endsWith("/chats/cht_home") ? home :
-      url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+      url.includes("/messages?") ? { data: url.includes("limit=20") || !url.includes(`/chats/${chat.uid}/`) ? [] : [inbound], has_more: false } : { ticket: "ticket" });
   });
   server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({
     event_type: "message_received", event_id: "inbound", chat_id: chat.uid,
@@ -73,7 +74,8 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     session: { resolveStorePath, updateLastRoute },
     inbound: {
       buildContext: async () => ({}),
-      dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+      dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunStart: (id: string) => void; onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+        replyOptions.onAgentRunStart("test-run");
         try { result = await tool!.execute("call", args); }
         catch (error) { failure = error; }
         if (options.deliveryFails || options.trustUpdateFails) {

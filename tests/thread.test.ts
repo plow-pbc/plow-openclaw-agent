@@ -16,6 +16,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     const cfg = { channels: { plow: { ...account, threadTrust: "ask" } }, commands: { ownerAllowFrom: ["owner"] } };
     const sender = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
     const chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
+    const inbounds = ["first-request", "later-identical-request"].map(uid => ({ uid, direction: "inbound", sender, body: "Start a group", attachments: [], created_at: new Date().toISOString() }));
     const posts: Record<string, unknown>[] = [];
     const results: unknown[] = [], errors: string[] = [], logs: string[] = [];
     t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
@@ -25,7 +26,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
         return Response.json({ uid: "created" }, { status });
       }
       return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
-        url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+        url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : [...inbounds].reverse(), has_more: false } : { ticket: "ticket" });
     });
     server.on("connection", (socket: { send: (text: string) => void }) => {
       for (const uid of ["first-request", "later-identical-request"]) socket.send(JSON.stringify({
@@ -42,7 +43,8 @@ for (const toolName of ["plow_start_thread", "message"]) {
       registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
       registerTool() {},
       runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
-        buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+        buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunStart: (id: string) => void; onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+          replyOptions.onAgentRunStart(`test-run-${turns}`);
           for (let retry = 0; retry < 4; retry++) {
             try { results.push(await (toolName === "message" ? outbound!.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", trusted: retry === 3 })))); }
             catch (error) { errors.push((error as Error).message); }

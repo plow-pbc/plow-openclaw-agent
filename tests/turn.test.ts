@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
 import entry from "../plugin/index.ts";
-import { websocketFixture } from "./ws-fixture.ts";
+import { websocketFixture, checkpointUid } from "./ws-fixture.ts";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
 const { emitDiagnosticEvent } = await import(require.resolve("openclaw/plugin-sdk/diagnostic-runtime"));
@@ -19,9 +18,10 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const account = { apiBase, accountId: "chat", lineUid: "line" };
   const sender = { type: "member", uid: "member", role: "member", display_name: "Member", provider_key: "+15550000001" };
   const chat = { uid: "chat", status: "active", trusted, participants: [{ ...sender, uid: "owner", role: "owner", display_name: "Owner" }, sender, { type: "agent", relationship: "self", line: { uid: "line", provider_key: "+15550000002" } }] };
+  const inbound = { uid: "inbound", direction: "inbound", sender, body: "hello", attachments: [], created_at: new Date().toISOString() };
   const fetch = t.mock.method(globalThis, "fetch", async (url: string, _init?: RequestInit) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") || url.endsWith("/chats/other") ? chat :
-    url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket", uid: "reply" }));
+    url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : [inbound], has_more: false } : { ticket: "ticket", uid: "reply" }));
   server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender, body: "hello", attachments: [], created_at: new Date().toISOString() } } })));
   const logs: string[] = [];
   let observation: boolean | undefined;
@@ -127,5 +127,5 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     { name: "Member", type: "member", role: "member" },
     { type: "agent", role: "self" },
   ]);
-  assert.equal(await readFile(`${root}/plow-checkpoints/chat`, "utf8"), ["aborted", "failed", "empty", "native-other"].includes(outcome) ? "first:inbound" : "inbound");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`, "utf8"), ["aborted", "failed", "empty", "native-other"].includes(outcome) ? "first:inbound" : "inbound");
 });

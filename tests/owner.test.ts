@@ -10,9 +10,10 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   const sender = { type: "member", uid: "local-sender", role, display_name: "Sender", provider_key: "+15550000001" };
   const agent = { type: "agent", relationship: "self", line: { uid: "line" } };
   const chat = { uid: "chat", status: "active", trusted, participants: [sender, agent, ...(kind === "group" ? [{ ...sender, uid: "other", role: "member", display_name: "Other" }] : [])] };
+  const inbound = { uid: "inbound", direction: "inbound", sender: { ...sender, role: "owner" }, body, attachments: [], created_at: new Date().toISOString() };
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") ? chat :
-    url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
+    url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : [inbound], has_more: false } : { ticket: "ticket" }));
   server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender: { ...sender, role: "owner" }, body, attachments: [], created_at: new Date().toISOString() } } })));
   type Peer = { kind: string; id: string };
   let routingPeer: Peer | undefined;
@@ -67,9 +68,10 @@ test("one member keeps their normalized handle across chat seats", async t => {
     { uid: "group-one", status: "active", trusted: true, participants: [member("cp_one", handle, "Person"), agent, member("cp_other_one", otherHandle, "Other")] },
     { uid: "group-two", status: "active", trusted: true, participants: [member("cp_two", handle.toUpperCase(), "Person"), agent, member("cp_other", otherHandle, "Other")] },
   ];
+  const inbounds = [[0, chats[0], chats[0].participants[0]], [1, chats[1], chats[1].participants[0]], [2, chats[1], chats[1].participants[2]]].map(([i, chat, sender]) => ({ chat, message: { uid: `inbound-${i}`, direction: "inbound", sender, body: "hello", attachments: [], created_at: new Date().toISOString() } }));
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: chats, has_more: false } :
-    url.includes("/messages?") ? { data: [], has_more: false } :
+    url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : inbounds.filter(item => url.includes(`/chats/${item.chat.uid}/`)).map(item => item.message).reverse(), has_more: false } :
     chats.find(chat => url.endsWith(`/chats/${chat.uid}`)) ?? { ticket: "ticket" }));
   server.on("connection", (socket: { send: (text: string) => void }) => {
     for (const [i, chat, sender] of [[0, chats[0], chats[0].participants[0]], [1, chats[1], chats[1].participants[0]], [2, chats[1], chats[1].participants[2]]] as const) {

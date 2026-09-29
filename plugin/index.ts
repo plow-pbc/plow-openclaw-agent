@@ -4,14 +4,16 @@ import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type 
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome, type TurnAdoption } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
+type ActiveTurn = { sessionKey: string; chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
 type SendPermit = { accountId: string; to: string; text: string };
-const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
+const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit>; plowTyping?: Map<string, number> };
 const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
+const typing = (shared.plowTyping ??= new Map<string, number>());
+const sessionTurn = (sessionKey?: string) => [...activeTurns.values()].find(turn => turn.sessionKey === sessionKey);
 // The SDK loads the outbound adapter separately, so durable dispatch grants one exact send across module instances.
 const durableSendPermits = (shared.plowDurableSendPermits ??= new Set<SendPermit>());
 function consumeDurablePermit(accountId: string | null | undefined, to: string, text: string) {
@@ -28,7 +30,7 @@ function normalizedHandle(handle: string): string {
 }
 
 function ownerDmTurn(account: Account, context: { sessionKey?: string; messageChannel?: string; agentAccountId?: string; nativeChannelId?: string }): ActiveTurn {
-  const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
+  const turn = sessionTurn(context.sessionKey);
   if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow"
     || context.agentAccountId !== "chat" || !turn || !turn.senderIsOwner
     || context.nativeChannelId !== turn.chat.uid || findOwnerChat(account, [turn.chat]) !== turn.chat) {
@@ -95,7 +97,7 @@ async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agent
   return result.results[0].messageId;
 }
 
-async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
+async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], adoption: TurnAdoption, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
@@ -138,19 +140,28 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
-  activeTurns.set(route.sessionKey, turn);
+  const turn: ActiveTurn = { sessionKey: route.sessionKey, chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
+  const finishRun = () => {
+    for (const [runId, running] of activeTurns) if (running === turn) activeTurns.delete(runId);
+  };
+  const typingKey = `${account.apiBase}/${account.accountId}/${chat.uid}`;
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
     let observedReplyDelivery = false;
-    if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
+    if (account.accountId === "chat") {
+      const count = typing.get(typingKey) ?? 0;
+      typing.set(typingKey, count + 1);
+      if (count === 0) await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
+    }
     try {
       const result = await runtime.channel.inbound.dispatch({
         cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
         replyOptions: {
+          turnAdoptionLifecycle: { ...adoption, onSettled: finishRun },
+          onAgentRunStart: runId => { activeTurns.set(runId, turn); log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`); },
           sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
           onObservedReplyDelivery: () => { observedReplyDelivery = true; },
-          onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
+          onAgentRunTerminalOutcome: outcome => { finishRun(); if (outcome === "failed") failure = new Error("Agent turn failed"); },
         },
         delivery: {
           observeMessageSent: true,
@@ -176,11 +187,16 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       if (activeTurn.getStore()!.deliveryUnknown) throw new DeliveryUnknownError();
       throw error;
     } finally {
-      if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "stop" }).catch(() => log("typing stop failed"));
+      if (account.accountId === "chat") {
+        const count = typing.get(typingKey)! - 1;
+        if (count > 0) typing.set(typingKey, count);
+        else {
+          typing.delete(typingKey);
+          await request(account, `/chats/${chat.uid}/typing`, { action: "stop" }).catch(() => log("typing stop failed"));
+        }
+      }
     }
-  }).finally(() => {
-    if (activeTurns.get(route.sessionKey) === turn) activeTurns.delete(route.sessionKey);
-  });
+  }).finally(finishRun);
 }
 
 const plugin: ChannelPlugin<Account> = {
@@ -202,7 +218,7 @@ const plugin: ChannelPlugin<Account> = {
   gateway: {
     startAccount: async ctx => {
       const log = (text: string) => ctx.log?.info(text);
-      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, log));
+      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history, adoption) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, adoption, log));
     },
   },
   outbound: {
@@ -288,7 +304,7 @@ export default defineChannelPluginEntry({
       async execute(_id, args: { text: string }) {
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
-        const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
+        const turn = sessionTurn(context.sessionKey);
         if (context.messageChannel !== "plow" || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")
           || !turn || turn.senderIsOwner || turn.chat.trusted
           || context.nativeChannelId !== turn.chat.uid) {

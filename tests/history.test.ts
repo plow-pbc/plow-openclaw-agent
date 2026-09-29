@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFile } from "node:fs/promises";
 import entry from "../plugin/index.ts";
-import { websocketFixture } from "./ws-fixture.ts";
+import { websocketFixture, checkpointUid } from "./ws-fixture.ts";
 
 test("a checkpointed outbound opener still seeds the first group turn", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
@@ -33,7 +32,7 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: "group" }) },
       inbound: {
         buildContext: async (value: typeof contexts[number]) => {
-          if (!contexts.length) assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "opener");
+          if (!contexts.length) assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`, "utf8"), "opener");
           contexts.push(value); return {};
         },
         dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
@@ -65,11 +64,12 @@ test("the owner's next turn sees the agent's escalation from the owner DM", asyn
   const chat = { uid: "cht_home", status: "active", trusted: true, participants: [self, owner] };
   const message = (uid: string, body: string) => ({ uid, body, sender: owner, direction: "inbound", attachments: [], created_at: "2026-09-25T12:00:00Z" });
   const escalation = { ...message("notice", "Source account: email\nSource chat uid: cht_source\nUntrusted member request (quoted):\n> Book lunch?"), sender: self, direction: "outbound" };
+  const messages = [message("first", "Hello"), message("second", "What did they ask?")];
   const contexts: { message: { inboundHistory: unknown[] } }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/cht_home") ? chat :
     url.includes("limit=20&starting_after=second") ? { data: [escalation], has_more: false } :
-    url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
+    url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : [...messages].reverse(), has_more: false } : { ticket: "ticket" }));
   server.on("connection", (socket: { send: (text: string) => void }) => {
     for (const inbound of [message("first", "Hello"), message("second", "What did they ask?")])
       socket.send(JSON.stringify({ event_type: "message_received", event_id: inbound.uid, chat_id: chat.uid, data: { message: inbound } }));

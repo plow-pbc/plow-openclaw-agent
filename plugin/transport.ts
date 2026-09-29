@@ -1,16 +1,14 @@
 /*
- * Checkpoints are per chat; after baseline initialization, progress advances only
- * once a turn finishes, never backwards. Shutdown-interrupted turns stay unacked;
- * terminal failures and uncertain sends are deliberately acknowledged without retry.
- * first:<uid> requests inclusive replay from uid. Recovery and buffered frames
- * dispatch in history order within each chat; stale live frames are ignored.
- * Completed turns have at-least-once recovery across restart: a crash between
- * send and ack can replay at most one completed turn, duplicating its reply.
+ * Checkpoints advance at adoption, not turn completion. A short history overlap
+ * and durable recent UIDs cover the inbound and outbound providers' different
+ * clocks. Unadopted shutdown work remains recoverable; adopted work belongs to
+ * OpenClaw even if its dispatch promise is still running.
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { on, once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 
 export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
 export type Agent = { type: "agent"; relationship: string; line: { uid: string; display_name?: string } };
@@ -21,6 +19,10 @@ export type Message = {
   reply_to?: Message;
 };
 export type TurnOutcome = "completed" | "incomplete";
+type ReplyOptions = NonNullable<Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]["replyOptions"]>;
+export type TurnAdoption = NonNullable<ReplyOptions["turnAdoptionLifecycle"]>;
+const historyOverlap = 20;
+const recentLimit = 512;
 export type Page<T> = { data: T[]; has_more: boolean };
 export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; threadTrust?: "ask" | "trusted" | "untrusted" };
 
@@ -86,15 +88,21 @@ export async function ownerChat(account: Account): Promise<Chat> {
 
 // Pages run newest-first; starting_after means older than the page cursor.
 // A first:<uid> checkpoint includes that message, but none of its older history.
-export async function recover(account: Account, chat: string, checkpoint: string): Promise<Message[]> {
+export async function recover(account: Account, chat: string, checkpoint: string, overlap = 0): Promise<Message[]> {
   const missed: Message[] = [];
   let cursor = "";
+  let reachedCheckpoint = false;
+  let older = overlap;
   for (;;) {
     const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50${cursor ? `&starting_after=${cursor}` : ""}`);
     for (const message of page.data) {
-      if (message.uid === checkpoint) return missed.reverse();
+      if (reachedCheckpoint && older-- === 0) return missed.reverse();
+      if (message.uid === checkpoint || `first:${message.uid}` === checkpoint) {
+        reachedCheckpoint = true;
+        if (overlap === 0 && message.uid === checkpoint) return missed.reverse();
+      }
       missed.push(message);
-      if (`first:${message.uid}` === checkpoint) return missed.reverse();
+      if (reachedCheckpoint && overlap === 0) return missed.reverse();
     }
     if (!page.has_more || !page.data.length) return missed.reverse();
     cursor = page.data.at(-1)!.uid;
@@ -115,12 +123,15 @@ async function earliestUnansweredOwnerMessage(account: Account, chat: string, ne
   }
 }
 
-export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[]) => Promise<TurnOutcome>) {
+export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], adoption: TurnAdoption) => Promise<TurnOutcome>) {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
   const dir = `${root}/plow-checkpoints`;
   await mkdir(dir, { recursive: true });
   const checkpoints = new Map<string, string>();
+  const recent = new Map<string, Set<string>>();
+  const initializedRecent = new Set<string>();
+  const dispatches = new Set<Promise<void>>();
   const discovered = new Map<string, Chat>();
   if (account.accountId === "chat") discoveredChats.set(`${account.apiBase}/${account.lineUid}`, discovered);
   const seen = new Set<string>();
@@ -133,56 +144,108 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     seen.add(id);
     if (seen.size > 512) seen.delete(seen.values().next().value!);
   };
-  const ack = async (chat: string, uid: string) => {
-    await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, uid);
+  const ack = async (chat: string, uid: string, cursor = uid) => {
+    const handled = recent.get(chat) ?? new Set<string>();
+    handled.add(uid);
+    if (handled.size > recentLimit) handled.delete(handled.values().next().value!);
+    await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
     await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
-    checkpoints.set(chat, uid);
+    checkpoints.set(chat, cursor);
+    recent.set(chat, handled);
   };
-  const consume = async (chatUid: string, message: Message, recovered = false) => {
-    if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid) return;
-    // Recovery batches are already ordered after their checkpoint. Live frames
-    // can lag behind HTTP history; use that same order before dispatch or ack.
-    const checkpointUid = checkpoints.get(chatUid)?.replace(/^first:/, "");
-    if (!recovered && checkpointUid && checkpointUid !== message.uid &&
-      (await recover(account, chatUid, message.uid)).some(newer => newer.uid === checkpointUid)) return;
+  const readCheckpoint = async (chat: string) => {
+    const saved = await readFile(`${dir}/${encodeURIComponent(chat)}`, "utf8");
+    if (!saved.startsWith("{")) return saved;
+    const checkpoint = JSON.parse(saved) as { uid: string; recent: string[] };
+    recent.set(chat, new Set(checkpoint.recent));
+    initializedRecent.add(chat);
+    return checkpoint.uid;
+  };
+  const initializeRecent = async (chat: string, checkpoint: string) => {
+    const window = await recover(account, chat, checkpoint, historyOverlap);
+    const boundary = window.findIndex(message => message.uid === checkpoint.replace(/^first:/, ""));
+    recent.set(chat, new Set(window.slice(0, boundary + (checkpoint.startsWith("first:") ? 0 : 1)).map(message => message.uid)));
+    await ack(chat, checkpoint);
+    initializedRecent.add(chat);
+  };
+  const consume = async (chatUid: string, message: Message, cursor = message.uid) => {
+    if (signal.aborted || seen.has(message.uid) || recent.get(chatUid)?.has(message.uid)) return;
     const chat = await request<Chat>(account, `/chats/${chatUid}`);
     if (!accepts(account, chat)) return;
     discovered.set(chat.uid, chat);
     const owner = findOwnerChat(account, [...discovered.values()]);
     const sender = message.sender;
-    if (message.direction === "inbound" && (sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
+    const complete = async () => {
+      if (account.accountId === "chat") await ack(chatUid, message.uid, cursor);
+      remember(message.uid);
+      log(`acked chat=${chatUid} message=${message.uid}`);
+    };
+    if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
+      await complete();
+      return;
+    }
+    let release!: () => void;
+    let reject!: (error: unknown) => void;
+    const released = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+    let adopted = false;
+    let deferred = false;
+    let abandoned = false;
+    const checkpoint = checkpoints.get(chat.uid);
+    const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
+    let history: Message[] = [];
+    const historyVersion = state.versions.get(chat.uid) ?? 0;
+    let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
+    if (!historyLoaded) {
+      try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
+      catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
+    }
+    const markContextualized = () => {
+      if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
+    };
+    const adoption: TurnAdoption = {
+      admission: "exclusive", abortSignal: signal,
+      onAdopted: async () => {
+        if (adopted) return;
+        try {
+          signal.throwIfAborted();
+          await complete();
+          adopted = true;
+          markContextualized();
+          release();
+        } catch (error) { abandoned = true; reject(error); throw error; }
+      },
+      onDeferred: () => { deferred = true; return !signal.aborted; },
+      onAbandoned: () => {
+        abandoned = true;
+        if (!adopted) reject(new Error(`Unadopted turn abandoned chat=${chatUid} message=${message.uid}`));
+      },
+    };
+    signal.addEventListener("abort", release, { once: true });
+    const dispatch = (async () => {
       let outcome: TurnOutcome = "incomplete";
-      try {
-        const checkpoint = checkpoints.get(chat.uid);
-        const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
-        let history: Message[] = [];
-        const historyVersion = state.versions.get(chat.uid) ?? 0;
-        let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
-        if (!historyLoaded) {
-          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
-          catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
-        }
-        outcome = await turn(chat, message, firstContact, history);
-        if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
-      }
+      try { outcome = await turn(chat, message, firstContact, history, adoption); }
       catch (error) {
         if (error instanceof DeliveryUnknownError) {
-          // The provider may have accepted it; advance rather than replay a send.
           log(`turn failed chat=${chat.uid} message=${message.uid}: delivery unknown; reply suppressed, acknowledging without resending`);
           outcome = "completed";
         } else log(`turn failed chat=${chat.uid} message=${message.uid}: ${(error as Error).name}`);
       }
+      if (adopted || deferred || abandoned) return;
       if (outcome !== "completed") {
         if (signal.aborted) {
           log(`turn aborted chat=${chat.uid} message=${message.uid}; left unacked`);
+          release();
           return;
         }
         log(`turn incomplete chat=${chat.uid} message=${message.uid}; acknowledging`);
       }
-    }
-    if (account.accountId === "chat") await ack(chatUid, message.uid);
-    remember(message.uid);
-    log(`acked chat=${chatUid} message=${message.uid}`);
+      await complete();
+      markContextualized();
+      release();
+    })().catch(error => { reject(error); }).finally(() => dispatches.delete(dispatch));
+    dispatches.add(dispatch);
+    try { await released; }
+    finally { signal.removeEventListener("abort", release); }
   };
   while (!signal.aborted) {
     let socket: WebSocket | undefined;
@@ -256,7 +319,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         for (const chat of chats) {
           if (checkpoints.has(chat.uid)) continue;
           let checkpoint: string;
-          try { checkpoint = await readFile(`${dir}/${encodeURIComponent(chat.uid)}`, "utf8"); }
+          try { checkpoint = await readCheckpoint(chat.uid); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
             const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
@@ -276,43 +339,42 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             }
           }
           checkpoints.set(chat.uid, checkpoint);
+          if (!initializedRecent.has(chat.uid)) await initializeRecent(chat.uid, checkpoint);
         }
       }
       socket.off("message", trackBufferedChat);
-      // Retain the finite recovery overlap until this connection closes.
-      const replayed = new Set<string>();
-      const recoveredChats = new Set<string>();
       const replay = async (chatUid: string) => {
-        for (const message of await recover(account, chatUid, checkpoints.get(chatUid)!)) {
+        const checkpoint = checkpoints.get(chatUid)!;
+        const window = await recover(account, chatUid, checkpoint, historyOverlap);
+        const boundary = window.findIndex(message => message.uid === checkpoint);
+        for (const [index, message] of window.entries()) {
           if (!accepting || signal.aborted) break;
-          await consume(chatUid, message, true);
-          replayed.add(message.uid);
+          // An overlapped arrival must not move the frontier behind its previous checkpoint.
+          await consume(chatUid, message, index <= boundary ? checkpoint : message.uid);
         }
-        recoveredChats.add(chatUid);
       };
       if (account.accountId === "chat") {
         for (const chat of chats) enqueue(chat.uid, () => replay(chat.uid));
       }
       for await (const [raw] of frames) {
         const event = JSON.parse(raw.toString());
-        if (event.event_type !== "message_received" || !validChatId(event.chat_id) || seen.has(event.event_id) || replayed.has(event.data.message.uid)) continue;
+        if (event.event_type !== "message_received" || !validChatId(event.chat_id) || seen.has(event.event_id)) continue;
         // Persist discovery before queueing: a dropped connection discards unstarted work.
         if (account.accountId === "chat" && !checkpoints.has(event.chat_id)) {
           let checkpoint: string;
-          try { checkpoint = await readFile(`${dir}/${encodeURIComponent(event.chat_id)}`, "utf8"); }
+          try { checkpoint = await readCheckpoint(event.chat_id); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
             checkpoint = `first:${event.data.message.uid}`;
             await ack(event.chat_id, checkpoint);
           }
           checkpoints.set(event.chat_id, checkpoint);
+          if (!initializedRecent.has(event.chat_id)) await initializeRecent(event.chat_id, checkpoint);
         }
         enqueue(event.chat_id, async () => {
-          if (account.accountId === "chat" && !recoveredChats.has(event.chat_id)) {
-            await replay(event.chat_id);
-          }
+          if (account.accountId === "chat") await replay(event.chat_id);
+          else await consume(event.chat_id, event.data.message);
           if (!accepting || signal.aborted) return;
-          if (!replayed.has(event.data.message.uid)) await consume(event.chat_id, event.data.message);
           remember(event.event_id);
         });
       }
@@ -336,6 +398,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       signal.removeEventListener("abort", abort);
       abort();
       await Promise.all(queues.values());
+      await Promise.all(dispatches);
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
