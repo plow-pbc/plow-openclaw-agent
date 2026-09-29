@@ -22,7 +22,7 @@ export type Message = {
 };
 export type TurnOutcome = "completed" | "incomplete";
 export type Page<T> = { data: T[]; has_more: boolean };
-export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string };
+export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; threadTrust?: "ask" | "trusted" | "untrusted" };
 
 export class HttpError extends Error {
   status: number;
@@ -33,11 +33,11 @@ export class DeliveryUnknownError extends Error {
   constructor() { super("Plow delivery is unknown; stopped to avoid resending"); }
 }
 
-export async function request<T>(account: Pick<Account, "apiBase">, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function request<T>(account: Pick<Account, "apiBase">, path: string, body?: unknown, signal?: AbortSignal, method: "POST" | "PUT" = "POST"): Promise<T> {
   const token = process.env.PLOW_AGENT_TOKEN;
   if (!token) throw new Error("PLOW_AGENT_TOKEN is required");
   const response = await fetch(`${account.apiBase}/v1${path}`, {
-    method: body === undefined ? "GET" : "POST",
+    method: body === undefined ? "GET" : method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: signal ?? AbortSignal.timeout(10_000),
@@ -56,6 +56,15 @@ const validChatId = (uid: unknown): uid is string => typeof uid === "string" && 
 class AmbiguousOwnerChatError extends Error {}
 
 const discoveredChats = new Map<string, Map<string, Chat>>();
+type HistoryState = { contextualized: Set<string>; versions: Map<string, number> };
+const historyStates = new Map<string, HistoryState>();
+const historyKey = (account: Account) => `${account.apiBase}/${account.accountId}/${account.accountId === "email" ? account.emailLineUid : account.lineUid}`;
+
+export function invalidateContextualizedHistory(account: Account, chatUid: string) {
+  const state = historyStates.get(historyKey(account));
+  state?.contextualized.delete(chatUid);
+  if (state) state.versions.set(chatUid, (state.versions.get(chatUid) ?? 0) + 1);
+}
 
 export function findOwnerChat(account: Account, chats: Chat[]): Chat | undefined {
   const owners = chats.filter(chat => chat.status === "active" && chat.participants.length === 2 &&
@@ -115,7 +124,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const discovered = new Map<string, Chat>();
   if (account.accountId === "chat") discoveredChats.set(`${account.apiBase}/${account.lineUid}`, discovered);
   const seen = new Set<string>();
-  const contextualized = new Set<string>();
+  const state: HistoryState = { contextualized: new Set(), versions: new Map() };
+  const contextualized = state.contextualized;
+  const accountHistoryKey = historyKey(account);
+  historyStates.set(accountHistoryKey, state);
   let attempt = 0;
   const remember = (id: string) => {
     seen.add(id);
@@ -159,13 +171,14 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const checkpoint = checkpoints.get(chat.uid);
         const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
         let history: Message[] = [];
-        let historyLoaded = contextualized.has(chat.uid);
+        const historyVersion = state.versions.get(chat.uid) ?? 0;
+        let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
         if (!historyLoaded) {
           try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?order=arrival&limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
           catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
         }
         outcome = await turn(chat, message, firstContact, history);
-        if (historyLoaded) contextualized.add(chat.uid);
+        if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
       }
       catch (error) {
         if (error instanceof DeliveryUnknownError) {
@@ -346,4 +359,5 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
+  if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
 }

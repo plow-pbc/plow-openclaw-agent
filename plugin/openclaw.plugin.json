@@ -2,7 +2,7 @@
   "id": "plow",
   "name": "Plow",
   "channels": ["plow"],
-  "contracts": { "tools": ["plow_start_thread"] },
+  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to"] },
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false },
   "channelConfigs": {
@@ -10,11 +10,12 @@
       "schema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["apiBase", "lineUid"],
+        "required": ["apiBase", "lineUid", "threadTrust"],
         "properties": {
           "apiBase": { "type": "string" },
           "lineUid": { "type": "string" },
-          "emailLineUid": { "type": "string" }
+          "emailLineUid": { "type": "string" },
+          "threadTrust": { "type": "string", "enum": ["ask", "trusted", "untrusted"] }
         }
       }
     }
