@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test, type TestContext } from "node:test";
+import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
+import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
@@ -9,7 +11,8 @@ const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", impor
 type Tool = { name: string; execute: (id: string, args: object) => Promise<{ isError?: boolean; content: { text: string }[] }> };
 type Payload = { text?: string; isError?: boolean; isFallbackNotice?: boolean };
 type Dispatch = {
-  ctxPayload: unknown;
+  ctxPayload: { conversation: { id: string } };
+  route: { sessionKey: string };
   delivery: { preparePayload: (payload: Payload, info: { kind: string }) => Payload | null; deliver: (payload: Payload) => Promise<unknown> };
 };
 type Context = { supplemental: { groupSystemPrompt?: string; channelStructuredContext: { label: string; payload: unknown }[] } };
@@ -23,18 +26,25 @@ const chats: Record<string, { uid: string; status: string; trusted: boolean; dis
   thread: { uid: "thread", status: "active", trusted: false, display_name: "Booking", participants: [self("mail"), owner, outsider] },
   other: { uid: "other", status: "active", trusted: false, display_name: "Another", participants: [self("mail"), owner, outsider] },
   started: { uid: "started", status: "active", trusted: false, display_name: "Hello", participants: [self("mail"), owner, outsider] },
+  dm: { uid: "dm", status: "active", trusted: false, participants: [self("line"), { ...outsider, provider_key: "+15550000003" }] },
 };
-const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail" } } };
+const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail", emailName: "Elm" } } };
+const transcript = async (sessionKey: string) => {
+  const entry = getSessionEntry({ agentId: "main", sessionKey });
+  return entry?.sessionId ? (await readVisibleSessionTranscriptMessageEntries({ agentId: "main", sessionKey, sessionId: entry.sessionId }))
+    .map(entry => entry.message.content[0].text) : [];
+};
 
 // Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
 async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
-  turn: (dispatch: Dispatch, tool: (context: object) => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }) => Promise<void>,
+  turn: (dispatch: Dispatch, tool: () => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }) => Promise<void>,
   newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
   const controller = abortAfter();
   const account = { ...cfg.channels.plow, apiBase, accountId };
-  const config = { channels: { plow: { ...cfg.channels.plow, apiBase } } };
+  // The durable sender loads the plugin's outbound adapter from this path.
+  const config = { channels: { plow: { ...cfg.channels.plow, apiBase } }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const posts: { path: string; body: Record<string, unknown> }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit = {}) => {
     const path = new URL(url).pathname.replace(/^\/v1/, "");
@@ -57,10 +67,15 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   const logs: string[] = [];
   const api = { registrationMode: "full", logger: { info() {} }, on() {}, registerTool() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
-    runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "session", agentId: "main" }) }, inbound: {
-      buildContext: async (value: Context) => { contexts.push(value); return value; },
+    runtime: { channel: {
+      routing: { resolveAgentRoute: ({ accountId, peer }: { accountId: string; peer: { kind: string; id: string } }) =>
+        ({ agentId: "main", sessionKey: peer.id === "plow-owner" ? "agent:main:main" : `agent:main:plow:${accountId}:${peer.kind}:${peer.id}` }) },
+      session: { resolveStorePath, updateLastRoute },
+      inbound: {
+      buildContext: async (value: Context & Dispatch["ctxPayload"]) => { contexts.push(value); return value; },
       dispatch: async (dispatch: Dispatch & { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
-        const tool = (context: object) => factories.map(factory => factory({ config, ...context })).find(tool => tool.name === "plow_send_email")!;
+        const tool = () => factories.map(factory => factory({ config, sessionKey: dispatch.route.sessionKey, messageChannel: "plow", agentAccountId: accountId,
+          nativeChannelId: dispatch.ctxPayload.conversation.id })).find(tool => tool.name === "plow_send_email")!;
         await turn(dispatch, tool, channel);
         dispatch.replyOptions.onAgentRunTerminalOutcome(terminal);
         if (contexts.length === frames.length) controller.abort();
@@ -87,7 +102,7 @@ test("a non-owner email turn's final goes to the owner's 1:1, labelled, and noth
     await final(dispatch, { text });
   });
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
-  assert.equal(posts[0].body.body, `Re: email "Booking" from Sender (sender@example.com)\n\n${text}`);
+  assert.equal(posts[0].body.body, `Re: email "Booking" from Sender (sender@example.com) (thread thread)\n\n${text.trim()}`);
   assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
   const prompt = contexts[0].supplemental.groupSystemPrompt!;
   assert.match(prompt, /You are Elm, Owner's assistant/);
@@ -132,10 +147,10 @@ test("on a non-owner email turn, message sends nothing anywhere, and the final s
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
 });
 
-test("message refuses email chats and names plow_send_email", async t => {
+test("message refuses the email account from any turn and names plow_send_email", async t => {
   const refusals: string[] = [];
-  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, _tool, channel) => {
-    for (const [accountId, to] of [["chat", "plow:thread"], ["email", "plow:thread"]]) {
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: owner }], async (_dispatch, _tool, channel) => {
+    for (const [accountId, to] of [["email", "plow:thread"], ["chat", "plow-owner"]]) {
       await channel.outbound.sendText({ cfg: { channels: { plow: { ...cfg.channels.plow, apiBase: "http://fixture" } } }, accountId, to, text: "hi" })
         .catch((error: Error) => refusals.push(error.message));
     }
@@ -148,7 +163,7 @@ test("message refuses email chats and names plow_send_email", async t => {
 test("plow_send_email on a non-owner email turn replies only in its own thread", async t => {
   const results: { isError?: boolean; content: { text: string }[] }[] = [];
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async (_dispatch, tool) => {
-    const send = tool({ sessionId: "s", senderIsOwner: false, deliveryContext: { channel: "plow", to: "plow:thread", accountId: "email" } });
+    const send = tool();
     for (const args of [{ to: "other", body: "hi" }, { to: ["new@example.com"], subject: "Hi", body: "hi" }, { action: "list" }, { to: "thread", body: "Thanks, noted." }]) {
       results.push(await send.execute("call", args));
     }
@@ -159,26 +174,24 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
   assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted." } }]);
 });
 
-test("a thread started from a trusted group reports its finals to that group, and the group's next turn sees them", async t => {
+test("a thread started from a trusted group reports its finals to that group, recorded in the group's session", async t => {
   const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
   t.after(() => rm(state, { recursive: true }));
   let receipt: unknown;
   await run(t, "chat", [{ chat: "group", sender: outsider }], async (_dispatch, tool) => {
-    const send = tool({ sessionId: "s", senderIsOwner: false, deliveryContext: { channel: "plow", to: "plow:group", accountId: "chat" } });
+    const send = tool();
     receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
   }, undefined, state);
   assert.deepEqual(receipt, { sent: true, chat_uid: "started" });
   const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
   assert.deepEqual(posts.map(post => post.path), ["/chats/group/messages"]);
-  const { contexts } = await run(t, "chat", [{ chat: "group", sender: owner }], async () => {}, undefined, state);
-  assert.deepEqual(contexts[0].supplemental.channelStructuredContext[1].payload,
-    [{ thread_chat_uid: "started", subject: "Hello", text: "They replied yes." }]);
+  assert.deepEqual(await transcript("agent:main:plow:chat:group:group"), [`Re: email "Hello" from Sender (sender@example.com) (thread started)\n\nThey replied yes.`]);
 });
 
 test("a new thread without a recorded chat is reported, not invented, and sent once", async t => {
   let receipt: Record<string, unknown> = {};
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
-    const send = tool({ sessionId: "s", senderIsOwner: true, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } });
+    const send = tool();
     receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
   }, { status: "sent", chat_uid: null, chat_unrecorded_reason: "persistence_failed" });
   assert.equal(receipt.chat_uid, null);
@@ -189,27 +202,47 @@ test("a new thread without a recorded chat is reported, not invented, and sent o
 
 test("plow_send_email lists threads for the owner and refuses a non-owner in an untrusted chat", async t => {
   const results: { isError?: boolean; content: { text: string }[] }[] = [];
-  await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
-    results.push(await tool({ sessionId: "s", senderIsOwner: true, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } }).execute("call", { action: "list" }));
-    results.push(await tool({ sessionId: "s", senderIsOwner: false, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } }).execute("call", { action: "list" }));
+  await run(t, "chat", [{ chat: "home", sender: owner }, { chat: "dm", sender: outsider }], async (_dispatch, tool) => {
+    results.push(await tool().execute("call", { action: "list" }));
   });
-  const { threads } = JSON.parse(results[0].content[0].text);
+  // The two chats' turns run concurrently, so match results by outcome.
+  const [listed, refused] = [results.find(result => !result.isError)!, results.find(result => result.isError)!];
+  const { threads } = JSON.parse(listed.content[0].text);
   assert.deepEqual(threads.map((thread: { chat_uid: string }) => thread.chat_uid), ["thread", "other", "started"]);
   assert.deepEqual(threads.find((thread: { chat_uid: string }) => thread.chat_uid === "thread"), {
     chat_uid: "thread", subject: "Booking", last_activity: "2026-09-28T12:00:00Z",
     participants: [{ name: "Owner", email: "owner@example.com", role: "owner" }, { name: "Sender", email: "sender@example.com", role: "member" }],
   });
-  assert.equal(results[1].isError, true);
-  assert.match(results[1].content[0].text, /owner's authority/);
+  assert.match(refused.content[0].text, /owner's authority/);
 });
 
 test("a new thread whose send may have landed reports delivery unknown and is not resent", async t => {
   let receipt: Record<string, unknown> = {};
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
-    const send = tool({ sessionId: "s", senderIsOwner: true, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } });
+    const send = tool();
     receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
   }, { status: "error", chat_uid: null, http: 503 });
   assert.equal(receipt.success, false);
   assert.equal(receipt.delivery_unknown, true);
   assert.deepEqual(posts.map(post => post.path), ["/email-lines/mail/messages"]);
+});
+
+test("a reply sent to a thread from the owner's DM lands there and is recorded in the thread's session", async t => {
+  let receipt: unknown;
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    receipt = JSON.parse((await tool().execute("call", { to: "thread", body: "Thursday works." })).content[0].text);
+  });
+  assert.deepEqual(receipt, { sent: true, chat_uid: "thread" });
+  assert.deepEqual(posts.map(post => post.path), ["/chats/thread/messages"]);
+  assert.deepEqual(await transcript("agent:main:plow:email:direct:thread"), ["Thursday works."]);
+});
+
+test("the tool names the mailbox persona to sign as", () => {
+  let description = "";
+  toolEntry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, on() {}, registerChannel() {},
+    registerTool(factory: (context: object) => { name: string; description: string }) {
+      const tool = factory({ config: cfg });
+      if (tool.name === "plow_send_email") description = tool.description;
+    } });
+  assert.match(description, /sign it as Elm, never as the owner/);
 });

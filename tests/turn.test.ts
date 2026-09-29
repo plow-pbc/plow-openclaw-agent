@@ -25,8 +25,9 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender, body: "hello", attachments: [], created_at: new Date().toISOString() } } })));
   const logs: string[] = [];
   let observation: boolean | undefined;
+  let nativeOtherFailure: unknown;
   let strandedRetry: (() => Promise<unknown>) | undefined;
-  let context: { message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
+  let context: { sender: { id: string }; message: { bodyForAgent?: string; rawBody: string }; supplemental: { channelStructuredContext: { label: string; payload: { trusted: boolean; participants: unknown[] } }[] } } | undefined;
   let channel: { outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -65,7 +66,10 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
           const prepared = dispatch.delivery.preparePayload ? dispatch.delivery.preparePayload(reply, { kind: "final" }) : reply;
           if (prepared !== null) await dispatch.delivery.deliver(prepared);
         }
-        if (outcome === "native-other") await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "other", text: "native reply" });
+        if (outcome === "native-other") {
+          try { await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "other", text: "native reply" }); }
+          catch (error) { nativeOtherFailure = error; }
+        }
         if (outcome === "observed") dispatch.replyOptions.onObservedReplyDelivery?.();
         if (outcome === "duplicate") emitDiagnosticEvent({ type: "message.processed", channel: "plow", messageId: "inbound", sessionKey: "main", outcome: "skipped", reason: "duplicate" });
         if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice" && outcome !== "plain-final") controller.abort();
@@ -94,6 +98,10 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
     assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
+  if (outcome === "native-other") {
+    assert.match((nativeOtherFailure as Error)?.message, /current conversation/);
+    assert.equal(fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).length, 0);
+  }
   if (outcome === "error-notice" || outcome === "fallback-notice" || outcome === "terminal-notice") {
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
     assert.deepEqual(texts, outcome === "fallback-notice" ? ["fallback answer"] : [outcome === "error-notice" ? "runtime diagnostic" : "runtime terminal fallback"]);
@@ -105,6 +113,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   if (outcome === "delivered") assert.equal(observation, true);
   if (outcome === "duplicate") assert.ok(logs.some(text => text.startsWith("turn incomplete")));
   assert.ok(context);
+  assert.equal(context.sender.id, sender.provider_key);
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
   assert.equal(context.message.bodyForAgent, undefined);
   assert.equal(context.message.rawBody, "hello");

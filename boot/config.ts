@@ -8,12 +8,15 @@ export type Participant =
 export type Identity = {
   agent?: { name?: string | null; web_url?: string | null };
   line: { uid: string };
-  mailbox?: { uid: string } | null;
+  mailbox?: { uid: string; display_name: string } | null;
   chats: { uid: string; status: string; participants: Participant[] }[];
   mcp_url?: string | null;
 };
 
-export function renderConfig(identity: Identity, apiBase: string) {
+export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask") {
+  if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
+    throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
+  }
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
   return {
@@ -46,8 +49,8 @@ export function renderConfig(identity: Identity, apiBase: string) {
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
     messages: { visibleReplies: "automatic" },
     channels: { plow: {
-      apiBase, lineUid: identity.line.uid,
-      ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid } : {}),
+      apiBase, lineUid: identity.line.uid, threadTrust,
+      ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
     bindings: [{ agentId: "main", match: { channel: "plow", accountId: "chat", peer: { kind: "direct", id: "plow-owner" } }, session: { dmScope: "main" } }],
@@ -56,7 +59,7 @@ export function renderConfig(identity: Identity, apiBase: string) {
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_send_email"], deny: ["ask_user"] },
+    tools: { profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to", "plow_send_email"], deny: ["ask_user"] },
   };
 }
 

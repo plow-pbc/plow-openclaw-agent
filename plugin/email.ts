@@ -3,60 +3,38 @@
  * privately to the owner, in the chat the thread was started from (its origin) or
  * else the owner's 1:1. Origins live on disk because the tool that starts a thread
  * and the channel that delivers finals run in separate module instances, and
- * because an origin must survive a restart; notes sit beside them.
+ * because an origin must survive a restart.
  */
-import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { Agent, Chat, Member } from "./transport.ts";
 
-function dir(kind: "origins" | "notes") {
+function dir() {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
-  return `${root}/plow-email/${kind}`;
+  return `${root}/plow-email/origins`;
 }
 
 export async function recordOrigin(thread: string, origin: string) {
-  await mkdir(dir("origins"), { recursive: true });
-  const path = `${dir("origins")}/${encodeURIComponent(thread)}`;
+  await mkdir(dir(), { recursive: true });
+  const path = `${dir()}/${encodeURIComponent(thread)}`;
   await writeFile(`${path}.tmp`, origin);
   await rename(`${path}.tmp`, path);
 }
 
 export async function originOf(thread: string): Promise<string | undefined> {
-  try { return await readFile(`${dir("origins")}/${encodeURIComponent(thread)}`, "utf8"); }
+  try { return await readFile(`${dir()}/${encodeURIComponent(thread)}`, "utf8"); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
 }
 
-// An email final delivered to a chat, supplied to that chat's next turn.
-export type Note = { thread_chat_uid: string; subject: string | null; text: string };
-
-export async function addNote(chat: string, note: Note) {
-  await mkdir(dir("notes"), { recursive: true });
-  await appendFile(`${dir("notes")}/${encodeURIComponent(chat)}`, JSON.stringify(note) + "\n");
-}
-
-export async function takeNotes(chat: string): Promise<Note[]> {
-  const path = `${dir("notes")}/${encodeURIComponent(chat)}`;
-  const taken = `${path}.${randomUUID()}`;
-  try { await rename(path, taken); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  const notes = (await readFile(taken, "utf8")).split("\n").filter(Boolean).map(line => JSON.parse(line) as Note);
-  await rm(taken, { force: true });
-  return notes;
-}
-
 const who = (member: Member) => !member.provider_key || member.display_name === member.provider_key
   ? member.display_name || member.provider_key || "unnamed" : `${member.display_name || "unnamed"} (${member.provider_key})`;
 
-// The one line that tells the owner which email a delivered final is about.
+// The one line that tells the owner, and the chat's session, which email a delivered final is about.
 export function emailHeader(chat: Chat, sender: Member | Agent) {
-  return `Re: email "${chat.display_name || "(no subject)"}" from ${sender.type === "member" ? who(sender) : sender.line.display_name || sender.line.uid}`;
+  return `Re: email "${chat.display_name || "(no subject)"}" from ${sender.type === "member" ? who(sender) : sender.line.display_name || sender.line.uid} (thread ${chat.uid})`;
 }
 
 export function emailTurnPrompt(chat: Chat, persona: string) {

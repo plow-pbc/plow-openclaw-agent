@@ -35,7 +35,7 @@ test("only the owner's phone DM becomes main; other peers and groups stay isolat
 });
 
 test("mailbox and group chats cannot displace the owner's DM", () => {
-  const config = renderConfig({ ...identity, mailbox: { uid: "ln_mail" }, chats: [...identity.chats,
+  const config = renderConfig({ ...identity, mailbox: { uid: "ln_mail", display_name: "Elm" }, chats: [...identity.chats,
     { uid: "cht_email", status: "active", participants: [
       { type: "agent", relationship: "self", line: { uid: "ln_mail" } },
       { type: "member", role: "owner", uid: "mem_owner" },
@@ -49,7 +49,7 @@ test("mailbox and group chats cannot displace the owner's DM", () => {
 });
 
 test("the mailbox comes from identity, so it is served before its first thread exists", () => {
-  assert.equal(renderConfig({ ...identity, mailbox: { uid: "ln_mail" } }, "http://api:8000").channels.plow.emailLineUid, "ln_mail");
+  assert.equal(renderConfig({ ...identity, mailbox: { uid: "ln_mail", display_name: "Elm" } }, "http://api:8000").channels.plow.emailLineUid, "ln_mail");
   assert.ok(!("emailLineUid" in renderConfig({ ...identity, mailbox: null }, "http://api:8000").channels.plow));
 });
 
@@ -102,7 +102,7 @@ test("phone turns cannot block on ask_user", () => {
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_send_email"], deny: ["ask_user"],
+    profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
   });
 });
 
@@ -128,6 +128,13 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   assert.deepEqual(config.meta, {});
 });
 
+test("boot renders the group trust mode into the owned channel config", () => {
+  for (const mode of ["ask", "trusted", "untrusted"]) {
+    assert.equal(renderConfig(identity, "http://api:8000", mode).channels.plow.threadTrust, mode);
+  }
+  assert.throws(() => renderConfig(identity, "http://api:8000", "invalid"), /PLOW_THREAD_TRUST/);
+});
+
 test("the dashboard uses the proxy's port and accepts origins checked by the proxy", () => {
   const config = renderConfig(identity, "http://api:8000");
   assert.deepEqual(config.gateway, {
@@ -150,6 +157,7 @@ test("fresh boot seeds owner defaults and external includes for Plow-owned setti
   assert.equal(owner.agents.defaults.model.primary, "plow/z-ai/glm-5.2");
   assert.equal(owner.skills.load.extraDirs[0], "/opt/plow/skills");
   assert.deepEqual(owner.gateway, { $include: join(includes, "gateway.json5") });
+  assert.equal(JSON5.parse(await readFile(join(includes, "plow-channel.json5"), "utf8")).threadTrust, "ask");
   assert.deepEqual(owner.messages.visibleReplies, { $include: join(includes, "visible-replies.json5") });
   assert.equal(JSON5.parse(await readFile(join(includes, "visible-replies.json5"), "utf8")), "automatic");
   assert.deepEqual(owner.bindings, [{ $include: join(includes, "binding.json5") }]);
