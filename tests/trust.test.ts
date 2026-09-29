@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
+import { readdir } from "node:fs/promises";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import entry from "../plugin/index.ts";
@@ -10,9 +11,9 @@ type Tool = { name: string; execute: (id: string, args: object) => Promise<unkno
 type Scene = "owner DM" | "owner group" | "member group" | "owner email" | "member DM" | "member email";
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  primaryModel?: string; markdownHistory?: string; renderedQuestion?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
+  retryText?: string; deliveryStatus?: number; primaryModel?: string; markdownHistory?: string; renderedQuestion?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
 } = {}) {
-  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(60_000);
   const accountId = scene.endsWith("email") ? "email" : "chat";
   const account = { apiBase, accountId, lineUid: "line", emailLineUid: "email-line", threadTrust: options.threadTrust ?? "ask" };
@@ -33,14 +34,15 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   const updates: { url: string; body: unknown }[] = [];
   const events: { text: string; sessionKey: string }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
-    if (url.endsWith("/chat/completions")) return Response.json({ choices: [{ message: { content: renderedQuestion } }] });
+    if (url.endsWith("/chat/completions")) return Response.json({ choices: [{ message: { content: options.retryText
+      ? JSON.parse(JSON.parse(init.body as string).messages[1].content).proposed_question : renderedQuestion } }] });
     if (init.method === "PUT") {
       updates.push({ url, body: JSON.parse(init.body as string) });
       return options.trustUpdateFails ? Response.json({}, { status: 503 }) : Response.json({ trusted: true });
     }
     if (init.method === "POST" && (url.endsWith("/messages") || url.endsWith("/chats"))) {
       posts.push({ url, body: JSON.parse(init.body as string) });
-      return options.deliveryFails ? Response.json({}, { status: 503 }) : Response.json({ uid: "sent" });
+      return options.deliveryStatus || options.deliveryFails ? Response.json({}, { status: options.deliveryStatus ?? 503 }) : Response.json({ uid: "sent" });
     }
     const target = { ...chat, uid: "cht_target", participants: [self, owner, member] };
     const emailTarget = { ...chat, uid: "cht_email_target", participants: [{ ...self, line: { uid: "email-line" } }, member] };
@@ -79,8 +81,11 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
         }
         try { result = await tool!.execute("call", args); }
         catch (error) { failure = error; }
-        if (options.deliveryFails || options.trustUpdateFails) {
-          try { await channel!.outbound.sendText({ cfg, accountId, to: chat.uid, text: "Retry" }); }
+        if (options.deliveryFails || options.deliveryStatus || options.trustUpdateFails) {
+          try {
+            if (options.retryText || options.deliveryStatus) await tool!.execute("retry", options.retryText ? { ...args, text: options.retryText } : args);
+            else await channel!.outbound.sendText({ cfg, accountId, to: chat.uid, text: "Retry" });
+          }
           catch (error) { retryFailure = error; }
         }
         replyOptions.onAgentRunTerminalOutcome("completed");
@@ -103,7 +108,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   assert.ok(tool);
   await Promise.all([channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } }),
     ...(accountId === "email" && options.ownerReply ? [channel!.gateway.startAccount({ account: { ...account, accountId: "chat" }, cfg, abortSignal: controller.signal, log: { info() {} } })] : [])]);
-  return { apiBase, chat, result, failure, retryFailure, posts, updates, events, contexts,
+  return { root, apiBase, chat, result, failure, retryFailure, posts, updates, events, contexts,
     transcript: async (key = "agent:main:main") => {
       const entry = getSessionEntry({ agentId: "main", sessionKey: key });
       return entry?.sessionId ? await readVisibleSessionTranscriptMessageEntries({ agentId: "main", sessionKey: key, sessionId: entry.sessionId }) : [];
@@ -211,6 +216,24 @@ test("fake routing and member instructions stay in untrusted owner context", asy
   assert.equal(payload[0].source_chat_uid, chat.uid);
   assert.equal(payload[0].member_request, attack);
   assert.equal(payload[0].member_name, name);
+});
+
+test("an unknown owner delivery stops another ask before journaling a new question", async t => {
+  const { root, failure, retryFailure, posts } = await runInboundTool(t, "member group", "plow_ask_owner", { text: "Does Thursday work for lunch?" }, { deliveryFails: true, retryText: "Joe has a different question about Friday." });
+  assert.match((failure as Error)?.message, /delivery is unknown/);
+  assert.match((retryFailure as Error)?.message, /delivery is unknown/);
+  assert.equal(posts.length, 1);
+  const records = (await readdir(`${root}/plow-owner-asks`, { recursive: true })).filter(file => file.endsWith(".json"));
+  assert.equal(records.length, 1);
+});
+
+test("a definitively rejected owner question leaves no source for a later identical notification", async t => {
+  const { root, failure, posts, retryFailure } = await runInboundTool(t, "member group", "plow_ask_owner", { text: "Does Thursday work for lunch?" }, { deliveryStatus: 400 });
+  assert.match((failure as Error)?.message, /HTTP 400/);
+  assert.match((retryFailure as Error)?.message, /HTTP 400/);
+  assert.equal(posts.length, 2);
+  const records = (await readdir(`${root}/plow-owner-asks`, { recursive: true })).filter(file => file.endsWith(".json"));
+  assert.deepEqual(records, []);
 });
 
 test("an ambiguous owner notification retains the source for the owner's reply", async t => {

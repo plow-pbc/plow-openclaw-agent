@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
@@ -37,7 +37,7 @@ async function ownerAsks(account: Account, history: Message[]): Promise<(OwnerAs
   return asks;
 }
 
-type SendPermit = { accountId: string; to: string; text: string; literal?: boolean };
+type SendPermit = { accountId: string; to: string; text: string; literal?: boolean; rejected?: boolean; onRejected?: () => Promise<void> };
 const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
 const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
@@ -103,12 +103,12 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   return { channel: "plow" as const, messageId: sent.uid };
 }
 
-async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", literal = false) {
+async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", literal = false, onRejected?: () => Promise<void>) {
   await runtime.channel.session.updateLastRoute({
     storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
-  const permit = { accountId, to, text, literal };
+  const permit: SendPermit = { accountId, to, text, literal, onRejected };
   let result;
   try {
     result = await activeTurn.run(turn, () => sendDurableMessageBatch({
@@ -117,6 +117,7 @@ async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agent
       mirror: route, skipQueue: true, onPlatformSendDispatch: async () => { durableSendPermits.add(permit); },
     }));
   } finally { durableSendPermits.delete(permit); }
+  if (result.status === "failed" && permit.rejected) throw result.error;
   if (result.status !== "sent") {
     turn.deliveryUnknown = true;
     throw new DeliveryUnknownError();
@@ -239,8 +240,17 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [],
-      typeof ctx.onPlatformSendDispatch === "function" ? consumeDurablePermit(ctx.accountId, ctx.to, ctx.text) : undefined),
+    sendText: async ctx => {
+      const permit = typeof ctx.onPlatformSendDispatch === "function" ? consumeDurablePermit(ctx.accountId, ctx.to, ctx.text) : undefined;
+      try { return await send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [], permit); }
+      catch (error) {
+        if (permit && !(error instanceof DeliveryUnknownError)) {
+          permit.rejected = true;
+          await permit.onRejected?.();
+        }
+        throw error;
+      }
+    },
     sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },
 };
@@ -326,6 +336,7 @@ export default defineChannelPluginEntry({
           || context.nativeChannelId !== turn.chat.uid) {
           throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
+        if (turn.deliveryUnknown) throw new DeliveryUnknownError();
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         const model = cfg.models?.providers?.plow?.models[0]?.id;
         if (!model) throw new Error("Owner questions require a configured Plow provider model.");
@@ -349,7 +360,7 @@ export default defineChannelPluginEntry({
         await writeFile(`${path}.tmp`, JSON.stringify(ask), { mode: 0o600 });
         await rename(`${path}.tmp`, path);
         // Journal before delivery; even an ambiguous response leaves the phone text routeable.
-        await durableSend(cfg, turn, { agentId: "main", sessionKey: "agent:main:main" }, "chat", "plow-owner", "plow-owner", question, "direct", true);
+        await durableSend(cfg, turn, { agentId: "main", sessionKey: "agent:main:main" }, "chat", "plow-owner", "plow-owner", question, "direct", true, () => unlink(path));
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));

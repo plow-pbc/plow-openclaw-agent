@@ -68,8 +68,10 @@ The plugin journals the source and original member request before delivery,
 scoped to the API, phone line and literal notification body. Each source request
 has its own record, so identical questions retain all sources. The notification
 uses `format: none` to keep its phone body identical to the journal key; an
-ambiguous send response cannot discard the route. The owner must clarify when
-one question matches several sources. On an owner-DM turn, notifications
+ambiguous send response cannot discard the route. A definitive adapter rejection
+removes its source record before the SDK wraps the failed batch. An uncertain
+delivery blocks further asks before journaling. The owner must clarify when one
+question matches several sources. On an owner-DM turn, notifications
 in the loaded literal phone history supply structured
 context. No separate pending-request lifecycle is needed; the phone history
 selects the relevant asks, including after an agent restart. An owner history
