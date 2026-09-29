@@ -55,12 +55,13 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
 
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable = false, turn = activeTurn.getStore()) {
   to = to.replace(/^plow:/i, "");
+  // Email leaves only through plow_send_email; the delivery paths that reach a thread are durable.
+  if (!durable && account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
   const outside = !durable && (!turn || account.accountId !== turn.accountId ||
     (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)));
   if (outside && (!turn || to === "plow-owner")) throw new Error("Native Plow sends must stay in the current conversation.");
   if (to === "plow-owner") to = (await ownerChat(account)).uid;
   const chat = await request<Chat>(account, `/chats/${to}`);
-  // Email leaves only through plow_send_email; the delivery paths that reach a thread are durable.
   if (!durable && chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
     throw new Error("Email is sent with plow_send_email, not message.");
   }
@@ -198,7 +199,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
                 return { messageIds: [] };
               }
               // A recorded origin still gets the final only while it is the owner's DM or a trusted group.
-              const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`) : undefined;
+              // An origin this agent can no longer read is a lost origin: the 1:1 gets the final.
+              const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`).catch(error => {
+                if (error instanceof HttpError && [403, 404].includes(error.status)) return undefined;
+                throw error;
+              }) : undefined;
               const target = recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
                 : await ownerChat(phone).catch(error => { log(`no owner chat: ${(error as Error).message}`); return undefined; });
               deliveredToOwner = true;

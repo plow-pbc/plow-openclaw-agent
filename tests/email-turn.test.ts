@@ -28,6 +28,8 @@ const chats: Record<string, { uid: string; status: string; trusted: boolean; dis
   started: { uid: "started", status: "active", trusted: false, display_name: "Hello", participants: [self("mail"), owner, outsider] },
   dm: { uid: "dm", status: "active", trusted: false, participants: [self("line"), { ...outsider, provider_key: "+15550000003" }] },
 };
+// Chats this agent's credential can no longer read: their GET answers 403.
+const forbidden = new Set<string>();
 const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail", emailName: "Elm" } } };
 const transcript = async (sessionKey: string) => {
   const entry = getSessionEntry({ agentId: "main", sessionKey });
@@ -53,6 +55,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
       return path.startsWith("/email-lines/") ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
     }
     if (path === "/chats") return Response.json({ data: Object.values(chats), has_more: false });
+    if (forbidden.has(path.split("/")[2])) return Response.json({}, { status: 403 });
     // Only an email thread's newest message is served: the listing reads it for last activity.
     if (path.endsWith("/messages")) return Response.json(new URL(url).searchParams.get("limit") !== "1" || !["thread", "other", "started"].includes(path.split("/")[2]) ? { data: [], has_more: false } : { data: [{ uid: "newest", direction: "outbound", sender: self("mail"), body: "Earlier", attachments: [], created_at: "2026-09-28T12:00:00Z" }], has_more: false });
     return Response.json(chats[path.split("/")[2]] ?? { ticket: "ticket" });
@@ -264,4 +267,25 @@ test("a thread's recorded origin that is no longer trusted gets nothing; the fin
   chats.group.trusted = false;
   const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+});
+
+test("a thread's recorded origin the agent can no longer read falls back to the owner's 1:1", async t => {
+  const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
+  t.after(() => { forbidden.clear(); return rm(state, { recursive: true }); });
+  await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
+    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
+  }, undefined, state);
+  forbidden.add("group");
+  const { posts, logs } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+  assert.ok(logs.some(line => line.startsWith("completed chat=started")));
+});
+
+test("message with the email account selected is refused whatever the target", async t => {
+  let refusal = "";
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, _tool, channel, config) => {
+    await channel.outbound.sendText({ cfg: config, accountId: "email", to: "plow:home", text: "hi" }).catch((error: Error) => { refusal = error.message; });
+  });
+  assert.match(refusal, /plow_send_email/);
+  assert.deepEqual(posts, []);
 });
