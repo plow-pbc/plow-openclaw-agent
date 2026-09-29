@@ -40,6 +40,15 @@ export function emailHeader(chat: Chat, sender: Member | Agent) {
   return `Re: email ${quote(chat.display_name || "(no subject)")} from ${quote(sender.type === "member" ? who(sender) : sender.line.display_name || sender.line.uid)} (thread ${chat.uid})`;
 }
 
+// Whether a mail's sign-off (its last few lines) names the owner rather than the persona.
+export function signedAs(body: string, name: string) {
+  const first = name.trim().split(/\s+/)[0]?.toLowerCase();
+  return Boolean(first) && body.trim().split("\n").slice(-3).some(line => {
+    const words = line.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").trim().split(/\s+/);
+    return words.length <= 3 && words[0] === first;
+  });
+}
+
 // System-authority text: only the mailbox's own persona and chat uid, never names senders chose.
 export function emailTurnPrompt(chat: Chat, persona: string) {
   return [

@@ -5,7 +5,7 @@ import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/p
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
-import { emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
+import { emailHeader, emailTurnPrompt, originOf, recordOrigin, signedAs } from "./email.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
@@ -434,6 +434,10 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
+        const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
+        if (persona && owner?.type === "member" && signedAs(args.body, owner.display_name)) {
+          return refuse(`Nothing was sent. This mail goes out from ${persona}'s mailbox, so it is written and signed as ${persona}, never as the owner: refer to the owner in the third person, sign as ${persona}, and send it again. Mail in the owner's own name goes only from their own Gmail.`);
+        }
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);

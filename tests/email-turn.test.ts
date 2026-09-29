@@ -268,3 +268,16 @@ test("sender-chosen subject and name stay on the header's one line", async t => 
   const [header] = String(posts[0].body.body).split("\n\n");
   assert.equal(header.split(/[\n\u2028\u2029]/).length, 1);
 });
+
+for (const [name, body, refused] of [
+  ["signed as the owner", "Hi Casey,\n\nThursday works for me.\n\nThanks,\nOwner", true],
+  ["signed as the persona", "Hi Casey,\n\nOwner says Thursday works.\n\nThanks,\nElm", false],
+] as const) test(`plow_send_email refuses a mail signed as the owner: ${name}`, async t => {
+  let result: { isError?: boolean; content: { text: string }[] } | undefined;
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    result = await tool().execute("call", { to: "thread", body });
+  });
+  assert.equal(Boolean(result!.isError), refused);
+  if (refused) assert.match(result!.content[0].text, /sign as Elm/);
+  assert.equal(posts.length, refused ? 0 : 1);
+});
