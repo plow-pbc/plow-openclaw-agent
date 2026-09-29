@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import entry from "../plugin/index.ts";
-import { websocketFixture } from "./ws-fixture.ts";
+import { websocketFixture, checkpointUid } from "./ws-fixture.ts";
 
 test("a checkpointed outbound opener still seeds the first group turn", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
@@ -33,7 +33,7 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: "group" }) },
       inbound: {
         buildContext: async (value: typeof contexts[number]) => {
-          if (!contexts.length) assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "opener");
+          if (!contexts.length) assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), "opener");
           contexts.push(value); return {};
         },
         dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {

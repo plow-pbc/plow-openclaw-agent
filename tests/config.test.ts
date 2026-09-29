@@ -119,7 +119,7 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic" });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", inbound: { byChannel: { plow: 2000 } } });
   assert.deepEqual(config.meta, {});
 });
 

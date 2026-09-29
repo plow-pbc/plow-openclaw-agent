@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
-import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
+import { bindIngressLifecycleToReplyOptions, createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome, type TurnIngress } from "./transport.ts";
 
 let runtime: PluginRuntime;
 type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
@@ -95,7 +95,7 @@ async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agent
   return result.results[0].messageId;
 }
 
-async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
+async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], messages: Message[], ingress: TurnIngress | undefined, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
@@ -137,17 +137,29 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     },
     media,
   });
-  log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
+  for (const source of messages) log(`turn ${JSON.stringify({ chat: chat.uid, message: source.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
   const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
   activeTurns.set(route.sessionKey, turn);
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+    cfg, agentId: route.agentId, channel: "plow", accountId: account.accountId,
+    typing: account.accountId === "chat" ? {
+      start: () => request<void>(account, `/chats/${chat.uid}/typing`, { action: "start" }),
+      stop: () => request<void>(account, `/chats/${chat.uid}/typing`, { action: "stop" }),
+      keepaliveIntervalMs: 8_000, maxDurationMs: 10 * 60_000,
+      onStartError: () => log("typing start failed"), onStopError: () => log("typing stop failed"),
+    } : undefined,
+  });
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
     let observedReplyDelivery = false;
-    if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
     try {
       const result = await runtime.channel.inbound.dispatch({
         cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
+        dispatcherOptions: replyPipeline,
         replyOptions: {
+          ...(ingress ? bindIngressLifecycleToReplyOptions(ingress) : {}),
+          onModelSelected,
+          onAgentRunStart: runId => log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`),
           sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
           onObservedReplyDelivery: () => { observedReplyDelivery = true; },
           onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
@@ -175,8 +187,6 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     } catch (error) {
       if (activeTurn.getStore()!.deliveryUnknown) throw new DeliveryUnknownError();
       throw error;
-    } finally {
-      if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "stop" }).catch(() => log("typing stop failed"));
     }
   }).finally(() => {
     if (activeTurns.get(route.sessionKey) === turn) activeTurns.delete(route.sessionKey);
@@ -202,7 +212,7 @@ const plugin: ChannelPlugin<Account> = {
   gateway: {
     startAccount: async ctx => {
       const log = (text: string) => ctx.log?.info(text);
-      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, log));
+      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history, messages, ingress) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, messages, ingress, log), ctx.cfg);
     },
   },
   outbound: {
