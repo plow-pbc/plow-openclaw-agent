@@ -1,4 +1,8 @@
-export async function renderPrompt(prompt: string, mcpUrl: string | null | undefined, token: string): Promise<string> {
+export async function renderPrompt(prompt: string, mcpUrl: string | null | undefined, token: string, webUrl?: string | null): Promise<string> {
+  const dashboard = webUrl
+    ? `\nYour dashboard is ${webUrl}. Give that exact address when asked; never guess a dashboard URL.\n`
+    : "\nYou have no dashboard. Say so when asked for its URL; never guess one.\n";
+  prompt += dashboard;
   if (!mcpUrl) return prompt;
   try {
     const response = await fetch(mcpUrl, {

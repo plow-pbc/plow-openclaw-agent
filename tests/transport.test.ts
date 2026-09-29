@@ -221,7 +221,7 @@ test("first-contact recovery includes its message and newer arrivals, excluding 
   assert.deepEqual((await recover(account, "home", "first:pending")).map(m => m.uid), ["pending", "newer"]);
 });
 
-for (const failure of ["incomplete", "throws", "notice-unknown"] as const) test(`a turn that ${failure} is acked without disconnecting or replaying later turns`, async t => {
+for (const failure of ["incomplete", "throws"] as const) test(`a turn that ${failure} is acked without disconnecting or replaying later turns`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const fixture = { ...account, apiBase, lineUid: "line" };
   const chats = ["home", "other"].map(uid => ({ uid, status: "active", participants: [
@@ -229,12 +229,10 @@ for (const failure of ["incomplete", "throws", "notice-unknown"] as const) test(
   ] }));
   const messages = ["unfinished", "later"].map(uid => ({ uid, direction: "inbound", sender: { type: "member" } }));
   let recovering = false;
-  const notices: { url: string; body: string; checkpoint: string }[] = [];
+  let notices = 0;
   t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
     if (options.method === "POST" && url.endsWith("/messages")) {
-      notices.push({ url, body: JSON.parse(options.body as string).body,
-        checkpoint: await readFile(`${root}/plow-checkpoints/home`, "utf8") });
-      if (failure === "notice-unknown") throw new TypeError("connection lost after sending notice");
+      notices++;
       return Response.json({ uid: "notice" });
     }
     return Response.json(
@@ -275,11 +273,7 @@ for (const failure of ["incomplete", "throws", "notice-unknown"] as const) test(
     assert.equal(await readFile(`${root}/plow-checkpoints/home`, "utf8"), "later");
     assert.equal(await readFile(`${root}/plow-checkpoints/other`, "utf8"), "other-reply");
     assert.equal(connections, recovering ? 2 : 1);
-    assert.equal(notices.length, 1, "one notice attempt, with no replay after restart or uncertain notice delivery");
-    assert.equal(notices[0].checkpoint, "unfinished");
-    assert.equal(notices[0].url, `${apiBase}/v1/chats/home/messages`);
-    assert.match(notices[0].body, /part.*may have.*(?:happened|gone through)/i);
-    assert.match(notices[0].body, /check before resending/i);
+    assert.equal(notices, 0, "OpenClaw owns fallback delivery");
     assert.ok(!logs.some(text => text.startsWith("transport stopped")));
     if (!recovering) assert.ok(logs.some(text => text.includes("turn incomplete chat=home message=unfinished")));
   }
