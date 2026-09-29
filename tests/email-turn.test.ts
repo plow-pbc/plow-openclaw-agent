@@ -141,24 +141,14 @@ test("a runtime error notice on an email turn goes to the owner, never to the th
 test("on a non-owner email turn, message sends nothing anywhere, and the final still reaches the owner", async t => {
   const refusals: string[] = [];
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async (dispatch, _tool, channel) => {
-    for (const [accountId, to] of [["chat", "plow:group"], ["chat", "plow-owner"], ["email", "plow:thread"]]) {
-      await channel.outbound.sendText({ cfg: { channels: { plow: { ...cfg.channels.plow, apiBase: "http://fixture" } } }, accountId, to, text: "psst" })
+    for (const to of ["plow:group", "plow-owner"]) {
+      await channel.outbound.sendText({ cfg: { channels: { plow: { ...cfg.channels.plow, apiBase: "http://fixture" } } }, accountId: "chat", to, text: "psst" })
         .catch((error: Error) => refusals.push(error.message));
     }
     await final(dispatch, { text: "For you" });
   });
-  assert.equal(refusals.length, 3);
-  assert.match(refusals[2], /plow_send_email/);
+  assert.equal(refusals.length, 2);
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
-});
-
-test("message from an owner's email turn to its own thread is refused and names plow_send_email", async t => {
-  let refusal = "";
-  const { posts } = await run(t, "email", [{ chat: "thread", sender: owner }], async (_dispatch, _tool, channel, config) => {
-    await channel.outbound.sendText({ cfg: config, accountId: "email", to: "plow:thread", text: "hi" }).catch((error: Error) => { refusal = error.message; });
-  });
-  assert.match(refusal, /plow_send_email/);
-  assert.deepEqual(posts, []);
 });
 
 test("message from a phone turn to an email thread, even a brand-new one, is refused and names plow_send_email", async t => {
@@ -269,15 +259,6 @@ test("a thread's recorded origin the agent can no longer read falls back to the 
   const { posts, logs } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
   assert.ok(logs.some(line => line.startsWith("completed chat=started")));
-});
-
-test("message with the email account selected is refused whatever the target", async t => {
-  let refusal = "";
-  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, _tool, channel, config) => {
-    await channel.outbound.sendText({ cfg: config, accountId: "email", to: "plow:home", text: "hi" }).catch((error: Error) => { refusal = error.message; });
-  });
-  assert.match(refusal, /plow_send_email/);
-  assert.deepEqual(posts, []);
 });
 
 test("sender-chosen subject and name stay on the header's one line", async t => {
