@@ -1,0 +1,203 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { test, type TestContext } from "node:test";
+import entry from "../plugin/index.ts";
+import { websocketFixture } from "./ws-fixture.ts";
+
+const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
+type Tool = { name: string; execute: (id: string, args: object) => Promise<{ isError?: boolean; content: { text: string }[] }> };
+type Payload = { text?: string; isError?: boolean; isFallbackNotice?: boolean };
+type Dispatch = {
+  ctxPayload: unknown;
+  delivery: { preparePayload: (payload: Payload, info: { kind: string }) => Payload | null; deliver: (payload: Payload) => Promise<unknown> };
+};
+type Context = { supplemental: { groupSystemPrompt?: string; channelStructuredContext: { label: string; payload: unknown }[] } };
+
+const self = (line: string) => ({ type: "agent", relationship: "self", line: { uid: line, display_name: line === "mail" ? "Elm" : "Phone" } });
+const owner = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "owner@example.com" };
+const outsider = { type: "member", uid: "outsider", role: "member", display_name: "Sender", provider_key: "sender@example.com" };
+const chats: Record<string, { uid: string; status: string; trusted: boolean; display_name?: string; participants: object[] }> = {
+  home: { uid: "home", status: "active", trusted: false, participants: [self("line"), owner] },
+  group: { uid: "group", status: "active", trusted: true, participants: [self("line"), owner, { ...outsider, provider_key: "+15550000002" }] },
+  thread: { uid: "thread", status: "active", trusted: false, display_name: "Booking", participants: [self("mail"), owner, outsider] },
+  other: { uid: "other", status: "active", trusted: false, display_name: "Another", participants: [self("mail"), owner, outsider] },
+  started: { uid: "started", status: "active", trusted: false, display_name: "Hello", participants: [self("mail"), owner, outsider] },
+};
+const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail" } } };
+
+// Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
+async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
+  turn: (dispatch: Dispatch, tool: (context: object) => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }) => Promise<void>,
+  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  if (state) process.env.OPENCLAW_STATE_DIR = state;
+  const controller = abortAfter();
+  const account = { ...cfg.channels.plow, apiBase, accountId };
+  const config = { channels: { plow: { ...cfg.channels.plow, apiBase } } };
+  const posts: { path: string; body: Record<string, unknown> }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit = {}) => {
+    const path = new URL(url).pathname.replace(/^\/v1/, "");
+    if (options.method === "POST" && path !== "/ws/ticket" && !path.endsWith("/typing")) {
+      posts.push({ path, body: JSON.parse(options.body as string) });
+      return Response.json(path.startsWith("/email-lines/") ? newThread : { uid: `sent-${posts.length}` });
+    }
+    if (path === "/chats") return Response.json({ data: Object.values(chats), has_more: false });
+    // Only an email thread's newest message is served: the listing reads it for last activity.
+    if (path.endsWith("/messages")) return Response.json(new URL(url).searchParams.get("limit") !== "1" || !["thread", "other", "started"].includes(path.split("/")[2]) ? { data: [], has_more: false } : { data: [{ uid: "newest", direction: "outbound", sender: self("mail"), body: "Earlier", attachments: [], created_at: "2026-09-28T12:00:00Z" }], has_more: false });
+    return Response.json(chats[path.split("/")[2]] ?? { ticket: "ticket" });
+  });
+  server.on("connection", (socket: { send: (text: string) => void }) => frames.forEach(({ chat, sender }, i) => socket.send(JSON.stringify({
+    event_type: "message_received", event_id: `event-${i}`, chat_id: chat,
+    data: { message: { uid: `inbound-${i}`, direction: "inbound", sender, body: "hello", attachments: [], created_at: new Date().toISOString() } },
+  }))));
+  let channel: Parameters<typeof turn>[2] & { gateway: { startAccount: (context: object) => Promise<void> } };
+  const factories: ((context: object) => Tool)[] = [];
+  const contexts: Context[] = [];
+  const logs: string[] = [];
+  const api = { registrationMode: "full", logger: { info() {} }, on() {}, registerTool() {},
+    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
+    runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "session", agentId: "main" }) }, inbound: {
+      buildContext: async (value: Context) => { contexts.push(value); return value; },
+      dispatch: async (dispatch: Dispatch & { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+        const tool = (context: object) => factories.map(factory => factory({ config, ...context })).find(tool => tool.name === "plow_send_email")!;
+        await turn(dispatch, tool, channel);
+        dispatch.replyOptions.onAgentRunTerminalOutcome(terminal);
+        if (contexts.length === frames.length) controller.abort();
+        return { dispatched: true, dispatchResult: {} };
+      },
+    } } },
+  };
+  entry.register(api);
+  // Tools run in a separate module instance, as they do in the gateway.
+  toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) { factories.push(factory); } });
+  await channel!.gateway.startAccount({ account, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
+  return { posts, contexts, logs };
+}
+
+async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
+  const prepared = dispatch.delivery.preparePayload(payload, { kind });
+  if (prepared) await dispatch.delivery.deliver(prepared);
+}
+
+test("a non-owner email turn's final goes to the owner's 1:1, labelled, and nothing reaches the thread", async t => {
+  const text = "Not replying: this turn doesn't carry owner authority to send, so I'll let it close. ".repeat(4);
+  const { posts, contexts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    await final(dispatch, { text: "working on it" }, "block");
+    await final(dispatch, { text });
+  });
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+  assert.equal(posts[0].body.body, `Re: email "Booking" from Sender (sender@example.com)\n\n${text}`);
+  assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
+  const prompt = contexts[0].supplemental.groupSystemPrompt!;
+  assert.match(prompt, /You are Elm, Owner's assistant/);
+  assert.match(prompt, /plow_send_email, to "thread"/);
+  assert.match(prompt, /never sent to this thread/);
+});
+
+test("NO_REPLY on an email turn is silence: no fallback notice anywhere, and the turn completes", async t => {
+  const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    await final(dispatch, { text: "No response generated.", isFallbackNotice: true });
+  });
+  assert.deepEqual(posts, []);
+  assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
+});
+
+for (const notice of [{ text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }, { text: "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. Reference: run-1." }]) test(`NO_REPLY that the runtime reports as no answer is silence on an email turn: ${notice.text.slice(3, 20)}`, async t => {
+  const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    await dispatch.delivery.deliver(notice);
+  }, undefined, undefined, "failed");
+  assert.deepEqual(posts, []);
+  assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
+});
+
+test("a runtime error notice on an email turn goes to the owner, never to the thread", async t => {
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: owner }], async dispatch => {
+    await final(dispatch, { text: "Something went wrong.", isError: true });
+  });
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+});
+
+test("on a non-owner email turn, message sends nothing anywhere, and the final still reaches the owner", async t => {
+  const refusals: string[] = [];
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async (dispatch, _tool, channel) => {
+    for (const [accountId, to] of [["chat", "plow:group"], ["chat", "plow-owner"], ["email", "plow:thread"]]) {
+      await channel.outbound.sendText({ cfg: { channels: { plow: { ...cfg.channels.plow, apiBase: "http://fixture" } } }, accountId, to, text: "psst" })
+        .catch((error: Error) => refusals.push(error.message));
+    }
+    await final(dispatch, { text: "For you" });
+  });
+  assert.equal(refusals.length, 3);
+  assert.ok(refusals.every(text => /plow_send_email/.test(text)));
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+});
+
+test("message refuses email chats and names plow_send_email", async t => {
+  const refusals: string[] = [];
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, _tool, channel) => {
+    for (const [accountId, to] of [["chat", "plow:thread"], ["email", "plow:thread"]]) {
+      await channel.outbound.sendText({ cfg: { channels: { plow: { ...cfg.channels.plow, apiBase: "http://fixture" } } }, accountId, to, text: "hi" })
+        .catch((error: Error) => refusals.push(error.message));
+    }
+  });
+  assert.equal(refusals.length, 2);
+  assert.ok(refusals.every(text => /plow_send_email/.test(text)));
+  assert.deepEqual(posts, []);
+});
+
+test("plow_send_email on a non-owner email turn replies only in its own thread", async t => {
+  const results: { isError?: boolean; content: { text: string }[] }[] = [];
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async (_dispatch, tool) => {
+    const send = tool({ sessionId: "s", senderIsOwner: false, deliveryContext: { channel: "plow", to: "plow:thread", accountId: "email" } });
+    for (const args of [{ to: "other", body: "hi" }, { to: ["new@example.com"], subject: "Hi", body: "hi" }, { action: "list" }, { to: "thread", body: "Thanks, noted." }]) {
+      results.push(await send.execute("call", args));
+    }
+  });
+  assert.deepEqual(results.map(result => Boolean(result.isError)), [true, true, true, false]);
+  assert.deepEqual(JSON.parse(results[3].content[0].text), { sent: true, chat_uid: "thread" });
+  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted." } }]);
+});
+
+test("a thread started from a trusted group reports its finals to that group, and the group's next turn sees them", async t => {
+  const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
+  t.after(() => rm(state, { recursive: true }));
+  let receipt: unknown;
+  await run(t, "chat", [{ chat: "group", sender: outsider }], async (_dispatch, tool) => {
+    const send = tool({ sessionId: "s", senderIsOwner: false, deliveryContext: { channel: "plow", to: "plow:group", accountId: "chat" } });
+    receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
+  }, undefined, state);
+  assert.deepEqual(receipt, { sent: true, chat_uid: "started" });
+  const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
+  assert.deepEqual(posts.map(post => post.path), ["/chats/group/messages"]);
+  const { contexts } = await run(t, "chat", [{ chat: "group", sender: owner }], async () => {}, undefined, state);
+  assert.deepEqual(contexts[0].supplemental.channelStructuredContext[1].payload,
+    [{ thread_chat_uid: "started", subject: "Hello", text: "They replied yes." }]);
+});
+
+test("a new thread without a recorded chat is reported, not invented, and sent once", async t => {
+  let receipt: Record<string, unknown> = {};
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    const send = tool({ sessionId: "s", senderIsOwner: true, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } });
+    receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
+  }, { status: "sent", chat_uid: null, chat_unrecorded_reason: "persistence_failed" });
+  assert.equal(receipt.chat_uid, null);
+  assert.equal(receipt.chat_unrecorded_reason, "persistence_failed");
+  assert.match(String(receipt.note), /do not resend/i);
+  assert.deepEqual(posts.map(post => post.path), ["/email-lines/mail/messages"]);
+});
+
+test("plow_send_email lists threads for the owner and refuses a non-owner in an untrusted chat", async t => {
+  const results: { isError?: boolean; content: { text: string }[] }[] = [];
+  await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    results.push(await tool({ sessionId: "s", senderIsOwner: true, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } }).execute("call", { action: "list" }));
+    results.push(await tool({ sessionId: "s", senderIsOwner: false, deliveryContext: { channel: "plow", to: "plow:home", accountId: "chat" } }).execute("call", { action: "list" }));
+  });
+  const { threads } = JSON.parse(results[0].content[0].text);
+  assert.deepEqual(threads.map((thread: { chat_uid: string }) => thread.chat_uid), ["thread", "other", "started"]);
+  assert.deepEqual(threads.find((thread: { chat_uid: string }) => thread.chat_uid === "thread"), {
+    chat_uid: "thread", subject: "Booking", last_activity: "2026-09-28T12:00:00Z",
+    participants: [{ name: "Owner", email: "owner@example.com", role: "owner" }, { name: "Sender", email: "sender@example.com", role: "member" }],
+  });
+  assert.equal(results[1].isError, true);
+  assert.match(results[1].content[0].text, /owner's authority/);
+});

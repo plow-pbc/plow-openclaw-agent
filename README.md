@@ -140,7 +140,16 @@ and acknowledged. OpenClaw handles no-reply fallback delivery. An ambiguous
 delivery is not retried; a crash after sending but before checkpointing can
 duplicate a reply.
 
-Replies stay in their source conversation. The agent can start trusted groups
+Replies stay in their source conversation, except on email. An email turn's
+final text never reaches its thread: it goes privately to the owner, in the chat
+the thread was started from with `plow_send_email`, or else the owner's 1:1, under
+one line naming the email. `NO_REPLY` there sends nothing. Mail leaves only
+through `plow_send_email`, which replies in a thread by its chat uid, starts one
+from email addresses and a subject, or lists threads; `message` refuses email.
+On mail from anyone but the owner, the turn can only reply in its own thread.
+The owner's next turn in that chat sees the finals delivered there. The mailbox
+comes from `mailbox` on `/v1/agents/me`, so it is served before its first thread.
+The agent can start trusted groups
 with the owner and send follow-ups to active conversations on its own lines.
 Clarifications are ordinary replies. When connected through Latch, the owner's
 Mac provides its tools and instructions. Mac unavailability does not prevent

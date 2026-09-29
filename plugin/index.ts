@@ -3,10 +3,15 @@ import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, ownerChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
+import { addNote, emailHeader, emailTurnPrompt, originOf, recordOrigin, takeNotes } from "./email.ts";
 
 let runtime: PluginRuntime;
-type DeliveryState = { unknown: boolean };
+// The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
+// comes back as one of these notices, which on email mean there is nothing for the owner.
+const NO_ANSWER_NOTICES = ["⚠️ Agent couldn't generate a response.", "⚠️ OpenClaw couldn't produce or deliver a reply."];
+// nonOwnerEmail marks a turn on mail from anyone but the owner: it sends nothing but its own thread's reply.
+type DeliveryState = { unknown: boolean; nonOwnerEmail?: boolean };
 const outboundDeliveryState = new AsyncLocalStorage<DeliveryState>();
 
 async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, state?: DeliveryState): Promise<T> {
@@ -42,6 +47,19 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   return { channel: "plow" as const, messageId: sent.uid };
 }
 
+// The message tool's path only: a turn's own final text is delivered by receive, not here.
+async function toolSend(cfg: OpenClawConfig, accountId: string | null | undefined, to: string, text: string, mediaUrls: string[]) {
+  const state = outboundDeliveryState.getStore();
+  if (state?.nonOwnerEmail) throw new Error("This email is not from the owner, so this turn sends nothing except a plow_send_email reply to its own thread. Your final text reaches the owner.");
+  const account = plugin.config.resolveAccount(cfg, accountId);
+  const target = to.replace(/^plow:/i, "");
+  if (account.accountId === "email" || (target !== "plow-owner" && account.emailLineUid &&
+    accepts({ ...account, accountId: "email" }, await request<Chat>(account, `/chats/${target}`)))) {
+    throw new Error("Email is sent with plow_send_email, not message.");
+  }
+  return send(account, to, text, mediaUrls, state);
+}
+
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderId = sender.type === "member" ? sender.uid : sender.line.uid;
@@ -61,10 +79,18 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   }
   const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
+  const email = account.accountId === "email";
+  // On email the agent is its mailbox's persona; phone turns keep the configured name.
+  const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
+  const self = chat.participants.find(p => p.type === "agent" && p.relationship === "self");
+  const persona = (email && self?.type === "agent" && self.line.display_name) || selfName;
   const participants = chat.participants.map(p => ({
-    ...(p.type === "agent" && p.relationship === "self" ? { name: cfg.agents?.entries?.[route.agentId]?.identity?.name } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
+    ...(p.type === "agent" && p.relationship === "self" ? { name: persona } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
   }));
+  const phone = { ...account, accountId: "chat" };
+  const origin = email ? await originOf(chat.uid) : undefined;
+  const notes = await takeNotes(chat.uid);
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
@@ -80,14 +106,19 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(message.reply_to ? { quote: { id: message.reply_to.uid, body: message.reply_to.body, sender: message.reply_to.sender.type === "member" ? message.reply_to.sender.display_name : message.reply_to.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants } }],
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to_chat_uid: origin ?? "the owner's 1:1 chat" } : {}) } },
+        ...(notes.length ? [{ label: "Email finals you delivered here since the last turn (your own record)", source: "plow", type: "conversation", payload: notes }] : [])],
+      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
     },
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const deliveryState: DeliveryState = { unknown: false };
+  const deliveryState: DeliveryState = { unknown: false, nonOwnerEmail: email && !senderIsOwner };
   let failure: unknown;
   let observedReplyDelivery = false;
+  // An email turn completes by delivering its final to the owner, or by choosing silence.
+  let deliveredToOwner = false;
+  let silent = false;
   if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
   try {
     const result = await outboundDeliveryState.run(deliveryState, () => runtime.channel.inbound.dispatch({
@@ -99,9 +130,32 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       },
       delivery: {
         observeMessageSent: true,
-        preparePayload: (payload, info) => payload.isFallbackNotice || (observedReplyDelivery && info.kind === "final") ? null : payload,
+        preparePayload: (payload, info) => {
+          if (payload.isFallbackNotice) { silent ||= email; return null; }
+          if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
+          return !email && observedReplyDelivery && info.kind === "final" ? null : payload;
+        },
         deliver: async payload => {
-          const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []), deliveryState);
+          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+          if (email) {
+            if (NO_ANSWER_NOTICES.some(notice => payload.text?.startsWith(notice))) {
+              log(`silent chat=${chat.uid} message=${message.uid}`);
+              silent = true;
+              return { messageIds: [] };
+            }
+            const target = origin ?? await ownerChat(phone).then(owner => owner.uid, error => { log(`no owner chat: ${(error as Error).message}`); return undefined; });
+            if (!target) {
+              log(`dropped final chat=${chat.uid} message=${message.uid}: nowhere to deliver`);
+              deliveredToOwner = true;
+              return { messageIds: [] };
+            }
+            const sent = await send(phone, target, `${emailHeader(chat, sender)}\n\n${payload.text ?? ""}`, mediaUrls, deliveryState);
+            deliveredToOwner = true;
+            await addNote(target, { thread_chat_uid: chat.uid, subject: chat.display_name ?? null, text: payload.text ?? "" });
+            log(`delivered chat=${chat.uid} to=${target} message=${sent.messageId}`);
+            return { messageIds: [sent.messageId] };
+          }
+          const sent = await send(account, chat.uid, payload.text ?? "", mediaUrls, deliveryState);
           log(`delivered chat=${chat.uid} message=${sent.messageId}`);
           return { messageIds: [sent.messageId] };
         },
@@ -109,11 +163,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       },
     }));
     if (deliveryState.unknown) throw new DeliveryUnknownError();
-    if (failure) throw failure;
+    if (failure && !silent) throw failure;
     if (!result.dispatched) throw new Error("Turn was not dispatched");
     const dispatchResult = result.dispatchResult;
     if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
-    const outcome = hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
+    const outcome = deliveredToOwner || silent || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
       || dispatchResult.deferredToActiveRun || dispatchResult.deliberateSilentTerminalReply
       ? "completed" : "incomplete";
     log(`${outcome} chat=${chat.uid} message=${message.uid}`);
@@ -150,8 +204,8 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [], outboundDeliveryState.getStore()),
-    sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : [], outboundDeliveryState.getStore()),
+    sendText: ctx => toolSend(ctx.cfg, ctx.accountId, ctx.to, ctx.text, []),
+    sendMedia: ctx => toolSend(ctx.cfg, ctx.accountId, ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },
 };
 
@@ -196,6 +250,70 @@ export default defineChannelPluginEntry({
           api.logger.info(`plow started thread chat=${chat.uid}`);
           const result = { chat_uid: chat.uid, message_sent: true };
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        },
+      };
+    });
+    api.registerTool(context => {
+      const deliveryState: DeliveryState = { unknown: false };
+      const refuse = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }], details: {} });
+      const receipt = (result: object) => ({ content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result });
+      return {
+        name: "plow_send_email", label: "Send email from your Plow mailbox",
+        description: "Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person and sign with your own name, never theirs. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.",
+        parameters: {
+          type: "object", additionalProperties: false,
+          properties: {
+            action: { type: "string", enum: ["send", "list"], description: "send (the default) or list." },
+            to: { type: ["string", "array"], items: { type: "string" },
+              description: "An email thread's chat uid to reply in it, or a list of email addresses to start a new thread." },
+            subject: { type: "string", minLength: 1, description: "Required when starting a new thread; not used on a reply." },
+            body: { type: "string", minLength: 1, description: "The email body." },
+          },
+        },
+        async execute(_id, args: { action?: "send" | "list"; to?: string | string[]; subject?: string; body?: string }) {
+          if (!context.config) return refuse("Plow configuration is unavailable.");
+          if (deliveryState.unknown) throw new DeliveryUnknownError();
+          const phone = plugin.config.resolveAccount(context.config, "chat");
+          const mailbox = { ...phone, accountId: "email" };
+          if (!phone.emailLineUid) return refuse("You have no mailbox.");
+          const current = context.deliveryContext?.channel === "plow" ? context.deliveryContext.to?.replace(/^plow:/i, "") : undefined;
+          if (!current) return refuse("Sending email requires an active Plow message.");
+          const emailTurn = context.deliveryContext?.accountId === "email";
+          if (emailTurn && !context.senderIsOwner) {
+            if ((args.action ?? "send") !== "send" || args.to !== current) {
+              return refuse(`This email is not from the owner, so plow_send_email can only reply in this thread (to "${current}"). Your final text reaches the owner.`);
+            }
+          } else if (!context.senderIsOwner && (emailTurn || !(await request<Chat>(phone, `/chats/${current}`)).trusted)) {
+            return refuse("plow_send_email needs the owner's authority: the owner's own chat, a trusted group, or the owner's own email.");
+          }
+          if (args.action === "list") {
+            const listing = await request<Page<Chat>>(mailbox, "/chats");
+            const threads = [];
+            for (const chat of listing.data.filter(chat => accepts(mailbox, chat))) {
+              const newest = (await request<Page<Message>>(mailbox, `/chats/${chat.uid}/messages?limit=1`)).data[0];
+              threads.push({
+                chat_uid: chat.uid, subject: chat.display_name ?? null, last_activity: newest?.created_at ?? null,
+                participants: chat.participants.flatMap(p => p.type === "member" ? [{ name: p.display_name, email: p.provider_key ?? null, role: p.role }] : []),
+              });
+            }
+            return receipt({ threads });
+          }
+          if (!args.body) return refuse("body is required.");
+          if (typeof args.to === "string") {
+            if (!accepts(mailbox, await request<Chat>(mailbox, `/chats/${args.to}`))) return refuse(`${args.to} is not one of your email threads.`);
+            await requestWithDeliveryState(mailbox, `/chats/${args.to}/messages`, { body: args.body }, deliveryState);
+            api.logger.info(`plow sent email chat=${args.to}`);
+            return receipt({ sent: true, chat_uid: args.to });
+          }
+          if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
+          const sent = await requestWithDeliveryState<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
+            mailbox, `/email-lines/${phone.emailLineUid}/messages`, { to: args.to, subject: args.subject, body: args.body }, deliveryState);
+          // A thread started from an email turn reports to the owner's 1:1, the default.
+          if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, current);
+          api.logger.info(`plow started email status=${sent.status} chat=${sent.chat_uid ?? "none"}`);
+          if (sent.chat_uid) return receipt({ sent: true, chat_uid: sent.chat_uid });
+          return receipt({ sent: sent.status === "sent" ? true : "unknown", chat_uid: null, chat_unrecorded_reason: sent.chat_unrecorded_reason ?? null,
+            note: "Plow has no chat id for this thread. Do not resend and do not guess a chat id." });
         },
       };
     });

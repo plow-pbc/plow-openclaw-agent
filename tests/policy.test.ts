@@ -11,7 +11,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
     registerTool(factory: (context: object) => { name: string }) { names.push(factory({}).name); },
     on(name: string) { hooks.push(name); },
   });
-  assert.deepEqual(names, ["plow_start_thread"]);
+  assert.deepEqual(names, ["plow_start_thread", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
   assert.ok(!hooks.includes("before_tool_call"));
@@ -42,7 +42,8 @@ test("start-thread returns a tool error without config and makes no request", as
   assert.equal(fetch.mock.callCount(), 0);
 });
 
-for (const accountId of ["chat", "email"]) for (const status of [200, 403, 503, "unserved", "inactive"] as const) test(`native send checks account reach and reports only confirmed sends: ${accountId}, ${status}`, async t => {
+const accountId = "chat";
+for (const status of [200, 403, 503, "unserved", "inactive"] as const) test(`native send checks account reach and reports only confirmed sends: ${status}`, async t => {
   let channel: { outbound: { sendText: (context: object) => Promise<unknown> } };
   entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });

@@ -55,7 +55,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
     };
     entry.register(api);
     toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) {
-      toolFactory = factory;
+      if (factory({}).name === "plow_start_thread") toolFactory = factory;
     } });
     await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
     assert.equal(turns, 2);

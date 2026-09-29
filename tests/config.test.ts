@@ -35,9 +35,9 @@ test("only the owner's phone DM becomes main; other peers and groups stay isolat
 });
 
 test("mailbox and group chats cannot displace the owner's DM", () => {
-  const config = renderConfig({ ...identity, chats: [...identity.chats,
+  const config = renderConfig({ ...identity, mailbox: { uid: "ln_mail" }, chats: [...identity.chats,
     { uid: "cht_email", status: "active", participants: [
-      { type: "agent", relationship: "self", line: { uid: "ln_mail", provider_type: "email" } },
+      { type: "agent", relationship: "self", line: { uid: "ln_mail" } },
       { type: "member", role: "owner", uid: "mem_owner" },
     ] },
     { ...identity.chats[0], uid: "cht_group", participants: [...identity.chats[0].participants,
@@ -46,6 +46,11 @@ test("mailbox and group chats cannot displace the owner's DM", () => {
   ] }, "http://api:8000");
   assert.ok(!("ownerChatUid" in config.channels.plow));
   assert.equal(config.channels.plow.emailLineUid, "ln_mail");
+});
+
+test("the mailbox comes from identity, so it is served before its first thread exists", () => {
+  assert.equal(renderConfig({ ...identity, mailbox: { uid: "ln_mail" } }, "http://api:8000").channels.plow.emailLineUid, "ln_mail");
+  assert.ok(!("emailLineUid" in renderConfig({ ...identity, mailbox: null }, "http://api:8000").channels.plow));
 });
 
 test("boot accepts no owner chat or ambiguous owner chats without waiting", () => {
@@ -97,7 +102,7 @@ test("phone turns cannot block on ask_user", () => {
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread"], deny: ["ask_user"],
+    profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_send_email"], deny: ["ask_user"],
   });
 });
 
