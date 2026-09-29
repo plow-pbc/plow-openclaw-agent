@@ -268,7 +268,8 @@ export default defineChannelPluginEntry({
           type: "object", additionalProperties: false,
           properties: {
             action: { type: "string", enum: ["send", "list"], description: "send (the default) or list." },
-            to: { type: ["string", "array"], items: { type: "string" },
+            // The chat-uid pattern makes OpenClaw read a JSON-encoded address list as the array it is.
+            to: { anyOf: [{ type: "string", pattern: "^cht_[A-Za-z0-9_-]+$" }, { type: "array", minItems: 1, items: { type: "string" } }],
               description: "An email thread's chat uid to reply in it, or a list of email addresses to start a new thread." },
             subject: { type: "string", minLength: 1, description: "Required when starting a new thread; not used on a reply." },
             body: { type: "string", minLength: 1, description: "The email body." },
