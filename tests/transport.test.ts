@@ -55,7 +55,7 @@ test("a same-second reply after an opener advances the checkpoint and is not rep
     if (url.includes("/messages?")) {
       urls.push(url);
       const query = new URL(url).searchParams;
-      if (query.get("limit") === "20") return Response.json({ data: [opener], has_more: false });
+      if (query.get("limit") === "20") return Response.json({ data: query.get("order") === "arrival" ? [opener] : [], has_more: false });
       if (++reads === 1) {
         for (const socket of server.clients) socket.send(frame);
         return Response.json({ data: [opener], has_more: false });
@@ -66,14 +66,17 @@ test("a same-second reply after an opener advances the checkpoint and is not rep
   });
 
   const turns: string[] = [];
+  const histories: string[][] = [];
   const fixture = { ...account, apiBase, lineUid: "line" };
   const first = abortAfter();
-  await listen(fixture, first.signal, () => {}, async (_chat, message) => {
+  await listen(fixture, first.signal, () => {}, async (_chat, message, _firstContact, history) => {
     turns.push(message.uid);
+    histories.push(history.map(item => item.uid));
     first.abort();
     return "completed";
   });
   assert.deepEqual(turns, ["reply"]);
+  assert.deepEqual(histories, [["opener"]]);
   assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "reply");
 
   await listen(fixture, abortAfter(300).signal, () => {}, async (_chat, message) => {

@@ -52,7 +52,7 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
   ]);
   assert.deepEqual(contexts[1].message.inboundHistory, []);
   assert.deepEqual(fetch.mock.calls.map(call => String(call.arguments[0])).filter(url => url.includes("limit=20")),
-    [`${apiBase}/v1/chats/group/messages?limit=20&starting_after=reply`]);
+    [`${apiBase}/v1/chats/group/messages?order=arrival&limit=20&starting_after=reply`]);
   const facts = contexts[0].supplemental.channelStructuredContext[0].payload;
   assert.deepEqual(facts.participants[0], { name: "Juniper", type: "agent", role: "self" });
 });
