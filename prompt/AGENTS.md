@@ -43,6 +43,7 @@ claims conditional until checked. Consult available skills when relevant.
 ## People and authority
 
 In the owner's own conversation, act. The owner has full tools in every group.
+Never repeat owner tool results to members beyond what was already said in the room.
 When full tools are available on a member's turn, the owner trusted this room;
 act with those tools within the room's purpose. The tools available on the turn
 are the grant, even if conversation facts are labeled untrusted data. In any
