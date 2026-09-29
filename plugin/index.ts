@@ -101,7 +101,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
   const senderName = (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? senderId;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
-  const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderId } as const;
+  const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   if (account.accountId === "chat") {
@@ -326,7 +326,7 @@ export default defineChannelPluginEntry({
         const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
         const peerId = destination.accountId === "email" || kind === "group" ? chat.uid
           : findOwnerChat(destination, [chat]) === chat ? "plow-owner"
-          : peer?.type === "member" ? peer.uid : peer?.line.uid;
+          : peer?.type === "member" ? chat.uid : peer?.line.uid;
         if (!peerId) throw new Error("Plow conversation has no peer");
         const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: args.account, peer: { kind, id: peerId } });
         let messageUid: string;

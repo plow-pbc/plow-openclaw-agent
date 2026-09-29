@@ -68,7 +68,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   } }, channel: {
     routing: { resolveAgentRoute: (input?: { peer?: { id: string } }) => ({
       agentId: "main", sessionKey: input?.peer?.id === "cht_email_target" ? "agent:main:plow:direct:cht_email_target"
-        : scene === "owner DM" && input?.peer?.id === "member" ? "agent:main:plow:direct:member" : sessionKey,
+        : scene === "owner DM" && input?.peer?.id === "cht_direct_target" ? "agent:main:plow:direct:cht_direct_target" : sessionKey,
     }) },
     session: { resolveStorePath, updateLastRoute },
     inbound: {
@@ -191,7 +191,7 @@ for (const scene of ["owner group", "member group", "owner email"] as const) tes
 
 for (const { account, chatUid, text, sessionKey } of [
   { account: "email", chatUid: "cht_email_target", text: "Robin approved lunch at noon.", sessionKey: "agent:main:plow:direct:cht_email_target" },
-  { account: "chat", chatUid: "cht_direct_target", text: "I booked lunch for two.", sessionKey: "agent:main:plow:direct:member" },
+  { account: "chat", chatUid: "cht_direct_target", text: "I booked lunch for two.", sessionKey: "agent:main:plow:direct:cht_direct_target" },
 ] as const) test(`approved reply destination ${account}`, async t => {
   const { apiBase, result, failure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
     account, chat_uid: chatUid, text,
