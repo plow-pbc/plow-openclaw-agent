@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { setTimeout } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -37,8 +38,8 @@ const transcript = async (sessionKey: string) => {
 
 // Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
 async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
-  turn: (dispatch: Dispatch, tool: () => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }) => Promise<void>,
-  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
+  turn: (dispatch: Dispatch, tool: () => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }, config: object) => Promise<void>,
+  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed", alsoEmail = false) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
   const controller = abortAfter();
@@ -76,7 +77,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
       dispatch: async (dispatch: Dispatch & { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
         const tool = () => factories.map(factory => factory({ config, sessionKey: dispatch.route.sessionKey, messageChannel: "plow", agentAccountId: accountId,
           nativeChannelId: dispatch.ctxPayload.conversation.id })).find(tool => tool.name === "plow_send_email")!;
-        await turn(dispatch, tool, channel);
+        await turn(dispatch, tool, channel, config);
         dispatch.replyOptions.onAgentRunTerminalOutcome(terminal);
         if (contexts.length === frames.length) controller.abort();
         return { dispatched: true, dispatchResult: {} };
@@ -86,7 +87,9 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   entry.register(api);
   // Tools run in a separate module instance, as they do in the gateway.
   toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) { factories.push(factory); } });
-  await channel!.gateway.startAccount({ account, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
+  const start = (accountId: string) => channel!.gateway.startAccount({ account: { ...account, accountId }, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
+  // The mailbox's own listener is what learns which chats are email threads.
+  await Promise.all([start(accountId), ...(alsoEmail ? [start("email")] : [])]);
   return { posts, contexts, logs };
 }
 
@@ -157,6 +160,16 @@ test("message refuses the email account from any turn and names plow_send_email"
   });
   assert.equal(refusals.length, 2);
   assert.ok(refusals.every(text => /plow_send_email/.test(text)));
+  assert.deepEqual(posts, []);
+});
+
+test("message from a phone turn to an email thread is refused and names plow_send_email", async t => {
+  let refusal = "";
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, _tool, channel, config) => {
+    await setTimeout(200);
+    await channel.outbound.sendText({ cfg: config, accountId: "chat", to: "plow:thread", text: "hi" }).catch((error: Error) => { refusal = error.message; });
+  }, undefined, undefined, undefined, true);
+  assert.match(refusal, /plow_send_email/);
   assert.deepEqual(posts, []);
 });
 

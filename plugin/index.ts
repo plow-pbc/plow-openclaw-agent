@@ -4,7 +4,7 @@ import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type 
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, isEmailChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
 import { emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
@@ -95,7 +95,7 @@ function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
 async function toolSend(cfg: OpenClawConfig, accountId: string | null | undefined, to: string, text: string, mediaUrls: string[], durable: boolean) {
   const account = plugin.config.resolveAccount(cfg, accountId);
   const turn = activeTurn.getStore();
-  if (!durable && turn && (account.accountId === "email" || turn.accountId === "email")) {
+  if (!durable && turn && (account.accountId === "email" || turn.accountId === "email" || isEmailChat(account, to.replace(/^plow:/i, "")))) {
     throw new Error("Email is sent with plow_send_email, not message.");
   }
   return send(account, to, text, mediaUrls, durable);
@@ -365,16 +365,16 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_reply_to", label: "Reply to a Plow conversation",
-      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat or email conversation on this agent's line. Use the source account and chat uid from the owner escalation.",
+      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat on this agent's phone line. Use the source account and chat uid from the owner escalation.",
       parameters: {
         type: "object", required: ["account", "chat_uid", "text"], additionalProperties: false,
         properties: {
-          account: { type: "string", enum: ["chat", "email"], description: "Source account from the escalation." },
+          account: { type: "string", enum: ["chat"], description: "Source account from the escalation." },
           chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Source chat uid from the escalation." },
           text: { type: "string", minLength: 1, description: "The approved reply to send." },
         },
       },
-      async execute(_id, args: { account: "chat" | "email"; chat_uid: string; text: string }) {
+      async execute(_id, args: { account: string; chat_uid: string; text: string }) {
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
