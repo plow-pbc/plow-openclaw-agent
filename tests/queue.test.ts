@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import entry from "../plugin/index.ts";
@@ -10,7 +12,7 @@ const sender = { type: "member" as const, uid: "owner", role: "owner", display_n
 const chat: Chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
 const inbound = (uid: string): Message => ({ uid, direction: "inbound", sender, body: uid, attachments: [], created_at: "2026-09-29T12:00:00Z" });
 const frame = (message: Message) => JSON.stringify({ event_type: "message_received", event_id: `event-${message.uid}`, chat_id: chat.uid, data: { message } });
-type Lifecycle = { onAdopted: () => Promise<void>; onDeferred: () => boolean; onAbandoned: () => void; abortSignal: AbortSignal };
+type Lifecycle = { onAdopted: () => Promise<void>; onDeferred: () => boolean; onAbandoned: () => void; onSettled?: () => void; abortSignal: AbortSignal };
 
 // The inbound clock lags the outbound clock; HTTP history orders them by timestamp.
 test("catch-up overlaps the checkpoint and deduplicates a late older inbound across restart", async t => {
@@ -64,11 +66,11 @@ test("adoption releases inbound bursts while preserving the running tool context
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
       buildContext: async (value: { messageId: string }) => value,
-      dispatch: async ({ ctxPayload, replyOptions }: { ctxPayload: { messageId: string }; replyOptions: { turnAdoptionLifecycle: Lifecycle; onAgentRunStart: (id: string) => void } }) => {
+      dispatch: async ({ ctxPayload, replyOptions, dispatcherOptions }: { ctxPayload: { messageId: string }; replyOptions: { turnAdoptionLifecycle: Lifecycle; onAgentRunStart: (id: string) => void; onAgentRunTerminalOutcome: (outcome: string) => void }; dispatcherOptions: { typingCallbacks: { onReplyStart: () => Promise<void>; onIdle: () => void } } }) => {
         const uid = ctxPayload.messageId;
         turns.push(uid);
         if (uid !== "first") replyOptions.turnAdoptionLifecycle.onDeferred();
-        if (uid === "first") replyOptions.onAgentRunStart("run-first");
+        if (uid === "first") { replyOptions.onAgentRunStart("run-first"); await dispatcherOptions.typingCallbacks.onReplyStart(); }
         await replyOptions.turnAdoptionLifecycle.onAdopted();
         if (uid === "first") {
           messages.unshift(third, second);
@@ -81,6 +83,7 @@ test("adoption releases inbound bursts while preserving the running tool context
           toolSucceeded = true;
           released.resolve();
         }
+        if (uid === "first") { dispatcherOptions.typingCallbacks.onIdle(); replyOptions.onAgentRunTerminalOutcome("completed"); }
         return { dispatched: true, dispatchResult: uid === "first" ? { deliberateSilentTerminalReply: true } : { deferredToActiveRun: "steer" } };
       },
     } } },
@@ -100,4 +103,60 @@ test("adoption releases inbound bursts while preserving the running tool context
   for (const uid of turns) assert.equal(logs.filter(text => text === `acked chat=home message=${uid}`).length, 1);
   assert.equal(posts.filter(post => post.path.endsWith("/typing") && post.body.action === "start").length, 1);
   assert.equal(posts.filter(post => post.path.endsWith("/typing") && post.body.action === "stop").length, 1);
+});
+
+test("same-sender text batches flush before status and acknowledge every source once", async t => {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter(3000);
+  const messages: Message[] = [];
+  const bodies: string[] = [], acks: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } :
+    url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : messages, has_more: false } : { ticket: "ticket" }));
+  server.on("connection", socket => {
+    const first = inbound("first"); messages.unshift(first); socket.send(frame(first));
+    setTimeout(() => {
+      assert.deepEqual(bodies, [], "first text waits for the same-sender debounce window");
+      for (const uid of ["second", "third", "/status", "fourth", "fifth", "sixth"]) {
+        const message = inbound(uid); messages.unshift(message); socket.send(frame(message));
+      }
+    }, 20);
+  });
+  await listen({ apiBase, accountId: "chat", lineUid: "line" }, controller.signal, text => {
+    if (text.startsWith("acked ")) acks.push(text);
+    if (text === "acked chat=home message=sixth") controller.abort();
+  }, async (_chat, message, _firstContact, _history, adoption) => {
+    bodies.push(message.body);
+    await adoption.onAdopted();
+    return "completed";
+  }, { messages: { inbound: { byChannel: { plow: 100 } } } });
+  assert.deepEqual(bodies, ["first second third", "/status", "fourth fifth sixth"]);
+  for (const uid of ["first", "second", "third", "/status", "fourth", "fifth", "sixth"]) {
+    assert.equal(acks.filter(text => text === `acked chat=home message=${uid}`).length, 1);
+  }
+});
+
+test("an adoption checkpoint failure retries the source after reconnect", { timeout: 40_000 }, async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter(35_000);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/home`, JSON.stringify({ uid: "old", recent: ["old"] }));
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } :
+    url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : [inbound("first"), inbound("old")], has_more: false } : { ticket: "ticket" }));
+  const writer = t.mock.method(fs, "writeFile", async () => { throw new Error("disk failure"); });
+  syncBuiltinESMExports();
+  t.after(() => { writer.mock.restore(); syncBuiltinESMExports(); });
+  const calls: string[] = [], acks: string[] = [];
+  await listen({ apiBase, accountId: "chat", lineUid: "line" }, controller.signal, text => {
+    if (text.startsWith("transport stopped")) { writer.mock.restore(); syncBuiltinESMExports(); }
+    if (text === "acked chat=home message=first") { acks.push(text); controller.abort(); }
+  }, async (_chat, message, _firstContact, _history, adoption) => {
+    calls.push(message.uid);
+    await adoption.onAdopted();
+    return "completed";
+  });
+  assert.deepEqual(calls, ["first", "first"]);
+  assert.equal(acks.length, 1);
+  assert.equal(JSON.parse(await readFile(`${root}/plow-checkpoints/home`, "utf8")).uid, "first");
 });

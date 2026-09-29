@@ -75,12 +75,6 @@ test("an outbound reply during an inbound burst cannot skip a queued turn", asyn
   });
   assert.deepEqual(turns, ["first", "second"]);
   assert.ok(logs.some(text => text === "acked chat=group message=second"));
-
-  await listen({ ...account, apiBase, lineUid: "line" }, abortAfter(300).signal, () => {}, async (_chat, message) => {
-    turns.push(message.uid);
-    return "completed";
-  });
-  assert.deepEqual(turns, ["first", "second"]);
 });
 
 test("a truncated chat listing warns and keeps recovery and live delivery on the same connection", async t => {

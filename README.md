@@ -104,7 +104,7 @@ volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
 identity, owner DM binding, session routing, `messages.visibleReplies`, and
-cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
+cross-conversation memory policy and Plow inbound debounce timing are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
 An existing volume with a fully rendered config is converted on its next boot.
@@ -138,8 +138,12 @@ but no history backfill. The owner's phone DM uses the main session; other DMs
 and groups have separate sessions. A non-owner member's sender ID is their
 normalized messaging handle, stable across chats. The owner uses `plow-owner`.
 
-Chat inbounds are checkpointed when OpenClaw adopts them, so bursts can steer
-the running agent. Shutdown work that has not been adopted can recover; adopted
+Chat inbounds are checkpointed when OpenClaw adopts them. The SDK batches
+same-sender text after two seconds of quiet, using the iMessage channel's debounce
+and command policy. Media and commands dispatch immediately; a command flushes
+preceding text first. The first message anchors a merged turn's reply identity,
+and all source UIDs are checkpointed together. Buffered text keeps the history
+frontier recoverable. Shutdown work that has not been adopted can recover; adopted
 work belongs to OpenClaw and is not redispatched by the transport. Incomplete live turns are logged
 and acknowledged. OpenClaw handles no-reply fallback delivery. An ambiguous
 delivery is not retried; a crash after sending but before checkpointing can

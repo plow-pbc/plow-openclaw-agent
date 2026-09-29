@@ -119,7 +119,7 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic" });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", inbound: { byChannel: { plow: 2000 } } });
   assert.deepEqual(config.meta, {});
 });
 
@@ -168,6 +168,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
   old.messages.groupChat = { visibleReplies: "message_tool" };
+  old.messages.inbound = { byChannel: { plow: 99, slack: 1250 }, debounceMs: 750 };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
@@ -176,6 +177,10 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
   assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
+  assert.equal(owner.messages.inbound.byChannel.slack, 1250);
+  assert.equal(owner.messages.inbound.debounceMs, 750);
+  assert.deepEqual(owner.messages.inbound.byChannel.plow, { $include: join(includes, "plow-debounce.json5") });
+  assert.equal(JSON5.parse(await readFile(join(includes, "plow-debounce.json5"), "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);

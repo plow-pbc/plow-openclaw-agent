@@ -8,6 +8,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { on, once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
+import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
+import { combineMessages } from "./coalesce.ts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 
 export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
@@ -20,7 +23,8 @@ export type Message = {
 };
 export type TurnOutcome = "completed" | "incomplete";
 type ReplyOptions = NonNullable<Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]["replyOptions"]>;
-export type TurnAdoption = NonNullable<ReplyOptions["turnAdoptionLifecycle"]>;
+type AdoptionLifecycle = NonNullable<ReplyOptions["turnAdoptionLifecycle"]>;
+export type TurnAdoption = AdoptionLifecycle & Required<Pick<AdoptionLifecycle, "abortSignal" | "onAdopted" | "onDeferred" | "onAbandoned">>;
 const historyOverlap = 20;
 const recentLimit = 512;
 export type Page<T> = { data: T[]; has_more: boolean };
@@ -123,7 +127,7 @@ async function earliestUnansweredOwnerMessage(account: Account, chat: string, ne
   }
 }
 
-export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], adoption: TurnAdoption) => Promise<TurnOutcome>) {
+export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], adoption: TurnAdoption, messages: Message[]) => Promise<TurnOutcome>, cfg: OpenClawConfig = {}) {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
   const dir = `${root}/plow-checkpoints`;
@@ -132,6 +136,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const recent = new Map<string, Set<string>>();
   const initializedRecent = new Set<string>();
   const dispatches = new Set<Promise<void>>();
+  type Queued = { chat: Chat; message: Message; cursor: string; key?: string };
+  const pending = new Map<string, Queued>();
+  const acknowledgements = new Map<string, Promise<void>>();
+  let debouncer: ReturnType<typeof createChannelInboundDebouncer<Queued>>["debouncer"];
   const discovered = new Map<string, Chat>();
   if (account.accountId === "chat") discoveredChats.set(`${account.apiBase}/${account.lineUid}`, discovered);
   const seen = new Set<string>();
@@ -144,14 +152,22 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     seen.add(id);
     if (seen.size > 512) seen.delete(seen.values().next().value!);
   };
-  const ack = async (chat: string, uid: string, cursor = uid) => {
-    const handled = recent.get(chat) ?? new Set<string>();
-    handled.add(uid);
-    if (handled.size > recentLimit) handled.delete(handled.values().next().value!);
-    await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
-    await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
-    checkpoints.set(chat, cursor);
-    recent.set(chat, handled);
+  const ack = (chat: string, uid: string | string[], cursor = typeof uid === "string" ? uid : uid.at(-1)!) => {
+    const commit = (acknowledgements.get(chat) ?? Promise.resolve()).then(async () => {
+      const uids = typeof uid === "string" ? [uid] : uid;
+      const handled = new Set(recent.get(chat));
+      for (const id of uids) handled.add(id);
+      // A command may finish before buffered text; retain the recoverable frontier.
+      if ([...pending.values()].some(item => item.chat.uid === chat && !uids.includes(item.message.uid))) cursor = checkpoints.get(chat) ?? cursor;
+      while (handled.size > recentLimit) handled.delete(handled.values().next().value!);
+      await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
+      await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
+      checkpoints.set(chat, cursor);
+      recent.set(chat, handled);
+      for (const id of uids) pending.delete(id);
+    }).finally(() => { if (acknowledgements.get(chat) === commit) acknowledgements.delete(chat); });
+    acknowledgements.set(chat, commit);
+    return commit;
   };
   const readCheckpoint = async (chat: string) => {
     const saved = await readFile(`${dir}/${encodeURIComponent(chat)}`, "utf8");
@@ -168,22 +184,20 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     await ack(chat, checkpoint);
     initializedRecent.add(chat);
   };
-  const consume = async (chatUid: string, message: Message, cursor = message.uid) => {
-    if (signal.aborted || seen.has(message.uid) || recent.get(chatUid)?.has(message.uid)) return;
-    const chat = await request<Chat>(account, `/chats/${chatUid}`);
-    if (!accepts(account, chat)) return;
-    discovered.set(chat.uid, chat);
+  const dispatchTurn = async (items: Queued[], lane: Pick<TurnAdoption, "onAdopted" | "onDeferred">) => {
+    const { chat, cursor } = items.at(-1)!;
+    const chatUid = chat.uid;
+    const messages = items.map(item => item.message);
+    const message = combineMessages(messages);
     const owner = findOwnerChat(account, [...discovered.values()]);
-    const sender = message.sender;
     const complete = async () => {
-      if (account.accountId === "chat") await ack(chatUid, message.uid, cursor);
-      remember(message.uid);
-      log(`acked chat=${chatUid} message=${message.uid}`);
+      if (account.accountId === "chat") await ack(chatUid, messages.map(message => message.uid), cursor);
+      for (const message of messages) {
+        pending.delete(message.uid);
+        remember(message.uid);
+        log(`acked chat=${chatUid} message=${message.uid}`);
+      }
     };
-    if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
-      await complete();
-      return;
-    }
     let release!: () => void;
     let reject!: (error: unknown) => void;
     const released = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
@@ -191,12 +205,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let deferred = false;
     let abandoned = false;
     const checkpoint = checkpoints.get(chat.uid);
-    const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
+    const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${messages[0].uid}`);
     let history: Message[] = [];
     const historyVersion = state.versions.get(chat.uid) ?? 0;
     let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
     if (!historyLoaded) {
-      try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
+      try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${messages[0].uid}`)).data.reverse(); historyLoaded = true; }
       catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
     }
     const markContextualized = () => {
@@ -211,10 +225,11 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           await complete();
           adopted = true;
           markContextualized();
+          await lane.onAdopted();
           release();
         } catch (error) { abandoned = true; reject(error); throw error; }
       },
-      onDeferred: () => { deferred = true; return !signal.aborted; },
+      onDeferred: () => { deferred = true; return lane.onDeferred?.() !== false && !signal.aborted; },
       onAbandoned: () => {
         abandoned = true;
         if (!adopted) reject(new Error(`Unadopted turn abandoned chat=${chatUid} message=${message.uid}`));
@@ -223,7 +238,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     signal.addEventListener("abort", release, { once: true });
     const dispatch = (async () => {
       let outcome: TurnOutcome = "incomplete";
-      try { outcome = await turn(chat, message, firstContact, history, adoption); }
+      try { outcome = await turn(chat, message, firstContact, history, adoption, messages); }
       catch (error) {
         if (error instanceof DeliveryUnknownError) {
           log(`turn failed chat=${chat.uid} message=${message.uid}: delivery unknown; reply suppressed, acknowledging without resending`);
@@ -242,10 +257,31 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       await complete();
       markContextualized();
       release();
-    })().catch(error => { reject(error); }).finally(() => dispatches.delete(dispatch));
+    })().catch(error => { reject(error); }).finally(() => {
+      dispatches.delete(dispatch);
+    });
     dispatches.add(dispatch);
     try { await released; }
     finally { signal.removeEventListener("abort", release); }
+  };
+  const consume = async (chatUid: string, message: Message, cursor = message.uid) => {
+    if (signal.aborted || seen.has(message.uid) || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;
+    const chat = await request<Chat>(account, `/chats/${chatUid}`);
+    if (!accepts(account, chat)) return;
+    discovered.set(chat.uid, chat);
+    findOwnerChat(account, [...discovered.values()]);
+    const sender = message.sender;
+    if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
+      if (account.accountId === "chat") await ack(chatUid, message.uid, cursor);
+      remember(message.uid);
+      log(`acked chat=${chatUid} message=${message.uid}`);
+      return;
+    }
+    const senderId = sender.type === "member" ? sender.uid : sender.line.uid;
+    const key = `plow:${account.accountId}:${chat.uid}:${senderId}`;
+    const item = { chat, message, cursor, key };
+    pending.set(message.uid, item);
+    await debouncer.enqueue(item);
   };
   while (!signal.aborted) {
     let socket: WebSocket | undefined;
@@ -256,6 +292,24 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let accepting = true;
     let queueFailed = false;
     let queueError: unknown;
+    const fail = (error: unknown, items: Queued[]) => {
+      for (const item of items) pending.delete(item.message.uid);
+      queueFailed = true;
+      queueError = error;
+      socket?.terminate();
+    };
+    debouncer = createChannelInboundDebouncer<Queued>({
+      cfg, channel: "plow", buildKey: item => item.key,
+      shouldDebounce: item => shouldDebounceTextInbound({
+        cfg, text: item.message.body, hasMedia: item.message.attachments.length > 0, allowDebounce: account.accountId === "chat",
+      }),
+      onFlush: (items, createFlush) => createFlush({
+        lifecycle: { abortSignal: signal, onFailed: error => fail(error, items) },
+        dispatch: lane => dispatchTurn(items, lane),
+      }),
+      onCancel: items => { for (const item of items) pending.delete(item.message.uid); },
+      onError: fail,
+    }).debouncer;
     const enqueue = (chat: string, work: () => Promise<void>) => {
       const previous = queues.get(chat) ?? Promise.resolve();
       const next = previous.then(async () => {
@@ -348,7 +402,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const window = await recover(account, chatUid, checkpoint, historyOverlap);
         const boundary = window.findIndex(message => message.uid === checkpoint);
         for (const [index, message] of window.entries()) {
-          if (!accepting || signal.aborted) break;
+          if (!accepting || signal.aborted || queueFailed) break;
           // An overlapped arrival must not move the frontier behind its previous checkpoint.
           await consume(chatUid, message, index <= boundary ? checkpoint : message.uid);
         }
@@ -358,7 +412,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       }
       for await (const [raw] of frames) {
         const event = JSON.parse(raw.toString());
-        if (event.event_type !== "message_received" || !validChatId(event.chat_id) || seen.has(event.event_id)) continue;
+        if (event.event_type !== "message_received" || !validChatId(event.chat_id)) continue;
         // Persist discovery before queueing: a dropped connection discards unstarted work.
         if (account.accountId === "chat" && !checkpoints.has(event.chat_id)) {
           let checkpoint: string;
@@ -374,8 +428,6 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         enqueue(event.chat_id, async () => {
           if (account.accountId === "chat") await replay(event.chat_id);
           else await consume(event.chat_id, event.data.message);
-          if (!accepting || signal.aborted) return;
-          remember(event.event_id);
         });
       }
       accepting = account.accountId === "email";
@@ -398,6 +450,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       signal.removeEventListener("abort", abort);
       abort();
       await Promise.all(queues.values());
+      for (const key of new Set([...pending.values()].map(item => item.key))) if (key) debouncer.cancelKey(key);
+      await debouncer.drain();
       await Promise.all(dispatches);
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
