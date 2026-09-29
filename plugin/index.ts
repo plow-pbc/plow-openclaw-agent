@@ -53,7 +53,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
   const senderName = sender.type === "member" ? sender.display_name : sender.line.display_name;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
-  const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderIsOwner ? "plow-owner" : senderId } as const;
+  const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   if (account.accountId === "chat") {
