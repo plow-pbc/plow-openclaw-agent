@@ -22,6 +22,11 @@ function consumeDurablePermit(accountId: string | null | undefined, to: string, 
   return false;
 }
 
+function normalizedHandle(handle: string): string {
+  const compact = handle.trim().replace(/[\s().-]/g, "");
+  return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
+}
+
 function ownerDmTurn(account: Account, context: { sessionKey?: string; messageChannel?: string; agentAccountId?: string; nativeChannelId?: string }): ActiveTurn {
   const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
   if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow"
@@ -92,11 +97,11 @@ async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agent
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
-  const senderId = sender.type === "member" ? sender.uid : sender.line.uid;
-  const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === senderId && p.role === "owner");
+  const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
+  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
   const senderName = (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? senderId;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
-  const peer = { kind, id: account.accountId === "email" || kind === "group" ? chat.uid : senderIsOwner ? "plow-owner" : senderId } as const;
+  const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   if (account.accountId === "chat") {
@@ -115,7 +120,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   }));
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
-    from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderIsOwner ? "plow-owner" : senderId, name: senderName, isBot: sender.type === "agent" },
+    from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
     access: { commands: { authorized: senderIsOwner }, ...(!chat.trusted && !senderIsOwner ? { toolPolicy: { allow: ["plow_ask_owner"] } } : {}) },
@@ -321,7 +326,7 @@ export default defineChannelPluginEntry({
         const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
         const peerId = destination.accountId === "email" || kind === "group" ? chat.uid
           : findOwnerChat(destination, [chat]) === chat ? "plow-owner"
-          : peer?.type === "member" ? peer.uid : peer?.line.uid;
+          : peer?.type === "member" ? chat.uid : peer?.line.uid;
         if (!peerId) throw new Error("Plow conversation has no peer");
         const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: args.account, peer: { kind, id: peerId } });
         let messageUid: string;

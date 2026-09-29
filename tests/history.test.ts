@@ -8,7 +8,7 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const self = { type: "agent", relationship: "self", line: { uid: "line", display_name: "Willow" } };
-  const sender = { type: "member", uid: "member", role: "member", display_name: "Guest" };
+  const sender = { type: "member", uid: "member", role: "member", display_name: "Guest", provider_key: ["guest", "example.test"].join("@") };
   const chat = { uid: "group", status: "active", trusted: true, participants: [self, sender, { ...sender, uid: "owner", role: "owner" }] };
   const message = (uid: string, body: string, author = sender) => ({ uid, body, sender: author, direction: "inbound", attachments: [], created_at: "2026-09-19T12:00:00Z" });
   const opener = { ...message("opener", "I'm Flicker. Lunch at Pine Cafe: 12:30 or 12:45?"), sender: self, direction: "outbound" };

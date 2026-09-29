@@ -12,7 +12,7 @@ import { on, once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 
-export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key?: string };
+export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
 export type Agent = { type: "agent"; relationship: string; line: { uid: string; display_name?: string } };
 export type Chat = { uid: string; status: string; trusted: boolean; display_name?: string; participants: (Member | Agent)[] };
 export type Message = {

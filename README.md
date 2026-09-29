@@ -133,7 +133,8 @@ Chat checkpoints survive restarts. Chats omitted from a truncated listing
 recover on their first live frame. Optional history failures still dispatch the
 current message. Email threads have separate sessions, shared by their senders,
 but no history backfill. The owner's phone DM uses the main session; other DMs
-and groups have separate sessions.
+and groups have separate sessions. A non-owner member's sender ID is their
+normalized messaging handle, stable across chats. The owner uses `plow-owner`.
 
 Shutdown-interrupted chat turns can recover. Incomplete live turns are logged
 and acknowledged. OpenClaw handles no-reply fallback delivery. An ambiguous
