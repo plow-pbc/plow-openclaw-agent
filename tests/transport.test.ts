@@ -24,7 +24,7 @@ test("recovery walks older pages to the checkpoint and replays oldest first", as
       : { data: [message("newest"), message("newer")], has_more: true });
   });
   assert.deepEqual((await recover(account, "chat", "acked")).map(m => m.uid), ["missed", "newer", "newest"]);
-  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?limit=50", "http://fixture/v1/chats/chat/messages?limit=50&starting_after=newer"]);
+  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?order=arrival&limit=50", "http://fixture/v1/chats/chat/messages?order=arrival&limit=50&starting_after=newer"]);
 });
 
 test("empty first-install checkpoint still recovers the first missed message", async t => {
@@ -37,6 +37,97 @@ test("a failed history read cannot masquerade as an empty recovery", async t => 
   process.env.PLOW_AGENT_TOKEN = "test-token";
   t.mock.method(globalThis, "fetch", async () => new Response("unavailable", { status: 503 }));
   await assert.rejects(recover(account, "chat", "acked"), /HTTP 503/);
+});
+
+test("a same-second reply after an opener advances the checkpoint and is not replayed on restart", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/group`, "opener");
+  const chat = acceptedChat("group");
+  const opener = { uid: "opener", direction: "outbound", sender: { type: "agent" }, created_at: "2026-08-30T12:00:00.252925Z" };
+  const reply = { ...inbound("reply"), created_at: "2026-08-30T12:00:00Z" };
+  const frame = JSON.stringify({ event_type: "message_received", event_id: "reply-event", chat_id: chat.uid, data: { message: reply } });
+  let reads = 0;
+  const urls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("/chats")) return Response.json({ data: [chat], has_more: false });
+    if (url.endsWith("/chats/group")) return Response.json(chat);
+    if (url.includes("/messages?")) {
+      urls.push(url);
+      const query = new URL(url).searchParams;
+      if (query.get("limit") === "20") return Response.json({ data: [opener], has_more: false });
+      if (++reads === 1) {
+        for (const socket of server.clients) socket.send(frame);
+        return Response.json({ data: [opener], has_more: false });
+      }
+      return Response.json({ data: query.get("order") === "arrival" ? [reply, opener] : [opener, reply], has_more: false });
+    }
+    return Response.json({ ticket: "ticket" });
+  });
+
+  const turns: string[] = [];
+  const fixture = { ...account, apiBase, lineUid: "line" };
+  const first = abortAfter();
+  await listen(fixture, first.signal, () => {}, async (_chat, message) => {
+    turns.push(message.uid);
+    first.abort();
+    return "completed";
+  });
+  assert.deepEqual(turns, ["reply"]);
+  assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "reply");
+
+  await listen(fixture, abortAfter(300).signal, () => {}, async (_chat, message) => {
+    turns.push(message.uid);
+    return "completed";
+  });
+  assert.deepEqual(turns, ["reply"]);
+  assert.ok(urls.filter(url => url.includes("limit=50")).every(url => new URL(url).searchParams.get("order") === "arrival"));
+});
+
+test("an outbound reply during an inbound burst cannot skip a queued turn", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/group`, "old");
+  const chat = acceptedChat("group");
+  const first = inbound("first");
+  const second = inbound("second");
+  const outbound = { uid: "outbound", direction: "outbound", sender: { type: "agent" } };
+  const messages = [first, { uid: "old" }];
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } :
+    url.endsWith("/chats/group") ? chat :
+    url.includes("limit=20") ? { data: [], has_more: false } :
+    url.includes("/messages?") ? { data: messages, has_more: false } : { ticket: "ticket" }));
+  const frame = (message: object, eventId: string) => JSON.stringify({ event_type: "message_received", event_id: eventId, chat_id: chat.uid, data: { message } });
+  const turns: string[] = [];
+  const logs: string[] = [];
+  const firstRun = abortAfter();
+  await listen({ ...account, apiBase, lineUid: "line" }, firstRun.signal, text => logs.push(text), async (_chat, message) => {
+    turns.push(message.uid);
+    if (message.uid === "first") {
+      messages.unshift(outbound, second);
+      for (const socket of server.clients) {
+        socket.send(frame(outbound, "outbound-event"));
+        socket.send(frame(second, "second-event"));
+        const pong = once(socket, "pong");
+        socket.ping();
+        await pong;
+      }
+    } else {
+      assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "first");
+      firstRun.abort();
+    }
+    return "completed";
+  });
+  assert.deepEqual(turns, ["first", "second"]);
+  assert.ok(logs.some(text => text.includes("skipped outbound") && text.includes("message=outbound")));
+  assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "second");
+
+  await listen({ ...account, apiBase, lineUid: "line" }, abortAfter(300).signal, () => {}, async (_chat, message) => {
+    turns.push(message.uid);
+    return "completed";
+  });
+  assert.deepEqual(turns, ["first", "second"]);
 });
 
 test("a truncated chat listing warns and keeps recovery and live delivery on the same connection", async t => {
@@ -52,7 +143,7 @@ test("a truncated chat listing warns and keeps recovery and live delivery on the
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: true } :
     url.endsWith("/chats/group") ? chat :
-    url.endsWith("/messages?limit=50") ? { data: [...(liveSent ? [{ ...missed, uid: "live" }] : []), missed, { uid: "old" }], has_more: false } :
+    url.endsWith("order=arrival&limit=50") ? { data: [...(liveSent ? [{ ...missed, uid: "live" }] : []), missed, { uid: "old" }], has_more: false } :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
   const received: string[] = [];
   const logs: string[] = [];

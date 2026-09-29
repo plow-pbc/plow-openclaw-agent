@@ -3,7 +3,7 @@
  * once a turn finishes, never backwards. Shutdown-interrupted turns stay unacked;
  * terminal failures and uncertain sends are deliberately acknowledged without retry.
  * first:<uid> requests inclusive replay from uid. Recovery and buffered frames
- * dispatch in history order within each chat; stale live frames are ignored.
+ * dispatch in persistence order within each chat; stale live frames are ignored.
  * Completed turns have at-least-once recovery across restart: a crash between
  * send and ack can replay at most one completed turn, duplicating its reply.
  */
@@ -75,13 +75,13 @@ export async function ownerChat(account: Account): Promise<Chat> {
   return chat;
 }
 
-// Pages run newest-first; starting_after means older than the page cursor.
+// Replay pages run newest row first; starting_after means an earlier row id.
 // A first:<uid> checkpoint includes that message, but none of its older history.
 export async function recover(account: Account, chat: string, checkpoint: string): Promise<Message[]> {
   const missed: Message[] = [];
   let cursor = "";
   for (;;) {
-    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50${cursor ? `&starting_after=${cursor}` : ""}`);
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?order=arrival&limit=50${cursor ? `&starting_after=${cursor}` : ""}`);
     for (const message of page.data) {
       if (message.uid === checkpoint) return missed.reverse();
       missed.push(message);
@@ -96,7 +96,7 @@ async function earliestUnansweredOwnerMessage(account: Account, chat: string, ne
   let earliest = newest.uid;
   let cursor = newest.uid;
   for (;;) {
-    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50&starting_after=${cursor}`);
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?order=arrival&limit=50&starting_after=${cursor}`);
     for (const message of page.data) {
       if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
       earliest = message.uid;
@@ -127,15 +127,30 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     checkpoints.set(chat, uid);
   };
   const consume = async (chatUid: string, message: Message, recovered = false) => {
-    if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid) return;
+    if (signal.aborted) return;
+    if (seen.has(message.uid) || checkpoints.get(chatUid) === message.uid) {
+      log(`skipped duplicate chat=${chatUid} message=${message.uid}`);
+      return;
+    }
+    const chat = await request<Chat>(account, `/chats/${chatUid}`);
+    if (!accepts(account, chat)) {
+      log(`skipped unaccepted chat=${chatUid} message=${message.uid}`);
+      return;
+    }
+    discovered.set(chat.uid, chat);
+    if (account.accountId === "chat" && message.direction === "outbound") {
+      remember(message.uid);
+      log(`skipped outbound chat=${chatUid} message=${message.uid}`);
+      return;
+    }
     // Recovery batches are already ordered after their checkpoint. Live frames
     // can lag behind HTTP history; use that same order before dispatch or ack.
     const checkpointUid = checkpoints.get(chatUid)?.replace(/^first:/, "");
     if (!recovered && checkpointUid && checkpointUid !== message.uid &&
-      (await recover(account, chatUid, message.uid)).some(newer => newer.uid === checkpointUid)) return;
-    const chat = await request<Chat>(account, `/chats/${chatUid}`);
-    if (!accepts(account, chat)) return;
-    discovered.set(chat.uid, chat);
+      (await recover(account, chatUid, message.uid)).some(newer => newer.uid === checkpointUid)) {
+      log(`skipped stale chat=${chatUid} message=${message.uid} checkpoint=${checkpointUid}`);
+      return;
+    }
     const owner = findOwnerChat(account, [...discovered.values()]);
     const sender = message.sender;
     if (message.direction === "inbound" && (sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
@@ -246,7 +261,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           try { checkpoint = await readFile(`${dir}/${encodeURIComponent(chat.uid)}`, "utf8"); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
+            const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?order=arrival&limit=1`);
             const newest = page.data[0];
             checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
               ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest)}` : newest?.uid ?? "";
@@ -282,7 +297,11 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       }
       for await (const [raw] of frames) {
         const event = JSON.parse(raw.toString());
-        if (event.event_type !== "message_received" || !validChatId(event.chat_id) || seen.has(event.event_id) || replayed.has(event.data.message.uid)) continue;
+        if (event.event_type !== "message_received" || !validChatId(event.chat_id)) continue;
+        if (seen.has(event.event_id) || replayed.has(event.data.message.uid)) {
+          log(`skipped duplicate chat=${event.chat_id} message=${event.data.message.uid}`);
+          continue;
+        }
         // Persist discovery before queueing: a dropped connection discards unstarted work.
         if (account.accountId === "chat" && !checkpoints.has(event.chat_id)) {
           let checkpoint: string;
@@ -300,6 +319,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           }
           if (!accepting || signal.aborted) return;
           if (!replayed.has(event.data.message.uid)) await consume(event.chat_id, event.data.message);
+          else log(`skipped replayed chat=${event.chat_id} message=${event.data.message.uid}`);
           remember(event.event_id);
         });
       }
