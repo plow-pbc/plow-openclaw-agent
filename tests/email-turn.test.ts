@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { setTimeout } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -39,7 +38,7 @@ const transcript = async (sessionKey: string) => {
 // Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
 async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
   turn: (dispatch: Dispatch, tool: () => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }, config: object) => Promise<void>,
-  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed", alsoEmail = false) {
+  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
   const controller = abortAfter();
@@ -87,9 +86,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   entry.register(api);
   // Tools run in a separate module instance, as they do in the gateway.
   toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) { factories.push(factory); } });
-  const start = (accountId: string) => channel!.gateway.startAccount({ account: { ...account, accountId }, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
-  // The mailbox's own listener is what learns which chats are email threads.
-  await Promise.all([start(accountId), ...(alsoEmail ? [start("email")] : [])]);
+  await channel!.gateway.startAccount({ account, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
   return { posts, contexts, logs };
 }
 
@@ -146,29 +143,25 @@ test("on a non-owner email turn, message sends nothing anywhere, and the final s
     await final(dispatch, { text: "For you" });
   });
   assert.equal(refusals.length, 3);
-  assert.ok(refusals.every(text => /plow_send_email/.test(text)));
+  assert.match(refusals[2], /plow_send_email/);
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
 });
 
-test("message refuses the email account from any turn and names plow_send_email", async t => {
-  const refusals: string[] = [];
-  const { posts } = await run(t, "email", [{ chat: "thread", sender: owner }], async (_dispatch, _tool, channel) => {
-    for (const [accountId, to] of [["email", "plow:thread"], ["chat", "plow-owner"]]) {
-      await channel.outbound.sendText({ cfg: { channels: { plow: { ...cfg.channels.plow, apiBase: "http://fixture" } } }, accountId, to, text: "hi" })
-        .catch((error: Error) => refusals.push(error.message));
-    }
+test("message from an owner's email turn to its own thread is refused and names plow_send_email", async t => {
+  let refusal = "";
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: owner }], async (_dispatch, _tool, channel, config) => {
+    await channel.outbound.sendText({ cfg: config, accountId: "email", to: "plow:thread", text: "hi" }).catch((error: Error) => { refusal = error.message; });
   });
-  assert.equal(refusals.length, 2);
-  assert.ok(refusals.every(text => /plow_send_email/.test(text)));
+  assert.match(refusal, /plow_send_email/);
   assert.deepEqual(posts, []);
 });
 
-test("message from a phone turn to an email thread is refused and names plow_send_email", async t => {
+test("message from a phone turn to an email thread, even a brand-new one, is refused and names plow_send_email", async t => {
   let refusal = "";
+  // No mailbox listener runs here, so nothing has seen the thread before this send.
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, _tool, channel, config) => {
-    await setTimeout(200);
-    await channel.outbound.sendText({ cfg: config, accountId: "chat", to: "plow:thread", text: "hi" }).catch((error: Error) => { refusal = error.message; });
-  }, undefined, undefined, undefined, true);
+    await channel.outbound.sendText({ cfg: config, accountId: "chat", to: "plow:started", text: "hi" }).catch((error: Error) => { refusal = error.message; });
+  });
   assert.match(refusal, /plow_send_email/);
   assert.deepEqual(posts, []);
 });

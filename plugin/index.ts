@@ -4,7 +4,7 @@ import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type 
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, isEmailChat, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
 import { emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
@@ -55,12 +55,17 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
 
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable = false, turn = activeTurn.getStore()) {
   to = to.replace(/^plow:/i, "");
-  if (!durable && (!turn || account.accountId !== turn.accountId ||
-    (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)))) {
-    throw new Error("Native Plow sends must stay in the current conversation.");
-  }
+  const outside = !durable && (!turn || account.accountId !== turn.accountId ||
+    (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)));
+  if (outside && (!turn || to === "plow-owner")) throw new Error("Native Plow sends must stay in the current conversation.");
   if (to === "plow-owner") to = (await ownerChat(account)).uid;
-  if (!accepts(account, await request<Chat>(account, `/chats/${to}`))) {
+  const chat = await request<Chat>(account, `/chats/${to}`);
+  // Email leaves only through plow_send_email; the delivery paths that reach a thread are durable.
+  if (!durable && chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
+    throw new Error("Email is sent with plow_send_email, not message.");
+  }
+  if (outside) throw new Error("Native Plow sends must stay in the current conversation.");
+  if (!accepts(account, chat)) {
     throw new Error("Plow account does not serve this conversation");
   }
   if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
@@ -88,17 +93,6 @@ function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
   if (!peerId) throw new Error("Plow conversation has no peer");
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer: { kind, id: peerId } });
   return { kind, route, routeTo: peerId === "plow-owner" ? peerId : chat.uid } as const;
-}
-
-// The message tool's path only: plugin-initiated durable sends carry a permit, and a turn's final is delivered
-// by receive. A native send stays in its own conversation, so on email it could only reach the thread.
-async function toolSend(cfg: OpenClawConfig, accountId: string | null | undefined, to: string, text: string, mediaUrls: string[], durable: boolean) {
-  const account = plugin.config.resolveAccount(cfg, accountId);
-  const turn = activeTurn.getStore();
-  if (!durable && turn && (account.accountId === "email" || turn.accountId === "email" || isEmailChat(account, to.replace(/^plow:/i, "")))) {
-    throw new Error("Email is sent with plow_send_email, not message.");
-  }
-  return send(account, to, text, mediaUrls, durable);
 }
 
 async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group") {
@@ -268,9 +262,9 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: ctx => toolSend(ctx.cfg, ctx.accountId, ctx.to, ctx.text, [],
+    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [],
       typeof ctx.onPlatformSendDispatch === "function" && consumeDurablePermit(ctx.accountId, ctx.to, ctx.text)),
-    sendMedia: ctx => toolSend(ctx.cfg, ctx.accountId, ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : [], false),
+    sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },
 };
 

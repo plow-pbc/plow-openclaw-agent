@@ -55,8 +55,7 @@ const validChatId = (uid: unknown): uid is string => typeof uid === "string" && 
 
 class AmbiguousOwnerChatError extends Error {}
 
-// Shared across the plugin's module instances, so the outbound adapter can recognise an email chat.
-const discoveredChats = ((globalThis as typeof globalThis & { plowDiscoveredChats?: Map<string, Map<string, Chat>> }).plowDiscoveredChats ??= new Map());
+const discoveredChats = new Map<string, Map<string, Chat>>();
 type HistoryState = { contextualized: Set<string>; versions: Map<string, number> };
 const historyStates = new Map<string, HistoryState>();
 const historyKey = (account: Account) => `${account.apiBase}/${account.accountId}/${account.accountId === "email" ? account.emailLineUid : account.lineUid}`;
@@ -73,10 +72,6 @@ export function findOwnerChat(account: Account, chats: Chat[]): Chat | undefined
     chat.participants.some(p => p.type === "member" && p.role === "owner"));
   if (owners.length > 1) throw new AmbiguousOwnerChatError(`Expected one owner's chat; found ${owners.length}`);
   return owners[0];
-}
-
-export function isEmailChat(account: Account, uid: string): boolean {
-  return Boolean(discoveredChats.get(`${account.apiBase}/${account.emailLineUid}`)?.has(uid));
 }
 
 export async function ownerChat(account: Account): Promise<Chat> {
@@ -127,7 +122,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   await mkdir(dir, { recursive: true });
   const checkpoints = new Map<string, string>();
   const discovered = new Map<string, Chat>();
-  discoveredChats.set(`${account.apiBase}/${account.accountId === "email" ? account.emailLineUid : account.lineUid}`, discovered);
+  if (account.accountId === "chat") discoveredChats.set(`${account.apiBase}/${account.lineUid}`, discovered);
   const seen = new Set<string>();
   const state: HistoryState = { contextualized: new Set(), versions: new Map() };
   const contextualized = state.contextualized;
