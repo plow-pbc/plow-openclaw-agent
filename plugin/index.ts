@@ -151,7 +151,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
-    access: { commands: { authorized: senderIsOwner }, ...(!chat.trusted && !senderIsOwner ? { toolPolicy: { allow: [email ? "plow_send_email" : "plow_ask_owner"] } } : {}) },
+    access: { commands: { authorized: senderIsOwner }, ...((email || !chat.trusted) && !senderIsOwner ? { toolPolicy: { allow: [email ? "plow_send_email" : "plow_ask_owner"] } } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
@@ -284,7 +284,7 @@ export default defineChannelPluginEntry({
   registerCapabilities(api) {
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with account chat and that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
@@ -418,7 +418,7 @@ export default defineChannelPluginEntry({
           if ((args.action ?? "send") !== "send" || args.to !== turn.chat.uid) {
             return refuse(`This email is not from the owner, so plow_send_email can only reply in this thread (to "${turn.chat.uid}"). Your final text reaches the owner.`);
           }
-        } else if (!turn.senderIsOwner && (emailTurn || !turn.chat.trusted)) {
+        } else if (!turn.senderIsOwner && !turn.chat.trusted) {
           return refuse("plow_send_email needs the owner's authority: the owner's own chat, a trusted group, or the owner's own email.");
         }
         if (args.action === "list") {

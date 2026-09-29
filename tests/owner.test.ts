@@ -36,7 +36,7 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   assert.ok(context);
   assert.equal(context.sender.id, role === "owner" ? "plow-owner" : sender.provider_key);
   assert.equal(context.sender.name, sender.display_name);
-  assert.deepEqual(context.access?.toolPolicy, !trusted && role === "member" ? { allow: [kind === "email" ? "plow_send_email" : "plow_ask_owner"] } : undefined);
+  assert.deepEqual(context.access?.toolPolicy, (kind === "email" || !trusted) && role === "member" ? { allow: [kind === "email" ? "plow_send_email" : "plow_ask_owner"] } : undefined);
   assert.equal(toolsDisabled, undefined);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
