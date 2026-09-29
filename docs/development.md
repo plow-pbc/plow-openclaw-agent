@@ -54,3 +54,27 @@ Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-check
 Restore that directory into the replacement volume before booting the agent.
 Without checkpoints, boot silently skips group messages from the outage window;
 trailing unanswered owner DMs replay in order.
+
+## Owner decision context
+
+`plow_ask_owner` renders a human question in an isolated, tool-free inference
+using the configured Plow model, then sends and mirrors that question. The
+render receives human request data rather than the routing-aware session. It
+has no fallback to the tool's proposed text if generation fails. The delivery mirror
+is an assistant transcript entry, visible to session readers; it is not a private
+context channel ([delivery mirror writer](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/infra/outbound/deliver-transcript.ts#L41)).
+The plugin saves each notification's source and original member request in the
+state volume, scoped to the API and phone line. On an owner-DM turn, notifications
+in the loaded phone history (or the quoted reply target) supply structured
+context. No separate pending-request lifecycle is needed; the phone history
+selects the relevant asks, including after an agent restart.
+
+OpenClaw projects `supplemental.channelStructuredContext` into model context
+([inbound projection](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/inbound-context.ts#L115)),
+serializes and neutralizes embedded Markdown fences
+([JSON context formatter](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/channel-prompt-context.ts#L57)),
+and tells the model that structural fields are context while human-authored
+values are untrusted
+([message context instructions](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/inbound-meta.ts#L595)).
+Source fields come from the active turn; member names and request text stay data.
+The visible DM and its mirror contain no injected routing instructions.
