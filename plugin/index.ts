@@ -448,7 +448,7 @@ export default defineChannelPluginEntry({
         }
         if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
         const sent = await requestWithDeliveryState<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
-          mailbox, `/email-lines/${phone.emailLineUid}/messages`, { to: args.to, subject: args.subject, body: args.body }, turn);
+          mailbox, "/chats", { line_uid: phone.emailLineUid, members: args.to, subject: args.subject, body: args.body }, turn);
         // A thread started from an email turn reports to the owner's 1:1, the default.
         // The mail is out: a lost origin only sends later finals to the owner's 1:1, so it never fails the send.
         if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, turn.chat.uid).catch(error => api.logger.info(`plow origin not recorded chat=${sent.chat_uid}: ${(error as Error).name}`));

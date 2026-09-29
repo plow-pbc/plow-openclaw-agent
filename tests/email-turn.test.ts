@@ -52,7 +52,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
     const path = new URL(url).pathname.replace(/^\/v1/, "");
     if (options.method === "POST" && path !== "/ws/ticket" && !path.endsWith("/typing")) {
       posts.push({ path, body: JSON.parse(options.body as string) });
-      return path.startsWith("/email-lines/") ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
+      return path === "/chats" && posts.at(-1)!.body.line_uid === "mail" ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
     }
     if (path === "/chats") return Response.json({ data: Object.values(chats), has_more: false });
     if (forbidden.has(path.split("/")[2])) return Response.json({}, { status: 403 });
@@ -199,7 +199,7 @@ for (const [name, response, expected] of [
   }, response);
   for (const [key, value] of Object.entries(expected)) assert.equal(receipt[key], value);
   assert.match(String(receipt.note ?? receipt.error), /resend|retry/i);
-  assert.deepEqual(posts.map(post => post.path), ["/email-lines/mail/messages"]);
+  assert.deepEqual(posts, [{ path: "/chats", body: { line_uid: "mail", members: ["new@example.com"], subject: "Hello", body: "Opening" } }]);
 });
 
 test("plow_send_email lists threads for the owner and refuses a non-owner in an untrusted chat", async t => {
