@@ -24,7 +24,7 @@ test("recovery walks older pages to the checkpoint and replays oldest first", as
       : { data: [message("newest"), message("newer")], has_more: true });
   });
   assert.deepEqual((await recover(account, "chat", "acked")).map(m => m.uid), ["missed", "newer", "newest"]);
-  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?order=arrival&limit=50", "http://fixture/v1/chats/chat/messages?order=arrival&limit=50&starting_after=newer"]);
+  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?limit=50", "http://fixture/v1/chats/chat/messages?limit=50&starting_after=newer"]);
 });
 
 test("empty first-install checkpoint still recovers the first missed message", async t => {
@@ -45,7 +45,7 @@ test("a same-second reply after an opener advances the checkpoint and is not rep
   await writeFile(`${root}/plow-checkpoints/group`, "opener");
   const chat = acceptedChat("group");
   const opener = { uid: "opener", direction: "outbound", sender: { type: "agent" }, created_at: "2026-08-30T12:00:00.252925Z" };
-  const reply = { ...inbound("reply"), created_at: "2026-08-30T12:00:00Z" };
+  const reply = { ...inbound("reply"), created_at: "2026-08-30T12:00:00.500000Z" };
   const frame = JSON.stringify({ event_type: "message_received", event_id: "reply-event", chat_id: chat.uid, data: { message: reply } });
   let reads = 0;
   const urls: string[] = [];
@@ -55,12 +55,13 @@ test("a same-second reply after an opener advances the checkpoint and is not rep
     if (url.includes("/messages?")) {
       urls.push(url);
       const query = new URL(url).searchParams;
-      if (query.get("limit") === "20") return Response.json({ data: query.get("order") === "arrival" ? [opener] : [], has_more: false });
+      if (query.has("order")) return Response.json({ error: "unsupported order" }, { status: 400 });
+      if (query.get("limit") === "20") return Response.json({ data: [opener], has_more: false });
       if (++reads === 1) {
         for (const socket of server.clients) socket.send(frame);
         return Response.json({ data: [opener], has_more: false });
       }
-      return Response.json({ data: query.get("order") === "arrival" ? [reply, opener] : [opener, reply], has_more: false });
+      return Response.json({ data: [reply, opener], has_more: false });
     }
     return Response.json({ ticket: "ticket" });
   });
@@ -84,7 +85,7 @@ test("a same-second reply after an opener advances the checkpoint and is not rep
     return "completed";
   });
   assert.deepEqual(turns, ["reply"]);
-  assert.ok(urls.filter(url => url.includes("limit=50")).every(url => new URL(url).searchParams.get("order") === "arrival"));
+  assert.ok(urls.every(url => !new URL(url).searchParams.has("order")));
 });
 
 test("an outbound reply during an inbound burst cannot skip a queued turn", async t => {
@@ -146,7 +147,7 @@ test("a truncated chat listing warns and keeps recovery and live delivery on the
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: true } :
     url.endsWith("/chats/group") ? chat :
-    url.endsWith("order=arrival&limit=50") ? { data: [...(liveSent ? [{ ...missed, uid: "live" }] : []), missed, { uid: "old" }], has_more: false } :
+    url.endsWith("/messages?limit=50") ? { data: [...(liveSent ? [{ ...missed, uid: "live" }] : []), missed, { uid: "old" }], has_more: false } :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
   const received: string[] = [];
   const logs: string[] = [];

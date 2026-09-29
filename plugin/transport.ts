@@ -3,7 +3,7 @@
  * once a turn finishes, never backwards. Shutdown-interrupted turns stay unacked;
  * terminal failures and uncertain sends are deliberately acknowledged without retry.
  * first:<uid> requests inclusive replay from uid. Recovery and buffered frames
- * dispatch in persistence order within each chat; stale live frames are ignored.
+ * dispatch in history order within each chat; stale live frames are ignored.
  * Completed turns have at-least-once recovery across restart: a crash between
  * send and ack can replay at most one completed turn, duplicating its reply.
  */
@@ -84,13 +84,13 @@ export async function ownerChat(account: Account): Promise<Chat> {
   return chat;
 }
 
-// Replay pages run newest row first; starting_after means an earlier row id.
+// Pages run newest-first; starting_after means older than the page cursor.
 // A first:<uid> checkpoint includes that message, but none of its older history.
 export async function recover(account: Account, chat: string, checkpoint: string): Promise<Message[]> {
   const missed: Message[] = [];
   let cursor = "";
   for (;;) {
-    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?order=arrival&limit=50${cursor ? `&starting_after=${cursor}` : ""}`);
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50${cursor ? `&starting_after=${cursor}` : ""}`);
     for (const message of page.data) {
       if (message.uid === checkpoint) return missed.reverse();
       missed.push(message);
@@ -105,7 +105,7 @@ async function earliestUnansweredOwnerMessage(account: Account, chat: string, ne
   let earliest = newest.uid;
   let cursor = newest.uid;
   for (;;) {
-    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?order=arrival&limit=50&starting_after=${cursor}`);
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50&starting_after=${cursor}`);
     for (const message of page.data) {
       if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
       earliest = message.uid;
@@ -174,7 +174,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const historyVersion = state.versions.get(chat.uid) ?? 0;
         let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
         if (!historyLoaded) {
-          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?order=arrival&limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
+          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
           catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
         }
         outcome = await turn(chat, message, firstContact, history);
@@ -274,7 +274,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
           try { checkpoint = await readFile(`${dir}/${encodeURIComponent(chat.uid)}`, "utf8"); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?order=arrival&limit=1`);
+            const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
             const newest = page.data[0];
             checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
               ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest)}` : newest?.uid ?? "";
