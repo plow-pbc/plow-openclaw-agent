@@ -50,7 +50,8 @@ MCP tool surface.
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local
 profiles, sessions and memory); do not attempt an in-place database downgrade.
-Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`.
-Restore that directory into the replacement volume before booting the agent.
+Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`
+and `/var/lib/plow/plow-email` (where email threads report).
+Restore those directories into the replacement volume before booting the agent.
 Without checkpoints, boot silently skips group messages from the outage window;
 trailing unanswered owner DMs replay in order.

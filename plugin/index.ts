@@ -197,7 +197,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
                 silent = true;
                 return { messageIds: [] };
               }
-              const target = origin ? await request<Chat>(phone, `/chats/${origin}`)
+              // A recorded origin still gets the final only while it is the owner's DM or a trusted group.
+              const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`) : undefined;
+              const target = recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
                 : await ownerChat(phone).catch(error => { log(`no owner chat: ${(error as Error).message}`); return undefined; });
               deliveredToOwner = true;
               if (!target) {
@@ -248,7 +250,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the account and chat uid for an owner-approved reply to another conversation."] },
+  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the chat uid for an owner-approved reply to another conversation; email goes only through plow_send_email."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
@@ -335,7 +337,7 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_ask_owner", label: "Ask the Plow owner",
-      description: "From an untrusted non-owner turn in a group, direct chat, or email thread, send the sender's request to the owner's main DM. The owner decides there; tell the sender you are checking with them.",
+      description: "From an untrusted non-owner turn in a group or direct chat, send the sender's request to the owner's main DM. The owner decides there; tell the sender you are checking with them.",
       parameters: {
         type: "object", required: ["text"], additionalProperties: false,
         properties: { text: { type: "string", minLength: 1, description: "What the member wants the owner to decide or do." } },
@@ -344,14 +346,14 @@ export default defineChannelPluginEntry({
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
         const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-        if (context.messageChannel !== "plow" || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")
+        if (context.messageChannel !== "plow" || context.agentAccountId !== "chat"
           || !turn || turn.senderIsOwner || turn.chat.trusted
           || context.nativeChannelId !== turn.chat.uid) {
           throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
         const [name, role] = [turn.senderName, turn.senderRole].map(value =>
           JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`));
-        const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(account="${context.agentAccountId}", chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
+        const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
         const ownerSessionKey = "agent:main:main";
         await durableSend(cfg, turn, { agentId: "main", sessionKey: ownerSessionKey }, "chat", "plow-owner", "plow-owner", escalation, "direct");
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
@@ -359,29 +361,27 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_reply_to", label: "Reply to a Plow conversation",
-      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat on this agent's phone line. Use the source account and chat uid from the owner escalation.",
+      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat on this agent's phone line. Use the source chat uid from the owner escalation.",
       parameters: {
-        type: "object", required: ["account", "chat_uid", "text"], additionalProperties: false,
+        type: "object", required: ["chat_uid", "text"], additionalProperties: false,
         properties: {
-          account: { type: "string", enum: ["chat"], description: "Source account from the escalation." },
           chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Source chat uid from the escalation." },
           text: { type: "string", minLength: 1, description: "The approved reply to send." },
         },
       },
-      async execute(_id, args: { account: string; chat_uid: string; text: string }) {
+      async execute(_id, args: { chat_uid: string; text: string }) {
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         const turn = ownerDmTurn(ownerAccount, context);
         if (turn.deliveryUnknown) throw new DeliveryUnknownError();
-        if (args.account === "email") throw new Error("Email is sent with plow_send_email, not plow_reply_to.");
-        const destination = plugin.config.resolveAccount(cfg, args.account);
+        const destination = ownerAccount;
         const chat = await request<Chat>(destination, `/chats/${encodeURIComponent(args.chat_uid)}`);
         if (!accepts(destination, chat)) throw new Error("Plow account does not serve this conversation");
         const { kind, route, routeTo } = sessionRoute(cfg, destination, chat);
         let messageUid: string;
         try {
-          messageUid = await durableSend(cfg, turn, route, args.account, args.chat_uid, routeTo, args.text, kind);
+          messageUid = await durableSend(cfg, turn, route, "chat", args.chat_uid, routeTo, args.text, kind);
         } catch (error) {
           if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, args.chat_uid);
           throw error;
@@ -445,7 +445,8 @@ export default defineChannelPluginEntry({
         const sent = await requestWithDeliveryState<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
           mailbox, `/email-lines/${phone.emailLineUid}/messages`, { to: args.to, subject: args.subject, body: args.body }, turn);
         // A thread started from an email turn reports to the owner's 1:1, the default.
-        if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, turn.chat.uid);
+        // The mail is out: a lost origin only sends later finals to the owner's 1:1, so it never fails the send.
+        if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, turn.chat.uid).catch(error => api.logger.info(`plow origin not recorded chat=${sent.chat_uid}: ${(error as Error).name}`));
         api.logger.info(`plow started email status=${sent.status} chat=${sent.chat_uid ?? "none"}`);
         if (sent.chat_uid) return receipt({ sent: true, chat_uid: sent.chat_uid });
         return receipt({ sent: sent.status === "sent" ? true : "unknown", chat_uid: null, chat_unrecorded_reason: sent.chat_unrecorded_reason ?? null,

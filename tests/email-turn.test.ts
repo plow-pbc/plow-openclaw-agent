@@ -105,7 +105,9 @@ test("a non-owner email turn's final goes to the owner's 1:1, labelled, and noth
   assert.equal(posts[0].body.body, `Re: email "Booking" from Sender (sender@example.com) (thread thread)\n\n${text.trim()}`);
   assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
   const prompt = contexts[0].supplemental.groupSystemPrompt!;
-  assert.match(prompt, /You are Elm, Owner's assistant/);
+  assert.match(prompt, /You are Elm, your owner's assistant/);
+  // Names senders chose never reach system-authority text.
+  assert.doesNotMatch(prompt, /Sender|Owner\b/);
   assert.match(prompt, /plow_send_email, to "thread"/);
   assert.match(prompt, /never sent to this thread/);
 });
@@ -251,4 +253,15 @@ test("the tool names the mailbox persona to sign as", () => {
       if (tool.name === "plow_send_email") description = tool.description;
     } });
   assert.match(description, /sign it as Elm, never as the owner/);
+});
+
+test("a thread's recorded origin that is no longer trusted gets nothing; the final goes to the owner's 1:1", async t => {
+  const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
+  t.after(() => { chats.group.trusted = true; return rm(state, { recursive: true }); });
+  await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
+    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
+  }, undefined, state);
+  chats.group.trusted = false;
+  const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
 });
