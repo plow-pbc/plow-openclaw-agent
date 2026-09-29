@@ -1,9 +1,15 @@
-export async function renderPrompt(prompt: string, mcpUrl: string | null | undefined, token: string, webUrl?: string | null): Promise<string> {
+export async function renderPrompt(prompt: string, mcpUrl: string | null | undefined, token: string, trustMode = process.env.PLOW_THREAD_TRUST ?? "ask", webUrl?: string | null): Promise<string> {
+  const instruction = {
+    ask: "Before starting a group, ask the owner whether the group should have full trust (access to your Mac, mail, files) or be a normal chat. Wait for their answer. Use trusted: true only for full trust; otherwise use trusted: false.",
+    trusted: "The image creator chose full trust for new groups. Create groups with trusted: true without asking about trust.",
+    untrusted: "The image creator chose normal chat for new groups. Create groups with trusted: false without asking about trust.",
+  }[trustMode];
+  if (!instruction) throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
   const dashboard = webUrl
     ? `\nYour dashboard is ${webUrl}. Give that exact address when asked; never guess a dashboard URL.\n`
     : "\nYou have no dashboard. Say so when asked for its URL; never guess one.\n";
-  prompt += dashboard;
-  if (!mcpUrl) return prompt;
+  const rendered = `${prompt}\nThread trust: ${instruction}\n${dashboard}`;
+  if (!mcpUrl) return rendered;
   try {
     const response = await fetch(mcpUrl, {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(5_000),
@@ -24,10 +30,10 @@ export async function renderPrompt(prompt: string, mcpUrl: string | null | undef
       : raw;
     const instructions = JSON.parse(body).result?.instructions;
     if (typeof instructions !== "string" || !instructions.trim()) throw new Error("No Latch instructions");
-    return `${prompt}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${instructions.slice(0, 8_000)}\n\`\`\`\n`;
+    return `${rendered}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${instructions.slice(0, 8_000)}\n\`\`\`\n`;
   } catch {
     // A disconnected Mac must not prevent texting or preserve stale instructions.
     console.warn("plow-boot: Latch instructions unavailable; continuing with the base prompt");
-    return prompt;
+    return rendered;
   }
 }

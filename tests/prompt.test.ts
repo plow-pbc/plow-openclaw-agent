@@ -6,11 +6,30 @@ import { renderPrompt } from "../boot/prompt.ts";
 
 const prompt = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");
 
+test("no Mac still renders the default thread trust instruction", async () => {
+  assert.match(await renderPrompt(prompt, null, "test-token"), /ask the owner whether the group should have full trust/i);
+});
+
+for (const [mode, expected] of [
+  ["ask", /ask the owner whether the group should have full trust/i],
+  ["trusted", /create groups with trusted: true/i],
+  ["untrusted", /create groups with trusted: false/i],
+] as const) test(`thread trust mode ${mode} renders its instruction`, async () => {
+  const rendered = await renderPrompt(prompt, null, "test-token", mode);
+  assert.match(rendered, expected);
+  if (mode !== "ask") assert.doesNotMatch(rendered, /ask the owner whether the group should have full trust/i);
+});
+
+test("invalid thread trust mode fails at boot", async () => {
+  await assert.rejects(renderPrompt(prompt, null, "test-token", "unknown"), /PLOW_THREAD_TRUST/);
+});
+
 test("dashboard address comes from agent identity, including absence", async () => {
-  assert.equal(await renderPrompt(prompt, null, "test-token", "https://dashboard.example/agent"),
-    `${prompt}\nYour dashboard is https://dashboard.example/agent. Give that exact address when asked; never guess a dashboard URL.\n`);
-  assert.equal(await renderPrompt(prompt, null, "test-token", null),
-    `${prompt}\nYou have no dashboard. Say so when asked for its URL; never guess one.\n`);
+  const base = await renderPrompt(prompt, null, "test-token", "ask", null);
+  assert.equal(await renderPrompt(prompt, null, "test-token", "ask", "https://dashboard.example/agent"),
+    base.replace("\nYou have no dashboard. Say so when asked for its URL; never guess one.\n",
+      "\nYour dashboard is https://dashboard.example/agent. Give that exact address when asked; never guess a dashboard URL.\n"));
+  assert.match(base, /You have no dashboard. Say so when asked for its URL/);
 });
 
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
@@ -40,10 +59,10 @@ for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavail
     try {
       const address = server.address();
       assert.ok(address && typeof address !== "string");
-      const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token");
+      const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token", "ask");
       const expectedInstructions = format === "oversized" ? "A".repeat(8_000)
         : "Use plow_list_skills to discover the owner's Mac skills.";
-      const base = `${prompt}\nYou have no dashboard. Say so when asked for its URL; never guess one.\n`;
+      const base = await renderPrompt(prompt, null, "test-token", "ask");
       assert.equal(rendered, ["json", "sse", "oversized"].includes(format)
         ? `${base}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${expectedInstructions}\n\`\`\`\n`
         : base);
@@ -60,8 +79,11 @@ test("the prompt directs existing-chat sends to the native tool", () => {
   assert.ok(!prompt.includes("Do not use message"));
   assert.doesNotMatch(prompt, /message\(action="send"\) is for OTHER conversations/i);
   assert.match(prompt, /message\(action="send"\).*current conversation/i);
-  assert.match(prompt, /omit target for\s+the current conversation/i);
-  assert.match(prompt, /chat uid as target for another conversation/i);
-  assert.match(prompt, /accountId/);
+  assert.match(prompt, /account and chat uid from the escalation/i);
   assert.match(prompt, /plow_start_thread/);
+});
+
+test("the prompt treats offered tools as the owner's trust grant", () => {
+  assert.match(prompt, /tools are available on a member's turn, the owner trusted/i);
+  assert.match(prompt, /plow_reply_to/i);
 });

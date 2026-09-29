@@ -5,18 +5,19 @@ import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
+const outboundEntry = (await import(new URL("../plugin/index.ts?outbound-runtime", import.meta.url).href)).default as typeof entry;
 type Tool = { name: string; execute: (id: string, args: object) => Promise<unknown> };
 
 for (const toolName of ["plow_start_thread", "message"]) {
-  for (const status of [200, 403, 408, 424, 503, "network"] as const) test(`${toolName}: send outcome, status=${status}`, async t => {
+  for (const status of [200, 403, 408, 424, 503, "network"] as const) test(`${toolName}: per-turn delivery state, status=${status}`, async t => {
     const { server, apiBase, abortAfter } = await websocketFixture(t);
     const controller = abortAfter();
     const account = { apiBase, accountId: "chat", lineUid: "line" };
-    const cfg = { channels: { plow: account }, commands: { ownerAllowFrom: ["owner"] } };
+    const cfg = { channels: { plow: { ...account, threadTrust: "ask" } }, commands: { ownerAllowFrom: ["owner"] } };
     const sender = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
-    const chat = { uid: "home", status: "active", participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
+    const chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
     const posts: Record<string, unknown>[] = [];
-    const results: unknown[] = [], errors: string[] = [];
+    const results: unknown[] = [], errors: string[] = [], logs: string[] = [];
     t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
       if (options.method === "POST" && (url.endsWith("/chats") || url.endsWith("/messages"))) {
         posts.push(JSON.parse(options.body as string));
@@ -24,7 +25,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
         return Response.json({ uid: "created" }, { status });
       }
       return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
-        url.endsWith("/chats/home") || url.endsWith("/chats/target") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+        url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
     });
     server.on("connection", (socket: { send: (text: string) => void }) => {
       for (const uid of ["first-request", "later-identical-request"]) socket.send(JSON.stringify({
@@ -32,18 +33,18 @@ for (const toolName of ["plow_start_thread", "message"]) {
         data: { message: { uid, direction: "inbound", sender, body: "Start a group", attachments: [], created_at: new Date().toISOString() } },
       }));
     });
-    let channel: { outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
-    let toolFactory: (context: object) => Tool;
+    let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
+    let outbound: { sendText: (context: object) => Promise<unknown> } | undefined;
+    let tool: Tool;
     const toolExecution = new AsyncResource("host-tool-execution");
     let turns = 0;
     const api = { registrationMode: "full", logger: { info() {} }, on() {},
       registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
       registerTool() {},
-      runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "main" }) }, inbound: {
+      runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
         buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
-          const tool = toolFactory({ config: cfg, sessionId: `session-${turns}`, deliveryContext: { channel: "plow", to: "plow:home" } });
           for (let retry = 0; retry < 4; retry++) {
-            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "target", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 3 ? ["+15550000003"] : retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], chat_uid: "home", body: retry === 2 ? "Meet Saturday?" : "Meet Friday?" })))); }
+            try { results.push(await (toolName === "message" ? outbound!.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", trusted: retry === 3 })))); }
             catch (error) { errors.push((error as Error).message); }
           }
           replyOptions.onAgentRunTerminalOutcome("completed");
@@ -54,28 +55,34 @@ for (const toolName of ["plow_start_thread", "message"]) {
       } } },
     };
     entry.register(api);
+    outboundEntry.register({ ...api, registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; } });
     toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) {
-      toolFactory = factory;
+      const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home" });
+      if (candidate.name === toolName) tool = candidate;
     } });
-    await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
+    await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
     assert.equal(turns, 2);
     assert.equal(posts.length, status === 200 || status === 403 ? 8 : 2);
     if (status === 200) {
       assert.equal(results.length, 8);
       if (toolName === "plow_start_thread") {
         assert.deepEqual(posts[0].members, ["+15550000001", "+15550000002"]);
-        assert.equal(posts[0].trusted, true);
+        assert.equal(posts[0].trusted, false);
+        assert.equal(posts[3].trusted, true);
         assert.equal(posts[0].line_uid, "line");
         assert.equal(posts[0].body, "Meet Friday?");
-        assert.notEqual(posts[0].idempotency_key, posts[1].idempotency_key);
-        assert.notEqual(posts[4].idempotency_key, posts[5].idempotency_key);
-        assert.equal(new Set(posts.map(post => post.idempotency_key)).size, 8);
+        assert.equal(posts[0].idempotency_key, posts[1].idempotency_key);
+        assert.notEqual(posts[0].idempotency_key, posts[3].idempotency_key);
+        assert.equal(posts[4].idempotency_key, posts[5].idempotency_key);
+        assert.equal(new Set(posts.map(post => post.idempotency_key)).size, 6);
         assert.deepEqual((results[0] as { details: unknown }).details, { chat_uid: "created", message_sent: true });
       }
     } else {
       assert.equal(results.length, 0);
       assert.equal(errors.length, 8);
       assert.ok(errors.every(error => status === 403 ? error.includes("HTTP 403") : error.includes("delivery is unknown")));
+      if (status !== 403) for (const uid of ["first-request", "later-identical-request"])
+        assert.ok(logs.some(text => text.startsWith(`turn failed chat=home message=${uid}: delivery unknown`)));
     }
   });
 }
