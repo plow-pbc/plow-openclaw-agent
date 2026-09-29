@@ -50,22 +50,27 @@ MCP tool surface.
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local
 profiles, sessions and memory); do not attempt an in-place database downgrade.
-Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`.
-Restore that directory into the replacement volume before booting the agent.
+Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`
+and `/var/lib/plow/plow-owner-asks` (including unresolved decision routes).
+Restore both directories into the replacement volume before booting the agent.
 Without checkpoints, boot silently skips group messages from the outage window;
 trailing unanswered owner DMs replay in order.
 
 ## Owner decision context
 
 `plow_ask_owner` renders a human question in an isolated, tool-free inference
-using the configured Plow model, then sends and mirrors that question. The
+using the configured Plow model, then sends and mirrors that question with the fixed human provenance “A member asks:”. The
 render receives human request data rather than the routing-aware session. It
 has no fallback to the tool's proposed text if generation fails. The delivery mirror
 is an assistant transcript entry, visible to session readers; it is not a private
 context channel ([delivery mirror writer](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/infra/outbound/deliver-transcript.ts#L41)).
-The plugin saves each notification's source and original member request in the
-state volume, scoped to the API and phone line. On an owner-DM turn, notifications
-in the loaded phone history (or the quoted reply target) supply structured
+The plugin journals the source and original member request before delivery,
+scoped to the API, phone line and literal notification body. Each source request
+has its own record, so identical questions retain all sources. The notification
+uses `format: none` to keep its phone body identical to the journal key; an
+ambiguous send response cannot discard the route. The owner must clarify when
+one question matches several sources. On an owner-DM turn, notifications
+in the loaded literal phone history supply structured
 context. No separate pending-request lifecycle is needed; the phone history
 selects the relevant asks, including after an agent restart.
 
@@ -77,4 +82,5 @@ and tells the model that structural fields are context while human-authored
 values are untrusted
 ([message context instructions](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/inbound-meta.ts#L595)).
 Source fields come from the active turn; member names and request text stay data.
-The visible DM and its mirror contain no injected routing instructions.
+The visible DM and its mirror contain no injected routing instructions; their
+member-derived content is explicitly untrusted and cannot approve an action.

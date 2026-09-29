@@ -159,7 +159,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const historyVersion = state.versions.get(chat.uid) ?? 0;
         let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
         if (!historyLoaded) {
-          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
+          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}${account.accountId === "chat" && chat.uid === owner?.uid ? "&format=text_decorations" : ""}`)).data.reverse(); historyLoaded = true; }
           catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
         }
         outcome = await turn(chat, message, firstContact, history);

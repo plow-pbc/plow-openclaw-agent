@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
@@ -11,28 +11,33 @@ import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextua
 let runtime: PluginRuntime;
 type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; body: string; deliveryUnknown?: boolean };
 type OwnerAsk = {
-  notification_uid: string; source_account: string; source_chat_uid: string; source_message_uid: string;
+  source_account: string; source_chat_uid: string;
   member_name: string; member_role: string; member_request: string;
 };
 
-function ownerAskPath(account: Account, messageUid: string): string {
+function ownerAskDirectory(account: Account, text: string): string {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) throw new Error("OPENCLAW_STATE_DIR is required");
-  const key = createHash("sha256").update(JSON.stringify([account.apiBase, account.lineUid, messageUid])).digest("hex");
-  return `${stateDir}/plow-owner-asks/${key}.json`;
+  const key = createHash("sha256").update(JSON.stringify([account.apiBase, account.lineUid, text])).digest("hex");
+  return `${stateDir}/plow-owner-asks/${key}`;
 }
 
-async function ownerAsks(account: Account, history: Message[]): Promise<OwnerAsk[]> {
-  const asks: OwnerAsk[] = [];
+async function ownerAsks(account: Account, history: Message[]): Promise<(OwnerAsk & { notification_uid: string })[]> {
+  const asks: (OwnerAsk & { notification_uid: string })[] = [];
   for (const message of history) {
     if (message.direction !== "outbound" || message.sender.type !== "agent" || message.sender.relationship !== "self") continue;
-    try { asks.push(JSON.parse(await readFile(ownerAskPath(account, message.uid), "utf8")) as OwnerAsk); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const directory = ownerAskDirectory(account, message.body);
+    try {
+      for (const file of await readdir(directory)) if (file.endsWith(".json")) {
+        const ask = JSON.parse(await readFile(`${directory}/${file}`, "utf8")) as OwnerAsk;
+        asks.push({ ...ask, notification_uid: message.uid });
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   return asks;
 }
 
-type SendPermit = { accountId: string; to: string; text: string };
+type SendPermit = { accountId: string; to: string; text: string; literal?: boolean };
 const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
 const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
@@ -41,9 +46,9 @@ const durableSendPermits = (shared.plowDurableSendPermits ??= new Set<SendPermit
 function consumeDurablePermit(accountId: string | null | undefined, to: string, text: string) {
   for (const permit of durableSendPermits) if (permit.accountId === accountId && permit.to === to && permit.text === text) {
     durableSendPermits.delete(permit);
-    return true;
+    return permit;
   }
-  return false;
+  return undefined;
 }
 
 function normalizedHandle(handle: string): string {
@@ -73,7 +78,7 @@ async function requestWithDeliveryState<T>(account: Account, path: string, body:
   }
 }
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable = false, turn = activeTurn.getStore()) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable?: SendPermit, turn = activeTurn.getStore()) {
   to = to.replace(/^plow:/i, "");
   if (!durable && (!turn || account.accountId !== turn.accountId ||
     (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)))) {
@@ -94,16 +99,16 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
-  const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments }, turn);
+  const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments, ...(durable?.literal ? { format: "none" } : {}) }, turn);
   return { channel: "plow" as const, messageId: sent.uid };
 }
 
-async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group") {
+async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", literal = false) {
   await runtime.channel.session.updateLastRoute({
     storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
-  const permit = { accountId, to, text };
+  const permit = { accountId, to, text, literal };
   let result;
   try {
     result = await activeTurn.run(turn, () => sendDurableMessageBatch({
@@ -143,7 +148,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
   }));
   const asks = account.accountId === "chat" && findOwnerChat(account, [chat]) === chat && senderIsOwner
-    ? await ownerAsks(account, message.reply_to && !history.some(m => m.uid === message.reply_to!.uid) ? [...history, message.reply_to] : history) : [];
+    ? await ownerAsks(account, history) : [];
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
@@ -235,7 +240,7 @@ const plugin: ChannelPlugin<Account> = {
   outbound: {
     deliveryMode: "direct",
     sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [],
-      typeof ctx.onPlatformSendDispatch === "function" && consumeDurablePermit(ctx.accountId, ctx.to, ctx.text)),
+      typeof ctx.onPlatformSendDispatch === "function" ? consumeDurablePermit(ctx.accountId, ctx.to, ctx.text) : undefined),
     sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },
 };
@@ -332,23 +337,20 @@ export default defineChannelPluginEntry({
             { role: "user", content: JSON.stringify({ proposed_question: args.text, member_name: turn.senderName, conversation_name: turn.chat.display_name, member_request: turn.body }) },
           ],
         });
-        const question = completion.choices[0]?.message.content;
-        if (!question?.trim()) throw new Error("Owner question generation returned no text.");
-        const notificationUid = await durableSend(cfg, turn, { agentId: "main", sessionKey: "agent:main:main" }, "chat", "plow-owner", "plow-owner", question, "direct");
+        const renderedQuestion = completion.choices[0]?.message.content;
+        if (!renderedQuestion?.trim()) throw new Error("Owner question generation returned no text.");
+        const question = `A member asks: ${renderedQuestion}`;
         const ask: OwnerAsk = {
-          notification_uid: notificationUid, source_account: turn.accountId, source_chat_uid: turn.chat.uid, source_message_uid: turn.messageUid,
+          source_account: turn.accountId, source_chat_uid: turn.chat.uid,
           member_name: turn.senderName, member_role: turn.senderRole, member_request: turn.body,
         };
-        const path = ownerAskPath(ownerAccount, notificationUid);
-        try {
-          await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-          await writeFile(`${path}.tmp`, JSON.stringify(ask), { mode: 0o600 });
-          await rename(`${path}.tmp`, path);
-        } catch (error) {
-          // The notification was already sent; never let a bookkeeping failure cause a resend.
-          turn.deliveryUnknown = true;
-          throw error;
-        }
+        const source = createHash("sha256").update(JSON.stringify([turn.accountId, turn.chat.uid, turn.messageUid])).digest("hex");
+        const path = `${ownerAskDirectory(ownerAccount, question)}/${source}.json`;
+        await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+        await writeFile(`${path}.tmp`, JSON.stringify(ask), { mode: 0o600 });
+        await rename(`${path}.tmp`, path);
+        // Journal before delivery; even an ambiguous response leaves the phone text routeable.
+        await durableSend(cfg, turn, { agentId: "main", sessionKey: "agent:main:main" }, "chat", "plow-owner", "plow-owner", question, "direct", true);
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));
