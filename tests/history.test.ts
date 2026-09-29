@@ -32,7 +32,7 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: "group" }) },
       inbound: {
         buildContext: async (value: typeof contexts[number]) => {
-          if (!contexts.length) assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`, "utf8"), "opener");
+          if (!contexts.length) assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), "opener");
           contexts.push(value); return {};
         },
         dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {

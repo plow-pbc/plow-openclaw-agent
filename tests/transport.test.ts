@@ -105,7 +105,7 @@ test("a truncated chat listing warns and keeps recovery and live delivery on the
     return "completed";
   });
   assert.deepEqual(received, ["missed", "live"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`, "utf8"), "live");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), "live");
   assert.equal(connections, 1);
   assert.ok(logs.some(text => text.includes("warning") && text.includes("truncated")));
   assert.ok(!logs.some(text => text.startsWith("transport stopped:")));
@@ -142,7 +142,7 @@ for (const owner of [false, true]) test(`a frame arriving while a synthesized ch
   });
   assert.equal(injected, true);
   assert.deepEqual(received, owner ? ["pending", "arriving"] : ["arriving"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`, "utf8"), message.uid);
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), message.uid);
 });
 
 test("recovery beyond the seen cache does not replay buffered frames or rewind the checkpoint", async t => {
@@ -164,7 +164,7 @@ test("recovery beyond the seen cache does not replay buffered frames or rewind t
   const received: string[] = [];
   await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message) => {
     if (message.uid === "live") {
-      assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`, "utf8"), messages.at(-1)!.uid);
+      assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), messages.at(-1)!.uid);
       controller.abort();
     }
     received.push(message.uid);
@@ -195,7 +195,7 @@ for (const outcome of ["completed", "incomplete"] as const) test(`unknown delive
   });
   assert.deepEqual(calls, ["uncertain", "next"]);
   assert.equal(fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).length, 0, "unknown delivery never sends another message");
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`, "utf8"), outcome === "completed" ? "next" : "uncertain");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), outcome === "completed" ? "next" : "uncertain");
 });
 
 for (const scenario of ["waited", "pending", "buffered", "buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history", "unanswered-before-connect", "newer-during-baseline", "interrupted", "answered", "peer", "group", "fresh"]) test(`first contact and restart: ${scenario}`, async t => {
@@ -246,7 +246,7 @@ for (const scenario of ["waited", "pending", "buffered", "buffered-before-read",
       if (scenario === "interrupted") { controller.abort(); return boot ? "completed" : "incomplete"; }
       return "completed";
     });
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`, "utf8"), scenario === "interrupted" && !boot ? "first:first" : twoMessages ? "newer" : "first");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), scenario === "interrupted" && !boot ? "first:first" : twoMessages ? "newer" : "first");
   }
   assert.deepEqual(turns, scenario === "interrupted" ? [{ uid: "first", firstContact: true }, { uid: "first", firstContact: true }] : twoMessages ? [{ uid: "first", firstContact: true }, { uid: "newer", firstContact: false }] : ["waited", "pending", "buffered", "fresh"].includes(scenario) ? [{ uid: "first", firstContact: true }] : []);
 });
@@ -297,7 +297,7 @@ for (const failure of ["incomplete", "throws"] as const) test(`a turn that ${fai
       if (text.startsWith("transport stopped") || (logs.includes("acked chat=home message=later") && logs.includes("acked chat=other message=other-reply"))) controller.abort();
     }, async (_chat, message) => {
       calls.push(message.uid);
-      if (message.uid === "later") priorCheckpoints.push(await checkpointUid(`${root}/plow-checkpoints/home`, "utf8"));
+      if (message.uid === "later") priorCheckpoints.push(await checkpointUid(`${root}/plow-checkpoints/home`));
       if (!recovering && message.uid === "unfinished") {
         if (failure === "throws") throw new Error("turn failed");
         return "incomplete";
@@ -308,8 +308,8 @@ for (const failure of ["incomplete", "throws"] as const) test(`a turn that ${fai
     assert.deepEqual([...calls].sort(), recovering ? [] : ["later", "other-reply", "unfinished"]);
     if (!recovering) assert.ok(calls.indexOf("unfinished") < calls.indexOf("later"));
     assert.deepEqual(priorCheckpoints, recovering ? [] : ["unfinished"]);
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`, "utf8"), "later");
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/other`, "utf8"), "other-reply");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), "later");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/other`), "other-reply");
     assert.equal(connections, recovering ? 2 : 1);
     assert.equal(notices, 0, "OpenClaw owns fallback delivery");
     assert.ok(!logs.some(text => text.startsWith("transport stopped")));
@@ -364,7 +364,7 @@ for (const count of [1, 2]) for (const arrival of ["listing", "baseline"] as con
     return "completed";
   });
   assert.deepEqual(received, messages.slice(1).map(message => message.uid));
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`, "utf8"), messages.at(-1)!.uid);
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), messages.at(-1)!.uid);
 });
 
 test("an omitted checkpointed chat recovers before its first live frame advances progress", async t => {
@@ -389,7 +389,7 @@ test("an omitted checkpointed chat recovers before its first live frame advances
     return "completed";
   });
   assert.deepEqual(delivered, ["missed", "live"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/omitted`, "utf8"), "live");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/omitted`), "live");
 });
 
 test("optional history failure still dispatches the message with empty history", async t => {
@@ -430,7 +430,7 @@ test("optional history failure still dispatches the message with empty history",
   assert.equal(historyReads, 2);
   assert.deepEqual(histories, [[], [inbound]]);
   assert.ok(logs.some(text => text.includes("history") && text.includes("failed")));
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`, "utf8"), "second");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "second");
 });
 
 test("invalidation during a contextualized turn reloads history on the next turn", { timeout: 40_000 }, async t => {
@@ -596,7 +596,7 @@ test("a buffered message preceding the HTTP baseline runs first without replay a
       return "completed";
     });
     assert.deepEqual(turns, ["X", "Y"], "buffered input precedes the newer HTTP baseline and neither replays on restart");
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`, "utf8"), "Y");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), "Y");
   }
 });
 
@@ -631,16 +631,16 @@ for (const source of ["live", "recovery"] as const) test(`a fast chat replies du
       await release.promise;
     } else if (message.uid === "fast") {
       await started.promise;
-      assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`, "utf8"), "old");
+      assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "old");
     } else {
-      assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`, "utf8"), "slow");
+      assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "slow");
     }
     replies.push(message.uid);
     return "completed";
   });
   assert.deepEqual(replies, ["fast", "slow", "second"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`, "utf8"), "fast");
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`, "utf8"), "second");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`), "fast");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "second");
 });
 
 for (const listed of [true, false]) test(`restart mid-turn replays unfinished chats once; listed=${listed}`, async t => {
@@ -673,13 +673,13 @@ for (const listed of [true, false]) test(`restart mid-turn replays unfinished ch
     });
     if (boot === 0) {
       assert.deepEqual(completed, ["fast"]);
-      assert.notEqual(await checkpointUid(`${root}/plow-checkpoints/slow`, "utf8"), "slow");
+      assert.notEqual(await checkpointUid(`${root}/plow-checkpoints/slow`), "slow");
     }
   }
   assert.deepEqual(interrupted, ["slow"]);
   assert.deepEqual(completed, ["fast", "slow", "later"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`, "utf8"), "later");
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`, "utf8"), "fast");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "later");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`), "fast");
 });
 
 test("only four chats run at once and a queued fifth runs when a slot opens", async t => {
@@ -740,7 +740,7 @@ test("checkpoint failure prevents later queued messages from advancing that chat
     if (text.startsWith("transport stopped")) controller.abort();
   }, async (_chat, message) => { calls.push(message.uid); return "completed"; });
   assert.deepEqual(calls, ["first"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`, "utf8"), "old");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "old");
   assert.ok(logs.some(text => text.startsWith("transport stopped")));
 });
 
@@ -759,7 +759,7 @@ for (const discovered of [false, true]) test(`a dropped socket discards queued t
     chat === "busy-0" ? [...(connections > 1 || discovered ? ["live-later"] : []), "recovery-later", chat, "old"] : [chat, "old"];
   t.mock.method(globalThis, "fetch", async (url: string) => {
     if (url.endsWith("/chats")) {
-      if (connections > 1) boundaryOnReconnect = await checkpointUid(`${root}/plow-checkpoints/new`, "utf8").catch(() => "missing");
+      if (connections > 1) boundaryOnReconnect = await checkpointUid(`${root}/plow-checkpoints/new`).catch(() => "missing");
       return Response.json({ data: connections === 1 ? chats.slice(discovered ? 1 : 0, 4) : chats, has_more: false });
     }
     const chat = chats.find(chat => url.includes(`/chats/${chat.uid}`));
@@ -804,8 +804,8 @@ for (const discovered of [false, true]) test(`a dropped socket discards queued t
   assert.equal(connections, 2);
   assert.equal(boundaryOnReconnect, "first:new-first");
   assert.deepEqual(calls.filter(call => call.connection === 2).map(call => call.uid).sort(), ["live-later", "new-first", "new-second", "recovery-later"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/busy-0`, "utf8"), "live-later");
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/new`, "utf8"), "new-second");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/busy-0`), "live-later");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/new`), "new-second");
 });
 
 for (const listed of [false, true]) test(`traversal chat IDs keep checkpoint reads and writes inside their directory; listed=${listed}`, async t => {
@@ -832,7 +832,7 @@ for (const listed of [false, true]) test(`traversal chat IDs keep checkpoint rea
     assert.deepEqual(turns, ["first", "later"]);
     assert.equal(await readFile(`${root}/outside`, "utf8"), "first:later");
     assert.equal(await readFile(`${root}/outside.tmp`, "utf8"), "untouched");
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/${encodeURIComponent(chat.uid)}`, "utf8"), "later");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/${encodeURIComponent(chat.uid)}`), "later");
   }
 });
 

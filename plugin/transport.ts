@@ -136,7 +136,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const recent = new Map<string, Set<string>>();
   const initializedRecent = new Set<string>();
   const dispatches = new Set<Promise<void>>();
-  type Queued = { chat: Chat; message: Message; cursor: string; key?: string };
+  type Queued = { chat: Chat; message: Message; cursor: string; key: string };
   const pending = new Map<string, Queued>();
   const acknowledgements = new Map<string, Promise<void>>();
   let debouncer: ReturnType<typeof createChannelInboundDebouncer<Queued>>["debouncer"];
@@ -450,7 +450,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       signal.removeEventListener("abort", abort);
       abort();
       await Promise.all(queues.values());
-      for (const key of new Set([...pending.values()].map(item => item.key))) if (key) debouncer.cancelKey(key);
+      for (const key of new Set([...pending.values()].map(item => item.key))) debouncer.cancelKey(key);
       await debouncer.drain();
       await Promise.all(dispatches);
     }

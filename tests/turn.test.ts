@@ -127,5 +127,5 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     { name: "Member", type: "member", role: "member" },
     { type: "agent", role: "self" },
   ]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`, "utf8"), ["aborted", "failed", "empty", "native-other"].includes(outcome) ? "first:inbound" : "inbound");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), ["aborted", "failed", "empty", "native-other"].includes(outcome) ? "first:inbound" : "inbound");
 });
