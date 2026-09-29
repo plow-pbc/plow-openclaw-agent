@@ -391,6 +391,44 @@ test("optional history failure still dispatches the message with empty history",
   assert.equal(await readFile(`${root}/plow-checkpoints/chat`, "utf8"), "second");
 });
 
+test("owner history failure leaves the decision unacked and recovers its route after reconnect", { timeout: 65_000 }, async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter(60_000);
+  const owner = { type: "member", uid: "owner", role: "owner" };
+  const self = { type: "agent", relationship: "self", line: { uid: "line" } };
+  const chat = { uid: "home", status: "active", participants: [self, owner] };
+  const question = { uid: "question", direction: "outbound", sender: self, body: "A member asks: Does Thursday work?" };
+  const reply = { uid: "reply", direction: "inbound", sender: owner, body: "yes, Thursday" };
+  await mkdir(`${root}/plow-checkpoints`, { recursive: true });
+  await writeFile(`${root}/plow-checkpoints/home`, question.uid);
+  let historyReads = 0;
+  let connections = 0;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.includes("limit=20")) return ++historyReads === 1
+      ? new Response(null, { status: 503 })
+      : Response.json({ data: [question], has_more: false });
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
+      url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: [reply, question], has_more: false } : { ticket: "ticket" });
+  });
+  server.on("connection", (socket: { send: (text: string) => void }) => {
+    connections++;
+    socket.send(JSON.stringify({ event_type: "message_received", event_id: "reply-event", chat_id: chat.uid, data: { message: reply } }));
+  });
+  const delivered: string[] = [];
+  const histories: Message[][] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message, _first, history) => {
+    assert.equal(await readFile(`${root}/plow-checkpoints/home`, "utf8"), question.uid);
+    delivered.push(message.uid);
+    histories.push(history);
+    controller.abort();
+    return "completed";
+  });
+  assert.deepEqual(delivered, [reply.uid]);
+  assert.deepEqual(histories.map(history => history.map(message => message.uid)), [[question.uid]]);
+  assert.equal(connections, 2);
+  assert.equal(await readFile(`${root}/plow-checkpoints/home`, "utf8"), reply.uid);
+});
+
 test("invalidation during a contextualized turn reloads history on the next turn", { timeout: 40_000 }, async t => {
   const { server, apiBase } = await websocketFixture(t);
   const controller = new AbortController();

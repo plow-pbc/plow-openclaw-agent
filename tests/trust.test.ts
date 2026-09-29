@@ -10,13 +10,13 @@ type Tool = { name: string; execute: (id: string, args: object) => Promise<unkno
 type Scene = "owner DM" | "owner group" | "member group" | "owner email" | "member DM" | "member email";
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  markdownHistory?: string; renderedQuestion?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
+  primaryModel?: string; markdownHistory?: string; renderedQuestion?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
 } = {}) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(60_000);
   const accountId = scene.endsWith("email") ? "email" : "chat";
   const account = { apiBase, accountId, lineUid: "line", emailLineUid: "email-line", threadTrust: options.threadTrust ?? "ask" };
-  const cfg = { agents: { defaults: { model: { primary: "plow/fixture-model" } } }, channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
+  const cfg = { models: { providers: { plow: { baseUrl: `${apiBase}/v1`, models: [{ id: "fixture-model", name: "Fixture" }] } } }, agents: { defaults: { model: { primary: options.primaryModel ?? "plow/fixture-model" } } }, channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const owner = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
   const member = { ...owner, uid: "member", role: "member", display_name: options.senderName ?? "Joe" };
   const self = { type: "agent", relationship: "self", line: { uid: accountId === "email" ? "email-line" : "line" } };
@@ -170,6 +170,13 @@ test("an owner question is rendered independently of routing-rich tool text", as
   assert.equal(failure, undefined);
   assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/cht_home/messages`, body: { body: `A member asks: ${question}`, attachment_uids: [], format: "none" } }]);
   assert.deepEqual((await transcript()).map(entry => entry.message.content[0].text), [`A member asks: ${question}`]);
+});
+
+test("an external owner primary model still permits a Plow decision question", async t => {
+  const question = "Joe in your lunch group asks whether Thursday works.";
+  const { failure, posts } = await runInboundTool(t, "member group", "plow_ask_owner", { text: question }, { primaryModel: "anthropic/owner-choice" });
+  assert.equal(failure, undefined);
+  assert.equal((posts[0]?.body as { body: string })?.body, `A member asks: ${question}`);
 });
 
 test("literal punctuation in an owner question retains its source", async t => {

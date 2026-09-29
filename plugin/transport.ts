@@ -152,16 +152,19 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     const sender = message.sender;
     if (message.direction === "inbound" && (sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
       let outcome: TurnOutcome = "incomplete";
-      try {
-        const checkpoint = checkpoints.get(chat.uid);
-        const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
-        let history: Message[] = [];
-        const historyVersion = state.versions.get(chat.uid) ?? 0;
-        let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
-        if (!historyLoaded) {
-          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}${account.accountId === "chat" && chat.uid === owner?.uid ? "&format=text_decorations" : ""}`)).data.reverse(); historyLoaded = true; }
-          catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
+      const checkpoint = checkpoints.get(chat.uid);
+      const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
+      let history: Message[] = [];
+      const historyVersion = state.versions.get(chat.uid) ?? 0;
+      let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
+      if (!historyLoaded) {
+        try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}${account.accountId === "chat" && chat.uid === owner?.uid ? "&format=text_decorations" : ""}`)).data.reverse(); historyLoaded = true; }
+        catch (error) {
+          if (account.accountId === "chat" && chat.uid === owner?.uid) throw error;
+          log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`);
         }
+      }
+      try {
         outcome = await turn(chat, message, firstContact, history);
         if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
       }

@@ -59,7 +59,7 @@ trailing unanswered owner DMs replay in order.
 ## Owner decision context
 
 `plow_ask_owner` renders a human question in an isolated, tool-free inference
-using the configured Plow model, then sends and mirrors that question with the fixed human provenance “A member asks:”. The
+using the first model in the Plow-owned provider catalog, then sends and mirrors that question with the fixed human provenance “A member asks:”. The
 render receives human request data rather than the routing-aware session. It
 has no fallback to the tool's proposed text if generation fails. The delivery mirror
 is an assistant transcript entry, visible to session readers; it is not a private
@@ -72,7 +72,8 @@ ambiguous send response cannot discard the route. The owner must clarify when
 one question matches several sources. On an owner-DM turn, notifications
 in the loaded literal phone history supply structured
 context. No separate pending-request lifecycle is needed; the phone history
-selects the relevant asks, including after an agent restart.
+selects the relevant asks, including after an agent restart. An owner history
+fetch failure leaves the decision unacknowledged for recovery after reconnect.
 
 OpenClaw projects `supplemental.channelStructuredContext` into model context
 ([inbound projection](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/inbound-context.ts#L115)),
