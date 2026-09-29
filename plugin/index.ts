@@ -8,9 +8,9 @@ import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextua
 
 let runtime: PluginRuntime;
 type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
-const activeTurn = new AsyncLocalStorage<ActiveTurn>();
 type SendPermit = { accountId: string; to: string; text: string };
-const shared = globalThis as typeof globalThis & { plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
+const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
+const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
 // The SDK loads the outbound adapter separately, so durable dispatch grants one exact send across module instances.
 const durableSendPermits = (shared.plowDurableSendPermits ??= new Set<SendPermit>());

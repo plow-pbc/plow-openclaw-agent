@@ -214,9 +214,10 @@ to the owner's main DM. This includes direct chats and email threads, whose
 senders can be anyone. The agent can answer in the source conversation and see
 its history. The owner can switch a
 group with `plow_set_thread_trust` from their main DM, or with the app toggle.
-New groups default to untrusted unless the configured creation mode chooses
-otherwise. `PLOW_THREAD_TRUST=trusted` is the image creator's preset; it does
-not mean the owner answered a trust question for each group.
+New groups require an explicit trust choice in the default `ask` mode.
+`PLOW_THREAD_TRUST=untrusted` creates untrusted groups without asking;
+`PLOW_THREAD_TRUST=trusted` creates trusted groups without asking the owner
+for each group.
 
 Only trust people who may use the owner's resources.
 

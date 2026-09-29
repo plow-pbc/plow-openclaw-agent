@@ -5,6 +5,7 @@ import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
+const outboundEntry = (await import(new URL("../plugin/index.ts?outbound-runtime", import.meta.url).href)).default as typeof entry;
 type Tool = { name: string; execute: (id: string, args: object) => Promise<unknown> };
 
 for (const toolName of ["plow_start_thread", "message"]) {
@@ -32,7 +33,8 @@ for (const toolName of ["plow_start_thread", "message"]) {
         data: { message: { uid, direction: "inbound", sender, body: "Start a group", attachments: [], created_at: new Date().toISOString() } },
       }));
     });
-    let channel: { outbound: { sendText: (context: object) => Promise<unknown> }; gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
+    let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
+    let outbound: { sendText: (context: object) => Promise<unknown> } | undefined;
     let tool: Tool;
     const toolExecution = new AsyncResource("host-tool-execution");
     let turns = 0;
@@ -42,7 +44,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
         buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
           for (let retry = 0; retry < 4; retry++) {
-            try { results.push(await (toolName === "message" ? channel!.outbound.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", trusted: retry === 3 })))); }
+            try { results.push(await (toolName === "message" ? outbound!.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", trusted: retry === 3 })))); }
             catch (error) { errors.push((error as Error).message); }
           }
           replyOptions.onAgentRunTerminalOutcome("completed");
@@ -53,6 +55,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       } } },
     };
     entry.register(api);
+    outboundEntry.register({ ...api, registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; } });
     toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) {
       const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home" });
       if (candidate.name === toolName) tool = candidate;
