@@ -24,6 +24,14 @@ test("invalid thread trust mode fails at boot", async () => {
   await assert.rejects(renderPrompt(prompt, null, "test-token", "unknown"), /PLOW_THREAD_TRUST/);
 });
 
+test("dashboard address comes from agent identity, including absence", async () => {
+  const base = await renderPrompt(prompt, null, "test-token", "ask", null);
+  assert.equal(await renderPrompt(prompt, null, "test-token", "ask", "https://dashboard.example/agent"),
+    base.replace("\nYou have no dashboard. Say so when asked for its URL; never guess one.\n",
+      "\nYour dashboard is https://dashboard.example/agent. Give that exact address when asked; never guess a dashboard URL.\n"));
+  assert.match(base, /You have no dashboard. Say so when asked for its URL/);
+});
+
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
   test(`Latch initialize instructions: ${format}`, async () => {
     let requests = 0;
