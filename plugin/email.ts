@@ -29,15 +29,12 @@ export async function originOf(thread: string): Promise<string | undefined> {
   }
 }
 
-const who = (member: Member) => !member.provider_key || member.display_name === member.provider_key
-  ? member.display_name || member.provider_key || "unnamed" : `${member.display_name || "unnamed"} (${member.provider_key})`;
-
 // Sender-chosen text stays one quoted value, so it cannot add lines to the owner's session.
 const quote = (value: string) => JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`);
 
-// The one line that tells the owner, and the chat's session, which email a delivered final is about.
-export function emailHeader(chat: Chat, sender: Member | Agent) {
-  return `Re: email ${quote(chat.display_name || "(no subject)")} from ${quote(sender.type === "member" ? who(sender) : sender.line.display_name || sender.line.uid)} (thread ${chat.uid})`;
+// Which email a delivered final is about, as the Hermes image labels it: subject and sender's address.
+export function emailLabel(chat: Chat, sender: Member | Agent) {
+  return `Email ${quote(chat.display_name || "(no subject)")} from ${quote(sender.type === "member" ? sender.provider_key || sender.display_name : sender.line.display_name || sender.line.uid)}`;
 }
 
 // The footer every mail carries, naming who wrote it and for whom.

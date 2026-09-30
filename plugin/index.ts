@@ -6,7 +6,7 @@ import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/p
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
-import { emailFooter, emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
+import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
@@ -226,7 +226,10 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
               // Durable, so the final is also recorded in the session of the chat it lands in. Trimmed,
               // because the durable send trims its text and its permit matches the exact text.
               const { kind, route, routeTo } = sessionRoute(cfg, phone, target);
-              const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${emailHeader(chat, sender)}\n\n${text}`.trim(), kind);
+              const label = emailLabel(chat, sender);
+              const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind);
+              // People see no chat ids; the model in that chat learns the thread's, to reply there.
+              runtime.system.enqueueSystemEvent(`${label} is email thread ${chat.uid}; reply there with plow_send_email to "${chat.uid}".`, { sessionKey: route.sessionKey });
               log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
               return { messageIds: [sent] };
             }
