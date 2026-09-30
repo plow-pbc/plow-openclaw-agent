@@ -184,35 +184,33 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     const messages = items.map(item => item.message);
     const message = combineMessages(messages);
     const owner = findOwnerChat(account, [...discovered.values()]);
-    if (message.direction === "inbound" && (message.sender.type === "member" || (account.accountId === "chat" && message.sender.relationship === "peer"))) {
-      let outcome: TurnOutcome = "incomplete";
-      try {
-        const checkpoint = checkpoints.get(chat.uid);
-        const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
-        let history: Message[] = [];
-        const historyVersion = state.versions.get(chat.uid) ?? 0;
-        let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
-        if (!historyLoaded) {
-          try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
-          catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
-        }
-        outcome = await turn(chat, message, firstContact, history, messages, ingress);
-        if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
+    let outcome: TurnOutcome = "incomplete";
+    try {
+      const checkpoint = checkpoints.get(chat.uid);
+      const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
+      let history: Message[] = [];
+      const historyVersion = state.versions.get(chat.uid) ?? 0;
+      let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
+      if (!historyLoaded) {
+        try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
+        catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
       }
-      catch (error) {
-        if (error instanceof DeliveryUnknownError) {
-          // The provider may have accepted it; advance rather than replay a send.
-          log(`turn failed chat=${chat.uid} message=${message.uid}: delivery unknown; reply suppressed, acknowledging without resending`);
-          outcome = "completed";
-        } else log(`turn failed chat=${chat.uid} message=${message.uid}: ${(error as Error).name}`);
+      outcome = await turn(chat, message, firstContact, history, messages, ingress);
+      if (historyLoaded && (state.versions.get(chat.uid) ?? 0) === historyVersion) contextualized.add(chat.uid);
+    }
+    catch (error) {
+      if (error instanceof DeliveryUnknownError) {
+        // The provider may have accepted it; advance rather than replay a send.
+        log(`turn failed chat=${chat.uid} message=${message.uid}: delivery unknown; reply suppressed, acknowledging without resending`);
+        outcome = "completed";
+      } else log(`turn failed chat=${chat.uid} message=${message.uid}: ${(error as Error).name}`);
+    }
+    if (outcome !== "completed") {
+      if (signal.aborted) {
+        log(`turn aborted chat=${chat.uid} message=${message.uid}; left unacked`);
+        return;
       }
-      if (outcome !== "completed") {
-        if (signal.aborted) {
-          log(`turn aborted chat=${chat.uid} message=${message.uid}; left unacked`);
-          return;
-        }
-        log(`turn incomplete chat=${chat.uid} message=${message.uid}; acknowledging`);
-      }
+      log(`turn incomplete chat=${chat.uid} message=${message.uid}; acknowledging`);
     }
     if (account.accountId === "chat") await ack(chat.uid, messages.map(message => message.uid), cursor);
     for (const source of messages) {
