@@ -9,10 +9,10 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; body: string; deliveryUnknown?: boolean };
+type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; body: string; deliveryUnknown?: boolean };
 type OwnerAsk = {
   source_account: string; source_chat_uid: string;
-  member_name: string; member_role: string; member_request: string;
+  member_name: string; member_request: string;
 };
 
 function ownerAskDirectory(account: Account, text: string): string {
@@ -171,7 +171,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship, body };
+  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, body };
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
@@ -352,7 +352,7 @@ export default defineChannelPluginEntry({
         const question = `A member asks: ${renderedQuestion}`;
         const ask: OwnerAsk = {
           source_account: turn.accountId, source_chat_uid: turn.chat.uid,
-          member_name: turn.senderName, member_role: turn.senderRole, member_request: turn.body,
+          member_name: turn.senderName, member_request: turn.body,
         };
         const source = createHash("sha256").update(JSON.stringify([turn.accountId, turn.chat.uid, turn.messageUid])).digest("hex");
         const path = `${ownerAskDirectory(ownerAccount, question)}/${source}.json`;
@@ -366,12 +366,12 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_reply_to", label: "Reply to a Plow conversation",
-      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat or email conversation on this agent's line. Use the source account and chat uid from the owner escalation.",
+      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat or email conversation on this agent's line. Use the source account and chat uid from Owner decision requests context.",
       parameters: {
         type: "object", required: ["account", "chat_uid", "text"], additionalProperties: false,
         properties: {
-          account: { type: "string", enum: ["chat", "email"], description: "Source account from the escalation." },
-          chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Source chat uid from the escalation." },
+          account: { type: "string", enum: ["chat", "email"], description: "Source account from Owner decision requests context." },
+          chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Source chat uid from Owner decision requests context." },
           text: { type: "string", minLength: 1, description: "The approved reply to send." },
         },
       },
