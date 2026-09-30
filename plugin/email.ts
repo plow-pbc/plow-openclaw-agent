@@ -40,6 +40,12 @@ export function emailHeader(chat: Chat, sender: Member | Agent) {
   return `Re: email ${quote(chat.display_name || "(no subject)")} from ${quote(sender.type === "member" ? who(sender) : sender.line.display_name || sender.line.uid)} (thread ${chat.uid})`;
 }
 
+// Whether the closing line already names the persona as a whole word, in any case ("Al" is not "Alex").
+export function namesPersona(body: string, persona: string) {
+  const name = persona.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${name}(?![\\p{L}\\p{N}])`, "iu").test(body.split("\n").at(-1)!);
+}
+
 // System-authority text: only the mailbox's own persona and chat uid, never names senders chose.
 export function emailTurnPrompt(chat: Chat, persona: string) {
   return [

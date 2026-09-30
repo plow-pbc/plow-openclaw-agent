@@ -5,7 +5,7 @@ import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/p
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
-import { emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
+import { emailHeader, emailTurnPrompt, namesPersona, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
@@ -437,9 +437,10 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
-        // The tool signs every mail as the mailbox persona, so no sign-off is the model's to choose.
+        // The tool signs every mail as the mailbox persona, once: a closing line that already names it stays.
         // Trimmed, because a durable send trims its text and its permit matches the exact text.
-        const body = persona ? `${args.body.trim()}\n\n${persona}` : args.body.trim();
+        const unsigned = args.body.trim();
+        const body = persona && !namesPersona(unsigned, persona) ? `${unsigned}\n\n${persona}` : unsigned;
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);

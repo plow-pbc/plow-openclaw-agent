@@ -5,6 +5,7 @@ import { test, type TestContext } from "node:test";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import entry from "../plugin/index.ts";
+import { namesPersona } from "../plugin/email.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
@@ -290,4 +291,18 @@ for (const [name, persona, sent] of [
     await tool().execute("call", { to: "thread", body: "Thursday works.\n" });
   });
   assert.deepEqual(posts.map(post => [post.path, post.body.body]), [["/chats/thread/messages", sent]]);
+});
+
+test("a closing line that already names the persona is not signed twice", () => {
+  for (const [closing, persona, named] of [
+    ["Elm", "Elm", true], ["— elm (on behalf of Alex)", "Elm", true], ["Thanks, Elm", "Elm", true],
+    ["Elmer", "Elm", false], ["Thanks, Alex", "Al", false], ["Thursday works.", "Elm", false],
+  ] as const) assert.equal(namesPersona(`Hi.\n\n${closing}`, persona), named, `${closing} as ${persona}`);
+});
+
+test("plow_send_email keeps a sign-off that already names the persona", async t => {
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    await tool().execute("call", { to: "thread", body: "Thursday works.\n\n— Elm (on behalf of Alex)\n" });
+  });
+  assert.deepEqual(posts.map(post => post.body.body), ["Thursday works.\n\n— Elm (on behalf of Alex)"]);
 });
