@@ -437,25 +437,24 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
-        // As on the Hermes image: a mailbox with a persona signs every mail with it on the closing line.
-        if (persona && !args.body.trim().split("\n").at(-1)!.includes(persona)) {
-          return refuse(`This sends from ${persona}'s mailbox, even when your owner says 'from me' or approves a draft. Write as ${persona} on their behalf and end body with a sign-off line containing ${persona}. Never sign as your owner. Correct the body and call again; nothing was sent.`);
-        }
+        // The tool signs every mail as the mailbox persona, so no sign-off is the model's to choose.
+        // Trimmed, because a durable send trims its text and its permit matches the exact text.
+        const body = persona ? `${args.body.trim()}\n\n${persona}` : args.body.trim();
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);
-          if (args.to === turn.chat.uid) await requestWithDeliveryState(mailbox, `/chats/${args.to}/messages`, { body: args.body }, turn);
+          if (args.to === turn.chat.uid) await requestWithDeliveryState(mailbox, `/chats/${args.to}/messages`, { body }, turn);
           else {
             // From another conversation, a durable send also records the reply in the thread's session.
             const { kind, route, routeTo } = sessionRoute(cfg, mailbox, chat);
-            await durableSend(cfg, turn, route, "email", args.to, routeTo, args.body, kind);
+            await durableSend(cfg, turn, route, "email", args.to, routeTo, body, kind);
           }
           api.logger.info(`plow sent email chat=${args.to}`);
           return receipt({ sent: true, chat_uid: args.to });
         }
         if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
         const sent = await requestWithDeliveryState<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
-          mailbox, "/chats", { line_uid: phone.emailLineUid, members: args.to, subject: args.subject, body: args.body }, turn);
+          mailbox, "/chats", { line_uid: phone.emailLineUid, members: args.to, subject: args.subject, body }, turn);
         // A thread started from an email turn reports to the owner's 1:1, the default.
         // The mail is out: a lost origin only sends later finals to the owner's 1:1, so it never fails the send.
         if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, turn.chat.uid).catch(error => api.logger.info(`plow origin not recorded chat=${sent.chat_uid}: ${(error as Error).name}`));
@@ -466,7 +465,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person and sign it as ${persona || "yourself"}, never as the owner, even for 'from me' or an approved draft. End body with a sign-off line containing ${persona || "your persona name"}; a closing line without it is refused. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. Do not sign it; the tool adds your signature. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {
