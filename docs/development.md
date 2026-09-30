@@ -85,5 +85,6 @@ values are untrusted
 ([message context instructions](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/inbound-meta.ts#L595)).
 Source fields come from the active turn; member names and request text stay data.
 The tool schema and prompt tell the calling model to write only a human question.
-The plugin does not validate or rewrite that draft. Member-derived questions are
-untrusted and cannot approve an action.
+The plugin rejects drafts containing Plow IDs before journaling or sending, asking
+the calling model to rewrite them. Accepted drafts are sent verbatim. Original member
+words remain in model-only untrusted context and cannot approve an action.

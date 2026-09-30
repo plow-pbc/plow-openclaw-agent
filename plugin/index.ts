@@ -337,6 +337,9 @@ export default defineChannelPluginEntry({
           throw new Error("Asking the owner requires an active untrusted non-owner turn.");
         }
         if (turn.deliveryUnknown) throw new DeliveryUnknownError();
+        if (/\b(?:cht|cp|msg|ln|agt|att|rxn|evt|whk|wst|agi)\\?_[A-Za-z0-9_-]+/.test(args.text)) {
+          throw new Error("Owner questions must not contain Plow IDs. Rewrite using human names and conversation topics, then call plow_ask_owner again.");
+        }
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         const question = args.text;
         const ask: OwnerAsk = {

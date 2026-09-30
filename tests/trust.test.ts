@@ -96,7 +96,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
           result = await (ctx.sourceChat === parallelChat.uid ? parallelTool! : tool!).execute("call", args);
           outcomes.set(ctx.sourceChat, true);
         } catch (error) { failure = error; outcomes.set(ctx.sourceChat, false); }
-        if (options.deliveryFails || options.deliveryStatus || options.trustUpdateFails) {
+        if (options.retryText || options.deliveryFails || options.deliveryStatus || options.trustUpdateFails) {
           try {
             if (options.retryText || options.deliveryStatus) await tool!.execute("retry", options.retryText ? { ...args, text: options.retryText } : args);
             else await channel!.outbound.sendText({ cfg, accountId, to: chat.uid, text: "Retry" });
@@ -192,6 +192,26 @@ test("an owner question is sent verbatim without a model configuration", async t
   assert.equal(failure, undefined);
   assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/cht_home/messages`, body: { body: question, attachment_uids: [], format: "none" } }]);
   assert.deepEqual((await transcript()).map(entry => entry.message.content[0].text), [question.trim()]);
+});
+
+test("owner questions containing Plow IDs are rejected before sending or journaling", async t => {
+  for (const id of ["cht_source", "cp_member", "msg_inbound", "ln_p4", "agt_agent", "att_file", "rxn_reaction", "evt_event", "whk_webhook", "wst_ticket", "agi_invite", "cht\\_XIWt5nB0N4UwIxnq2kCy3w"]) {
+    const { root, failure, posts } = await runInboundTool(t, "member group", "plow_ask_owner", { text: `Joe asks about lunch in ${id}. Does Thursday work?` });
+    assert.match((failure as Error)?.message, /Plow IDs.*Rewrite/);
+    assert.deepEqual(posts, []);
+    await assert.rejects(readdir(`${root}/plow-owner-asks`), { code: "ENOENT" });
+  }
+});
+
+test("a model can rewrite an ID-bearing owner question in the same turn", async t => {
+  const question = "Joe in your lunch group asks whether Thursday works.";
+  const { apiBase, failure, retryFailure, posts, root, transcript } = await runInboundTool(t, "member group", "plow_ask_owner",
+    { text: "Joe asks about lunch in cht_source." }, { retryText: question });
+  assert.match((failure as Error)?.message, /Plow IDs.*Rewrite/);
+  assert.equal(retryFailure, undefined);
+  assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/cht_home/messages`, body: { body: question, attachment_uids: [], format: "none" } }]);
+  assert.equal((await readdir(`${root}/plow-owner-asks`, { recursive: true })).filter(file => file.endsWith(".json")).length, 1);
+  assert.deepEqual((await transcript()).map(entry => entry.message.content[0].text), [question]);
 });
 
 test("literal punctuation in an owner question retains its source", async t => {
