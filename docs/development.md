@@ -58,12 +58,11 @@ trailing unanswered owner DMs replay in order.
 
 ## Owner decision context
 
-`plow_ask_owner` renders a human question in an isolated, tool-free inference
-using the first model in the Plow-owned provider catalog, then sends and mirrors that question with the fixed human provenance “A member asks:”. The
-render receives human request data rather than the routing-aware session. It
-has no fallback to the tool's proposed text if generation fails. The delivery mirror
-is an assistant transcript entry, visible to session readers; it is not a private
-context channel ([delivery mirror writer](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/infra/outbound/deliver-transcript.ts#L41)).
+`plow_ask_owner` sends the calling model's `text` argument verbatim, preserving
+it across the SDK's whitespace normalization. It makes no separate model call
+and adds no routing text. OpenClaw mirrors the human question. The delivery mirror
+is a visible assistant transcript entry, not a private context channel
+([delivery mirror writer](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/infra/outbound/deliver-transcript.ts#L41)).
 The plugin journals the source and original member request before delivery,
 scoped to the API, phone line and literal notification body. Each source request
 has its own record, so identical questions retain all sources. The notification
@@ -85,5 +84,6 @@ and tells the model that structural fields are context while human-authored
 values are untrusted
 ([message context instructions](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/auto-reply/reply/inbound-meta.ts#L595)).
 Source fields come from the active turn; member names and request text stay data.
-The visible DM and its mirror contain no injected routing instructions; their
-member-derived content is explicitly untrusted and cannot approve an action.
+The tool schema and prompt tell the calling model to write only a human question.
+The plugin does not validate or rewrite that draft. Member-derived questions are
+untrusted and cannot approve an action.

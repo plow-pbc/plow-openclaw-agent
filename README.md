@@ -210,7 +210,7 @@ loopback interface.
 Trust controls tool access per turn. In a trusted group, every sender can
 use the agent's tools, including the owner's Mac, mail and files. In any
 untrusted conversation, the owner still has full tools; other senders can reply
-and use only `plow_ask_owner`, which posts a rendered human question
+and use only `plow_ask_owner`, which posts the calling model’s human question verbatim
 to the owner's main DM. Source account and chat UID reach the model privately on
 the owner's reply; member-derived notification text is untrusted data. This includes direct chats and email threads, whose
 senders can be anyone. The agent can answer in the source conversation and see
