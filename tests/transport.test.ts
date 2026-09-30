@@ -155,7 +155,7 @@ test("recovery beyond the seen cache does not replay buffered frames or rewind t
   let historyReads = 0;
   const messages = Array.from({ length: 514 }, (_, i) => ({ uid: `message-${i}`, direction: "inbound", sender: { type: "member" } }));
   t.mock.method(globalThis, "fetch", async (url: string) => {
-    if (url.includes("/messages?")) for (const socket of server.clients) {
+    if (!controller.signal.aborted && url.includes("/messages?")) for (const socket of server.clients) {
       for (const message of [messages[0], { ...messages[0], uid: "live" }]) socket.send(JSON.stringify({ event_type: "message_received", event_id: message.uid, chat_id: chat.uid, data: { message } }));
       await new Promise<void>(resolve => { socket.once("pong", resolve); socket.ping(); });
     }

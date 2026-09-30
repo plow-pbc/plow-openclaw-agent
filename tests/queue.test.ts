@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { listen, type Account, type Chat, type Message } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
@@ -68,4 +68,23 @@ test("same-sender text batches flush before status and acknowledge every source 
   for (const uid of ["first", "second", "third", "/status", "fourth", "fifth", "sixth"]) {
     assert.equal(acks.filter(text => text === `acked chat=home message=${uid}`).length, 1);
   }
+});
+
+test("a delayed sender batch cannot rewind a newer completed command checkpoint", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/home`, JSON.stringify({ uid: "old", recent: ["old"] }));
+  const status = { ...inbound("/status"), sender: { ...sender, uid: "other", role: "member", provider_key: "+15550000002" } };
+  const group = { ...chat, participants: [...chat.participants, status.sender] };
+  const messages = [status, inbound("second"), inbound("first"), inbound("old")];
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [group], has_more: false } :
+    url.endsWith("/chats/home") ? group : url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : messages, has_more: false } : { ticket: "ticket" }));
+  const controller = abortAfter();
+  const turns: string[] = [];
+  await listen({ apiBase, accountId: "chat", lineUid: "line" }, controller.signal, text => {
+    if (text === "acked chat=home message=second") controller.abort();
+  }, async (_chat, message) => { turns.push(message.body); return "completed"; }, { messages: { inbound: { byChannel: { plow: 100 } } } });
+  assert.deepEqual(turns, ["/status", "first second"]);
+  assert.equal(JSON.parse(await readFile(`${root}/plow-checkpoints/home`, "utf8")).uid, "/status");
 });

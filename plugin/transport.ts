@@ -153,6 +153,9 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   };
   const ack = async (chat: string, uid: string | string[], cursor = typeof uid === "string" ? uid : uid.at(-1)!) => {
     const uids = typeof uid === "string" ? [uid] : uid;
+    const checkpoint = checkpoints.get(chat);
+    if (checkpoint && !checkpoint.startsWith("first:") && !cursor.startsWith("first:") && checkpoint !== cursor &&
+      (await recover(account, chat, cursor)).some(newer => newer.uid === checkpoint)) cursor = checkpoint;
     const handled = new Set(recent.get(chat));
     for (const id of uids) handled.add(id);
     while (handled.size > 512) handled.delete(handled.values().next().value!);
@@ -218,11 +221,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       log(`acked chat=${chat.uid} message=${source.uid}`);
     }
   };
-  const consume = async (chatUid: string, message: Message, recovered = false, cursor = message.uid) => {
+  const consume = async (chatUid: string, message: Message, cursor = message.uid) => {
     if (signal.aborted || seen.has(message.uid) || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;
-    const checkpoint = checkpoints.get(chatUid)?.replace(/^first:/, "");
-    if (!recovered && checkpoint && checkpoint !== message.uid &&
-      (await recover(account, chatUid, message.uid)).some(newer => newer.uid === checkpoint)) cursor = checkpoint;
     const chat = await request<Chat>(account, `/chats/${chatUid}`);
     if (!accepts(account, chat)) return;
     discovered.set(chat.uid, chat);
@@ -357,7 +357,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const boundary = window.findIndex(message => message.uid === checkpoint);
         for (const [index, message] of window.entries()) {
           if (!accepting || signal.aborted) break;
-          await consume(chatUid, message, true, index <= boundary ? checkpoint : message.uid);
+          await consume(chatUid, message, index <= boundary ? checkpoint : message.uid);
           replayed.add(message.uid);
         }
         recoveredChats.add(chatUid);
