@@ -5,7 +5,7 @@ import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/p
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
-import { emailHeader, emailTurnPrompt, namesPersona, originOf, recordOrigin } from "./email.ts";
+import { emailFooter, emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
@@ -437,10 +437,10 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
-        // The tool signs every mail as the mailbox persona, once: a closing line that already names it stays.
-        // Trimmed, because a durable send trims its text and its permit matches the exact text.
-        const unsigned = args.body.trim();
-        const body = persona && !namesPersona(unsigned, persona) ? `${unsigned}\n\n${persona}` : unsigned;
+        // Every mail carries a footer saying who wrote it. Trimmed, because a durable send trims its
+        // text and its permit matches the exact text.
+        const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
+        const body = `${args.body.trim()}\n\n${emailFooter(persona, owner?.type === "member" ? owner.display_name : undefined)}`;
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);
@@ -466,7 +466,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. Do not sign it; the tool adds your signature. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {

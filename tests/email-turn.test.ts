@@ -5,7 +5,7 @@ import { test, type TestContext } from "node:test";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import entry from "../plugin/index.ts";
-import { namesPersona } from "../plugin/email.ts";
+import { emailFooter } from "../plugin/email.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
@@ -175,7 +175,7 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
   assert.deepEqual(results.map(result => Boolean(result.isError)), [true, true, true, false]);
   assert.ok(results.slice(0, 3).every(result => JSON.parse(result.content[0].text).success === false));
   assert.deepEqual(JSON.parse(results[3].content[0].text), { sent: true, chat_uid: "thread" });
-  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\nElm" } }]);
+  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co" } }]);
 });
 
 test("a thread started from a trusted group reports its finals to that group, recorded in the group's session", async t => {
@@ -202,7 +202,7 @@ for (const [name, response, expected] of [
   }, response);
   for (const [key, value] of Object.entries(expected)) assert.equal(receipt[key], value);
   assert.match(String(receipt.note ?? receipt.error), /resend|retry/i);
-  assert.deepEqual(posts, [{ path: "/chats", body: { line_uid: "mail", members: ["new@example.com"], subject: "Hello", body: "Opening\n\nElm" } }]);
+  assert.deepEqual(posts, [{ path: "/chats", body: { line_uid: "mail", members: ["new@example.com"], subject: "Hello", body: "Opening\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co" } }]);
 });
 
 test("plow_send_email lists threads for the owner and refuses a non-owner in an untrusted chat", async t => {
@@ -228,7 +228,7 @@ test("a reply sent to a thread from the owner's DM lands there and is recorded i
   });
   assert.deepEqual(receipt, { sent: true, chat_uid: "thread" });
   assert.deepEqual(posts.map(post => post.path), ["/chats/thread/messages"]);
-  assert.deepEqual(await transcript("agent:main:plow:email:direct:thread"), ["Thursday works.\n\nElm"]);
+  assert.deepEqual(await transcript("agent:main:plow:email:direct:thread"), ["Thursday works.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co"]);
 });
 
 test("a thread's recorded origin that is no longer trusted gets nothing; the final goes to the owner's 1:1", async t => {
@@ -281,9 +281,9 @@ test("a failed read of the owner's 1:1 fails the delivery instead of dropping it
 });
 
 for (const [name, persona, sent] of [
-  ["signed with the persona", "Elm", "Thursday works.\n\nElm"],
-  ["unsigned without a persona", undefined, "Thursday works."],
-] as const) test(`plow_send_email adds the signature itself: ${name}`, async t => {
+  ["footer naming the persona and owner", "Elm", "Thursday works.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co"],
+  ["Plow footer without a persona", undefined, "Thursday works.\n\n--\nSent by Plow · plow.co"],
+] as const) test(`plow_send_email adds its footer: ${name}`, async t => {
   const saved = cfg.channels.plow.emailName;
   if (persona) cfg.channels.plow.emailName = persona; else delete (cfg.channels.plow as { emailName?: string }).emailName;
   t.after(() => { cfg.channels.plow.emailName = saved; });
@@ -293,16 +293,9 @@ for (const [name, persona, sent] of [
   assert.deepEqual(posts.map(post => [post.path, post.body.body]), [["/chats/thread/messages", sent]]);
 });
 
-test("a closing line that already names the persona is not signed twice", () => {
-  for (const [closing, persona, named] of [
-    ["Elm", "Elm", true], ["— elm (on behalf of Alex)", "Elm", true], ["Thanks, Elm", "Elm", true],
-    ["Elmer", "Elm", false], ["Thanks, Alex", "Al", false], ["Thursday works.", "Elm", false],
-  ] as const) assert.equal(namesPersona(`Hi.\n\n${closing}`, persona), named, `${closing} as ${persona}`);
-});
 
-test("plow_send_email keeps a sign-off that already names the persona", async t => {
-  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
-    await tool().execute("call", { to: "thread", body: "Thursday works.\n\n— Elm (on behalf of Alex)\n" });
-  });
-  assert.deepEqual(posts.map(post => post.body.body), ["Thursday works.\n\n— Elm (on behalf of Alex)"]);
+test("the footer names the owner when known, says an AI assistant otherwise, and falls back to Plow", () => {
+  assert.equal(emailFooter("Elm", "Alex"), "--\nSent by Elm, Alex's AI assistant on Plow · plow.co");
+  assert.equal(emailFooter("Elm", ""), "--\nSent by Elm, an AI assistant on Plow · plow.co");
+  assert.equal(emailFooter(undefined, "Alex"), "--\nSent by Plow · plow.co");
 });
