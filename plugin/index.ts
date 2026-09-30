@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
@@ -202,13 +203,21 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
               }
               // A recorded origin still gets the final only while it is the owner's DM or a trusted group.
               // An origin this agent can no longer read is a lost origin: the 1:1 gets the final.
-              const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`).catch(error => {
-                if (error instanceof HttpError && [403, 404].includes(error.status)) return undefined;
-                throw error;
-              }) : undefined;
-              const target = recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
-                // Read fresh: a cached roster can be stale, and a failed read is not proof there is no 1:1.
-                : findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
+              const resolveTarget = async () => {
+                const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`).catch(error => {
+                  if (error instanceof HttpError && [403, 404].includes(error.status)) return undefined;
+                  throw error;
+                }) : undefined;
+                return recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
+                  // Read fresh: a cached roster can be stale, and a failed read is not proof there is no 1:1.
+                  : findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
+              };
+              // Nothing has been sent yet, so a failed lookup is safe to retry; the email listener has no replay.
+              let target: Chat | undefined;
+              for (let attempt = 1; ; attempt++) {
+                try { target = await resolveTarget(); break; }
+                catch (error) { if (attempt === 3) throw error; await delay(500); }
+              }
               deliveredToOwner = true;
               if (!target) {
                 log(`dropped final chat=${chat.uid} message=${message.uid}: nowhere to deliver`);

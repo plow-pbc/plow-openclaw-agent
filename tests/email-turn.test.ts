@@ -5,7 +5,6 @@ import { test, type TestContext } from "node:test";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import entry from "../plugin/index.ts";
-import { emailFooter } from "../plugin/email.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
@@ -31,8 +30,8 @@ const chats: Record<string, { uid: string; status: string; trusted: boolean; dis
 };
 // Chats this agent's credential can no longer read: their GET answers 403.
 const forbidden = new Set<string>();
-// Set inside a turn to make the chat listing fail from then on.
-let listingFails = false;
+// Set inside a turn to make the next N chat listings fail.
+let listingFailures = 0;
 const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail", emailName: "Elm" } } };
 const transcript = async (sessionKey: string) => {
   const entry = getSessionEntry({ agentId: "main", sessionKey });
@@ -57,7 +56,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
       posts.push({ path, body: JSON.parse(options.body as string) });
       return path === "/chats" && posts.at(-1)!.body.line_uid === "mail" ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
     }
-    if (path === "/chats") return listingFails ? Response.json({}, { status: 503 }) : Response.json({ data: Object.values(chats), has_more: false });
+    if (path === "/chats") return listingFailures-- > 0 ? Response.json({}, { status: 503 }) : Response.json({ data: Object.values(chats), has_more: false });
     if (forbidden.has(path.split("/")[2])) return Response.json({}, { status: 403 });
     // Only an email thread's newest message is served: the listing reads it for last activity.
     if (path.endsWith("/messages")) return Response.json(new URL(url).searchParams.get("limit") !== "1" || !["thread", "other", "started"].includes(path.split("/")[2]) ? { data: [], has_more: false } : { data: [{ uid: "newest", direction: "outbound", sender: self("mail"), body: "Earlier", attachments: [], created_at: "2026-09-28T12:00:00Z" }], has_more: false });
@@ -269,10 +268,20 @@ test("a NO_REPLY line beside an email final is not delivered to the owner", asyn
   assert.deepEqual(posts.map(post => post.body.body), [`Re: email "Booking" from "Sender (sender@example.com)" (thread thread)\n\nMorgan asked about Thursday.`]);
 });
 
-test("a failed read of the owner's 1:1 fails the delivery instead of dropping it as delivered", async t => {
-  t.after(() => { listingFails = false; });
+test("a transient failed read of the owner's 1:1 is retried and the final still arrives", async t => {
+  t.after(() => { listingFailures = 0; });
   const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
-    listingFails = true;
+    listingFailures = 1;
+    await final(dispatch, { text: "For you" });
+  });
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+  assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
+});
+
+test("a persistently failed read of the owner's 1:1 fails the delivery instead of dropping it as delivered", async t => {
+  t.after(() => { listingFailures = 0; });
+  const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    listingFailures = Infinity;
     await final(dispatch, { text: "For you" }).catch(() => {});
   });
   assert.deepEqual(posts, []);
@@ -280,22 +289,17 @@ test("a failed read of the owner's 1:1 fails the delivery instead of dropping it
   assert.ok(!logs.some(line => line.includes("nowhere to deliver")));
 });
 
-for (const [name, persona, sent] of [
-  ["footer naming the persona and owner", "Elm", "Thursday works.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co"],
-  ["Plow footer without a persona", undefined, "Thursday works.\n\n--\nSent by Plow · plow.co"],
+for (const [name, persona, ownerName, sent] of [
+  ["persona and owner", "Elm", "Owner", "Thursday works.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co"],
+  ["persona, owner unnamed", "Elm", "", "Thursday works.\n\n--\nSent by Elm, an AI assistant on Plow · plow.co"],
+  ["no persona", undefined, "Owner", "Thursday works.\n\n--\nSent by Plow · plow.co"],
 ] as const) test(`plow_send_email adds its footer: ${name}`, async t => {
   const saved = cfg.channels.plow.emailName;
   if (persona) cfg.channels.plow.emailName = persona; else delete (cfg.channels.plow as { emailName?: string }).emailName;
-  t.after(() => { cfg.channels.plow.emailName = saved; });
+  owner.display_name = ownerName;
+  t.after(() => { cfg.channels.plow.emailName = saved; owner.display_name = "Owner"; });
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
     await tool().execute("call", { to: "thread", body: "Thursday works.\n" });
   });
   assert.deepEqual(posts.map(post => [post.path, post.body.body]), [["/chats/thread/messages", sent]]);
-});
-
-
-test("the footer names the owner when known, says an AI assistant otherwise, and falls back to Plow", () => {
-  assert.equal(emailFooter("Elm", "Alex"), "--\nSent by Elm, Alex's AI assistant on Plow · plow.co");
-  assert.equal(emailFooter("Elm", ""), "--\nSent by Elm, an AI assistant on Plow · plow.co");
-  assert.equal(emailFooter(undefined, "Alex"), "--\nSent by Plow · plow.co");
 });
