@@ -48,7 +48,7 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   assert.equal(context.access?.commands?.authorized, role === "owner");
   const command = body === "/status" && kind !== "email" ? { kind: "text-slash", authorized: role === "owner", body } : undefined;
   assert.deepEqual(context.command, command);
-  assert.equal(replyMode, command && !command.authorized ? "message_tool_only" : "automatic");
+  assert.equal(replyMode, command && !command.authorized && trusted ? "message_tool_only" : "automatic");
   assert.equal(context.conversation.id, "chat");
   const peer = { kind: kind === "group" ? "group" : "direct", id: kind === "direct" && role === "owner" && kind !== "email" ? "plow-owner" : "chat" };
   assert.deepEqual(routingPeer, peer);

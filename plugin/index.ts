@@ -149,7 +149,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
         replyOptions: {
           ...(!chat.trusted && !senderIsOwner ? { disableTools: true } : {}),
-          sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
+          sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
           onObservedReplyDelivery: () => { observedReplyDelivery = true; },
           onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
         },
