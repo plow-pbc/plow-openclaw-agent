@@ -156,10 +156,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const handled = new Set(recent.get(chat));
       handled.add(uid);
       while (handled.size > 512) handled.delete(handled.values().next().value!);
+      recent.set(chat, handled);
       await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
       await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
       checkpoints.set(chat, cursor);
-      recent.set(chat, handled);
     });
     checkpointWrites.set(chat, write.catch(() => {}));
     return write;

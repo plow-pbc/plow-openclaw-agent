@@ -693,6 +693,9 @@ test("a failed adoption write does not poison a later in-flight acknowledgement"
   assert.ok(logs.some(text => text.startsWith("transport stopped")));
   assert.equal(logs.filter(text => text.startsWith("acked chat=chat message=later ")).length, 1);
   assert.equal(logs.filter(text => text.startsWith("acked chat=chat message=first ")).length, 0);
+  const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
+  assert.ok(saved.recent.includes("first"), "the next durable write must retain the already-adopted source");
+  assert.ok(saved.recent.includes("later"));
 });
 
 for (const listed of [false, true]) test(`traversal chat IDs keep checkpoint reads and writes inside their directory; listed=${listed}`, async t => {

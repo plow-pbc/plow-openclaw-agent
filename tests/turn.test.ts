@@ -9,11 +9,11 @@ const require = createRequire(new URL("../plugin/package.json", import.meta.url)
 const { emitDiagnosticEvent } = await import(require.resolve("openclaw/plugin-sdk/diagnostic-runtime"));
 type Dispatch = {
   cfg: { messages?: { visibleReplies?: string } };
-  replyOptions: { sourceReplyDeliveryMode?: "automatic" | "message_tool_only"; onAgentRunTerminalOutcome: (outcome: string) => void; onObservedReplyDelivery?: () => void };
+  replyOptions: { disableTools?: boolean; sourceReplyDeliveryMode?: "automatic" | "message_tool_only"; onAgentRunTerminalOutcome: (outcome: string) => void; onObservedReplyDelivery?: () => void };
   delivery: { observeMessageSent?: boolean; preparePayload?: (payload: { text: string; isError?: boolean; isFallbackNotice?: boolean }, info: { kind: "final" }) => { text: string } | null; deliver: (payload: { text: string }) => Promise<unknown> };
 };
 
-for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "silent", "duplicate", "native-source", "native-source-final", "native-source-plus-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "reminder-note", "observed", "queued", "deferred"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
+for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "slash-final", "silent", "duplicate", "native-source", "native-source-final", "native-source-plus-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "reminder-note", "observed", "queued", "deferred"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -22,7 +22,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const fetch = t.mock.method(globalThis, "fetch", async (url: string, _init?: RequestInit) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") || url.endsWith("/chats/other") ? chat :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket", uid: "reply" }));
-  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender, body: "hello", attachments: [], created_at: new Date().toISOString() } } })));
+  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender, body: outcome === "slash-final" ? "/status" : "hello", attachments: [], created_at: new Date().toISOString() } } })));
   const logs: string[] = [];
   let observation: boolean | undefined;
   let nativeOtherFailure: unknown;
@@ -48,7 +48,8 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
           else await dispatch.delivery.deliver({ text: "fallback answer" });
         }
         if (outcome === "delivered") { observation = dispatch.delivery.observeMessageSent; await dispatch.delivery.deliver({ text: "reply" }); }
-        if (outcome === "plain-final") {
+        if (outcome === "plain-final" || outcome === "slash-final") {
+          if (outcome === "slash-final") assert.equal(dispatch.replyOptions.disableTools, true);
           if (dispatch.replyOptions.sourceReplyDeliveryMode === "automatic") await dispatch.delivery.deliver({ text: "plain reply" });
           else strandedRetry = () => channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "chat", text: "plain reply" });
         }
@@ -72,15 +73,15 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
         }
         if (outcome === "observed") dispatch.replyOptions.onObservedReplyDelivery?.();
         if (outcome === "duplicate") emitDiagnosticEvent({ type: "message.processed", channel: "plow", messageId: "inbound", sessionKey: "main", outcome: "skipped", reason: "duplicate" });
-        if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice" && outcome !== "plain-final") controller.abort();
+        if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice" && outcome !== "plain-final" && outcome !== "slash-final") controller.abort();
         // The host withholds final text after a message-tool send.
-        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", observedReplyDelivery: outcome === "native-source" || outcome === "native-source-final", queuedFinal: outcome === "queued", counts: { final: ["delivered", "plain-final", "fallback-notice", "error-notice", "terminal-notice", "reminder-note"].includes(outcome) ? 1 : 0 }, deferredToActiveRun: outcome === "deferred" ? "followup" : undefined, finalText: outcome === "native-source-final" ? "final reply" : undefined } };
+        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", observedReplyDelivery: outcome === "native-source" || outcome === "native-source-final", queuedFinal: outcome === "queued", counts: { final: ["delivered", "plain-final", "slash-final", "fallback-notice", "error-notice", "terminal-notice", "reminder-note"].includes(outcome) ? 1 : 0 }, deferredToActiveRun: outcome === "deferred" ? "followup" : undefined, finalText: outcome === "native-source-final" ? "final reply" : undefined } };
       } },
     } },
   });
   assert.ok(channel);
   await channel.gateway.startAccount({ account, cfg: { messages: { visibleReplies: "automatic" } }, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); if (text.startsWith("acked")) controller.abort(); } } });
-  if (outcome === "plain-final") {
+  if (outcome === "plain-final" || outcome === "slash-final") {
     assert.equal(strandedRetry, undefined);
     await strandedRetry?.();
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
@@ -117,7 +118,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   assert.equal(context.sender.id, sender.provider_key);
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
   assert.equal(context.message.bodyForAgent, undefined);
-  assert.equal(context.message.rawBody, "hello");
+  assert.equal(context.message.rawBody, outcome === "slash-final" ? "/status" : "hello");
   const [factsEntry] = context.supplemental.channelStructuredContext;
   assert.equal(factsEntry.label, "Conversation facts (untrusted data)");
   // The model reads the payload as rendered JSON.
