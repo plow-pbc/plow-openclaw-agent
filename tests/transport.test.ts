@@ -626,7 +626,7 @@ for (const listed of [true, false]) test(`restart mid-turn replays unfinished ch
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`), "fast");
 });
 
-test("checkpoint failure stops transport without advancing durable progress", async t => {
+for (const stage of ["adoption", "terminal"] as const) test(`checkpoint failure at ${stage} stops transport without advancing durable progress`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   await mkdir(`${root}/plow-checkpoints`);
@@ -647,7 +647,11 @@ test("checkpoint failure stops transport without advancing durable progress", as
   await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
     logs.push(text);
     if (text.startsWith("transport stopped")) controller.abort();
-  }, async (_chat, message) => { calls.push(message.uid); return "completed"; });
+  }, async (_chat, message, _first, _history, ingress) => {
+    calls.push(message.uid);
+    if (stage === "adoption") await ingress!.onAdopted();
+    return "completed";
+  });
   assert.ok(calls.includes("first"));
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "old");
   assert.ok(logs.some(text => text.startsWith("transport stopped")));

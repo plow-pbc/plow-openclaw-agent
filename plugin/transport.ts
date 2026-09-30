@@ -210,6 +210,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         outcome = "completed";
       } else log(`turn failed chat=${chat.uid} message=${message.uid}: ${(error as Error).name}`);
     }
+    await acknowledged;
     if (outcome === "incomplete") {
       if (signal.aborted) {
         log(`turn aborted chat=${chat.uid} message=${message.uid}; left unacked`);
