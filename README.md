@@ -211,8 +211,9 @@ Trust controls tool access per turn. In a trusted group, every sender can
 use the agent's tools, including the owner's Mac, mail and files. In any
 untrusted conversation, the owner still has full tools; other senders get replies
 only, with no tools. This includes direct chats and email threads, whose senders
-can be anyone. A new request needs the owner's OK in the same thread; the owner
-approves there and the agent acts there. An owner answering in their DM is
+can be anyone. If the owner is absent, tool-requiring requests cannot be approved
+there. When the owner is present, a new request needs their OK in the same thread;
+the owner approves there and the agent acts there. An owner answering in their DM is
 pointed back to that thread. The owner can switch a group with
 `plow_set_thread_trust` from their main DM, or with the app toggle.
 New groups require an explicit trust choice in the default `ask` mode.
