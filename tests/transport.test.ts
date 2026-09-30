@@ -657,6 +657,44 @@ for (const stage of ["adoption", "terminal"] as const) test(`checkpoint failure 
   assert.ok(logs.some(text => text.startsWith("transport stopped")));
 });
 
+test("a failed adoption write does not poison a later in-flight acknowledgement", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/chat`, "old");
+  const chat = acceptedChat("chat");
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") ? chat :
+    url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
+  const laterRequested = Promise.withResolvers<void>();
+  controller.signal.addEventListener("abort", () => laterRequested.resolve());
+  const originalWrite = fs.writeFile;
+  let failed = false;
+  const writer = t.mock.method(fs, "writeFile", async (...args: Parameters<typeof fs.writeFile>) => {
+    if (!failed) { failed = true; await laterRequested.promise; throw new Error("disk failure"); }
+    return originalWrite(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { writer.mock.restore(); syncBuiltinESMExports(); });
+  server.on("connection", socket => {
+    for (const uid of ["first", "later"]) socket.send(JSON.stringify({ event_type: "message_received", event_id: uid,
+      chat_id: chat.uid, data: { message: inbound(uid) } }));
+  });
+  const logs: string[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
+    logs.push(text);
+    if (text.startsWith("transport stopped")) controller.abort();
+  }, async (_chat, message, _first, _history, ingress) => {
+    if (message.uid === "later") laterRequested.resolve();
+    await ingress.onAdopted();
+    return "completed";
+  });
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "later");
+  assert.ok(logs.some(text => text.startsWith("transport stopped")));
+  assert.equal(logs.filter(text => text.startsWith("acked chat=chat message=later ")).length, 1);
+  assert.equal(logs.filter(text => text.startsWith("acked chat=chat message=first ")).length, 0);
+});
+
 for (const listed of [false, true]) test(`traversal chat IDs keep checkpoint reads and writes inside their directory; listed=${listed}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const chat = acceptedChat("../outside");

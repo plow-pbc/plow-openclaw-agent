@@ -76,7 +76,7 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
   return result.results[0].messageId;
 }
 
-async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress | undefined, log: (text: string) => void): Promise<TurnOutcome> {
+async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
@@ -134,7 +134,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
     dispatcherOptions: replyPipeline,
     replyOptions: {
-      ...(ingress ? { turnAdoptionLifecycle: ingress } : {}),
+      turnAdoptionLifecycle: ingress,
       onModelSelected,
       onAgentRunStart: runId => log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`),
       sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",

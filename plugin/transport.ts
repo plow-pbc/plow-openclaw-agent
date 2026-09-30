@@ -123,7 +123,7 @@ async function earliestUnansweredOwnerMessage(account: Account, chat: string, ne
   }
 }
 
-export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress?: TurnIngress) => Promise<TurnOutcome>) {
+export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress) => Promise<TurnOutcome>) {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
   const dir = `${root}/plow-checkpoints`;
@@ -161,7 +161,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       checkpoints.set(chat, cursor);
       recent.set(chat, handled);
     });
-    checkpointWrites.set(chat, write);
+    checkpointWrites.set(chat, write.catch(() => {}));
     return write;
   };
   const readCheckpoint = async (chat: string) => {
@@ -246,8 +246,6 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let socket: WebSocket | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     const queues = new Map<string, Promise<void>>();
-    const slots: (() => void)[] = [];
-    let active = 0;
     let accepting = true;
     let queueFailed = false;
     let queueError: unknown;
@@ -255,18 +253,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const previous = queues.get(chat) ?? Promise.resolve();
       const next = previous.then(async () => {
         if (!accepting || signal.aborted || queueFailed) return;
-        if (active === 4) await new Promise<void>(resolve => slots.push(resolve));
-        else active++;
         try {
-          if (accepting && !signal.aborted && !queueFailed) await work();
+          await work();
         } catch (error) {
           queueFailed = true;
           queueError = error;
           socket?.terminate();
-        } finally {
-          const waiting = slots.shift();
-          if (waiting) waiting();
-          else active--;
         }
       }).finally(() => {
         if (queues.get(chat) === next) queues.delete(chat);

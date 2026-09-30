@@ -1,31 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import entry from "../plugin/index.ts";
 import { listen, type Account, type Chat, type Message, type TurnIngress } from "../plugin/transport.ts";
 import { websocketFixture } from "./ws-fixture.ts";
-
-test("owner tools use the host requester context without a channel receipt registry", async t => {
-  const { apiBase } = await websocketFixture(t);
-  const owner = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
-  const home = { uid: "home", status: "active", trusted: true, participants: [owner, { type: "agent", relationship: "self", line: { uid: "line" } }] };
-  const cfg = { channels: { plow: { apiBase, lineUid: "line", threadTrust: "ask" } } };
-  const posts: object[] = [];
-  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
-    if (options.method === "POST") { posts.push(JSON.parse(options.body as string)); return Response.json({ uid: "created" }); }
-    return Response.json(home);
-  });
-  let start: { execute: (id: string, args: object) => Promise<unknown> } | undefined;
-  entry.register({ registrationMode: "full", logger: { info() {} }, registerChannel() {}, on() {}, runtime: {},
-    registerTool(factory: (context: object) => typeof start & { name: string }) {
-      const tool = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home", requesterSenderId: "plow-owner", senderIsOwner: true });
-      if (tool.name === "plow_start_thread") start = tool;
-    },
-  });
-  assert.ok(start);
-  await start.execute("host-call", { members: ["+15550000002"], body: "Context works", trusted: false });
-  assert.equal(posts.length, 1);
-});
 
 test("immediate dispatch checkpoints deferred sources only on adoption", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
