@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
+import { nativeSendPolicy } from "./native-message-policy.ts";
 import entry from "../plugin/index.ts";
-import { websocketFixture } from "./ws-fixture.ts";
+import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
 const { emitDiagnosticEvent } = await import(require.resolve("openclaw/plugin-sdk/diagnostic-runtime"));
@@ -67,7 +67,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
           if (prepared !== null) await dispatch.delivery.deliver(prepared);
         }
         if (outcome === "native-other") {
-          try { await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "other", text: "native reply" }); }
+          try { nativeSendPolicy("chat", "other"); await channel!.outbound.sendText({ cfg: { channels: { plow: account } }, accountId: "chat", to: "other", text: "native reply" }); }
           catch (error) { nativeOtherFailure = error; }
         }
         if (outcome === "observed") dispatch.replyOptions.onObservedReplyDelivery?.();
@@ -94,12 +94,13 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
     assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
-  if (["observed", "queued", "deferred"].includes(outcome)) {
+  if (["observed", "queued"].includes(outcome)) {
     assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
     assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
+  if (outcome === "deferred") assert.ok(logs.some(text => text.startsWith("deferred chat=chat message=inbound")));
   if (outcome === "native-other") {
-    assert.match((nativeOtherFailure as Error)?.message, /current conversation/);
+    assert.match((nativeOtherFailure as Error)?.message, /Cross-context messaging denied/);
     assert.equal(fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).length, 0);
   }
   if (outcome === "error-notice" || outcome === "fallback-notice" || outcome === "terminal-notice") {
@@ -127,5 +128,5 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     { name: "Member", type: "member", role: "member" },
     { type: "agent", role: "self" },
   ]);
-  assert.equal(await readFile(`${root}/plow-checkpoints/chat`, "utf8"), ["aborted", "failed", "empty", "native-other"].includes(outcome) ? "first:inbound" : "inbound");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), ["aborted", "failed", "empty", "native-other", "deferred", "duplicate", "error-notice", "terminal-notice"].includes(outcome) ? "first:inbound" : "inbound");
 });

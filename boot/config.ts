@@ -48,7 +48,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
-    messages: { visibleReplies: "automatic" },
+    messages: { visibleReplies: "automatic", queue: { mode: "collect" } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust,
       ...(email?.type === "agent" ? { emailLineUid: email.line.uid } : {}),
@@ -60,7 +60,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to"], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to"], deny: ["ask_user"] },
   };
 }
 
@@ -74,6 +74,7 @@ const ownedPaths = [
   ["tools", ["tools"]],
   ["commands", ["commands"]],
   ["visible-replies", ["messages", "visibleReplies"]],
+  ["message-queue", ["messages", "queue"]],
   ["identity", ["agents", "entries", "main", "identity"]],
   ["session", ["session"]],
   ["memory", ["memory"]],

@@ -1,88 +1,56 @@
 import assert from "node:assert/strict";
-import { AsyncResource } from "node:async_hooks";
 import { test } from "node:test";
 import entry from "../plugin/index.ts";
-import { websocketFixture } from "./ws-fixture.ts";
 
-const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
-const outboundEntry = (await import(new URL("../plugin/index.ts?outbound-runtime", import.meta.url).href)).default as typeof entry;
 type Tool = { name: string; execute: (id: string, args: object) => Promise<unknown> };
 
 for (const toolName of ["plow_start_thread", "message"]) {
-  for (const status of [200, 403, 408, 424, 503, "network"] as const) test(`${toolName}: per-turn delivery state, status=${status}`, async t => {
-    const { server, apiBase, abortAfter } = await websocketFixture(t);
-    const controller = abortAfter();
-    const account = { apiBase, accountId: "chat", lineUid: "line" };
-    const cfg = { channels: { plow: { ...account, threadTrust: "ask" } }, commands: { ownerAllowFrom: ["owner"] } };
-    const sender = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
-    const chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
+  for (const status of [200, 403, 408, 424, 503, "network"] as const) test(`${toolName}: delivery errors and tool-call idempotency, status=${status}`, async t => {
+    process.env.PLOW_AGENT_TOKEN = "test-token";
+    const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "ask" };
+    const cfg = { channels: { plow: account } };
+    const chat = { uid: "home", status: "active", trusted: true, participants: [
+      { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" },
+      { type: "agent", relationship: "self", line: { uid: "line" } },
+    ] };
     const posts: Record<string, unknown>[] = [];
-    const results: unknown[] = [], errors: string[] = [], logs: string[] = [];
-    t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
-      if (options.method === "POST" && (url.endsWith("/chats") || url.endsWith("/messages"))) {
+    t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
+      if (options.method === "POST") {
         posts.push(JSON.parse(options.body as string));
         if (status === "network") throw new TypeError("network error");
         return Response.json({ uid: "created" }, { status });
       }
-      return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
-        url.endsWith("/chats/home") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+      return Response.json(chat);
     });
-    server.on("connection", (socket: { send: (text: string) => void }) => {
-      for (const uid of ["first-request", "later-identical-request"]) socket.send(JSON.stringify({
-        event_type: "message_received", event_id: uid, chat_id: "home",
-        data: { message: { uid, direction: "inbound", sender, body: "Start a group", attachments: [], created_at: new Date().toISOString() } },
-      }));
+    let tool: Tool, outbound: { sendText: (context: object) => Promise<unknown> };
+    entry.register({ registrationMode: "full", logger: { info() {} }, runtime: {},
+      registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; },
+      registerTool(factory: (context: object) => Tool) {
+        const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home", requesterSenderId: "plow-owner", senderIsOwner: true });
+        if (candidate.name === toolName) tool = candidate;
+      },
     });
-    let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
-    let outbound: { sendText: (context: object) => Promise<unknown> } | undefined;
-    let tool: Tool;
-    const toolExecution = new AsyncResource("host-tool-execution");
-    let turns = 0;
-    const api = { registrationMode: "full", logger: { info() {} }, on() {},
-      registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
-      registerTool() {},
-      runtime: { channel: { routing: { resolveAgentRoute: () => ({ sessionKey: "agent:main:main" }) }, inbound: {
-        buildContext: async () => ({}), dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
-          for (let retry = 0; retry < 4; retry++) {
-            try { results.push(await (toolName === "message" ? outbound!.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" }) : toolExecution.runInAsyncScope(() => tool.execute(`call-${retry}`, { members: retry === 1 ? ["+15550000001", "+15550000002"] : ["+15550000002", "+15550000001"], body: retry === 2 ? "Meet Saturday?" : "Meet Friday?", trusted: retry === 3 })))); }
-            catch (error) { errors.push((error as Error).message); }
-          }
-          replyOptions.onAgentRunTerminalOutcome("completed");
-          if (++turns === 2) controller.abort();
-          if (status === 503) throw new Error("dispatch failed after uncertain delivery");
-          return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
-        },
-      } } },
-    };
-    entry.register(api);
-    outboundEntry.register({ ...api, registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; } });
-    toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) {
-      const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home" });
-      if (candidate.name === toolName) tool = candidate;
-    } });
-    await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
-    assert.equal(turns, 2);
-    assert.equal(posts.length, status === 200 || status === 403 ? 8 : 2);
-    if (status === 200) {
-      assert.equal(results.length, 8);
-      if (toolName === "plow_start_thread") {
-        assert.deepEqual(posts[0].members, ["+15550000001", "+15550000002"]);
-        assert.equal(posts[0].trusted, false);
-        assert.equal(posts[3].trusted, true);
-        assert.equal(posts[0].line_uid, "line");
-        assert.equal(posts[0].body, "Meet Friday?");
-        assert.equal(posts[0].idempotency_key, posts[1].idempotency_key);
-        assert.notEqual(posts[0].idempotency_key, posts[3].idempotency_key);
-        assert.equal(posts[4].idempotency_key, posts[5].idempotency_key);
-        assert.equal(new Set(posts.map(post => post.idempotency_key)).size, 6);
-        assert.deepEqual((results[0] as { details: unknown }).details, { chat_uid: "created", message_sent: true });
-      }
-    } else {
-      assert.equal(results.length, 0);
-      assert.equal(errors.length, 8);
-      assert.ok(errors.every(error => status === 403 ? error.includes("HTTP 403") : error.includes("delivery is unknown")));
-      if (status !== 403) for (const uid of ["first-request", "later-identical-request"])
-        assert.ok(logs.some(text => text.startsWith(`turn failed chat=home message=${uid}: delivery unknown`)));
+    const invoke = (id: string, members: string[]) => toolName === "message"
+      ? outbound.sendText({ cfg, accountId: "chat", to: "home", text: "Meet Friday?" })
+      : tool.execute(id, { members, body: "Meet Friday?", trusted: false });
+    for (const [id, members] of [
+      ["call-1", ["+15550000002", "+15550000001"]],
+      ["call-1", ["+15550000001", "+15550000002"]],
+      ["call-2", ["+15550000002"]],
+    ] as const) {
+      if (status === 200) {
+        const result = await invoke(id, [...members]);
+        if (toolName === "plow_start_thread") assert.deepEqual((result as { details: unknown }).details, { chat_uid: "created", message_sent: true });
+      } else await assert.rejects(invoke(id, [...members]), status === 403 ? /HTTP 403/ : /delivery is unknown/);
+    }
+    assert.equal(posts.length, 3, "each explicit invocation reaches the API; uncertain sends are never automatically retried");
+    if (toolName === "plow_start_thread") {
+      assert.deepEqual(posts[0].members, ["+15550000001", "+15550000002"]);
+      assert.equal(posts[0].trusted, false);
+      assert.equal(posts[0].line_uid, "line");
+      assert.equal(posts[0].body, "Meet Friday?");
+      assert.equal(posts[0].idempotency_key, posts[1].idempotency_key);
+      assert.notEqual(posts[0].idempotency_key, posts[2].idempotency_key);
     }
   });
 }

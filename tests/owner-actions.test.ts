@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { test } from "node:test";
+import { nativeSendPolicy } from "./native-message-policy.ts";
 import entry from "../plugin/index.ts";
 
 const { WebSocketServer } = createRequire(new URL("../plugin/package.json", import.meta.url))("ws");
@@ -69,7 +70,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
       dispatch: async ({ replyOptions, delivery }: { replyOptions: { onAgentRunTerminalOutcome: (value: string) => void }; delivery: { deliver: (payload: { text: string }) => Promise<unknown> } }) => {
         try {
           if (action === "pending") await delivery.deliver({ text: "42" });
-          else if (action === "owner-send") await channel.outbound.sendText({ cfg, accountId: "chat", to: "plow-owner", text: "Ready" });
+          else if (action === "owner-send") { nativeSendPolicy("group", "plow-owner"); await channel.outbound.sendText({ cfg, accountId: "chat", to: "plow-owner", text: "Ready" }); }
           else await tool.execute("call", { members: [guest.provider_key], body: "Ready" });
           replyOptions.onAgentRunTerminalOutcome("completed");
         } catch (error) { failure = error; }
@@ -80,7 +81,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
   });
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal });
   if (action === "thread" || action === "owner-send") {
-    assert.match((failure as Error)?.message, action === "thread" ? /owner's main Plow DM/ : /current conversation/);
+    assert.match((failure as Error)?.message, action === "thread" ? /owner's main Plow DM/ : /Cross-context messaging denied/);
     assert.equal(posts.length, 0);
     assert.equal(listings, 1);
     return;

@@ -97,7 +97,7 @@ test("phone turns cannot block on ask_user", () => {
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to"], deny: ["ask_user"],
+    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_ask_owner", "plow_reply_to"], deny: ["ask_user"],
   });
 });
 
@@ -119,7 +119,7 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic" });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", queue: { mode: "collect" } });
   assert.deepEqual(config.meta, {});
 });
 
@@ -167,6 +167,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.plugins.entries.extra = { enabled: true };
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
+  old.messages.queue = { mode: "steer", cap: 99 };
   old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
@@ -175,6 +176,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.channels.telegram, { enabled: true });
   assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
+  assert.deepEqual(JSON5.parse(await readFile(join(includes, "message-queue.json5"), "utf8")), { mode: "collect" });
   assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });

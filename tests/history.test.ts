@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFile } from "node:fs/promises";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 test("a checkpointed outbound opener still seeds the first group turn", async t => {
-  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const self = { type: "agent", relationship: "self", line: { uid: "line", display_name: "Willow" } };
   const sender = { type: "member", uid: "member", role: "member", display_name: "Guest", provider_key: ["guest", "example.test"].join("@") };
@@ -20,7 +19,7 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       data: [...(recoveryReads++ ? [...messages].reverse() : [opener]), message("older", "Let's plan lunch")],
       has_more: false,
     } :
-    url.includes("/messages?") ? { data: [opener, message("older", "Let's plan lunch")], has_more: true } : { ticket: "ticket" }));
+    url.includes("/messages?") ? { data: [opener, message("older", "Let's plan lunch")], has_more: false } : { ticket: "ticket" }));
   server.on("connection", (socket: { send: (text: string) => void }) => {
     for (const msg of messages)
       socket.send(JSON.stringify({ event_type: "message_received", event_id: msg.uid, chat_id: chat.uid, data: { message: msg } }));
@@ -33,7 +32,6 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: "group" }) },
       inbound: {
         buildContext: async (value: typeof contexts[number]) => {
-          if (!contexts.length) assert.equal(await readFile(`${root}/plow-checkpoints/group`, "utf8"), "opener");
           contexts.push(value); return {};
         },
         dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
@@ -50,9 +48,9 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
     { sender: "Guest", body: "Let's plan lunch", timestamp: Date.parse(opener.created_at), messageId: "older" },
     { sender: "You (assistant)", body: opener.body, timestamp: Date.parse(opener.created_at), messageId: "opener" },
   ]);
-  assert.deepEqual(contexts[1].message.inboundHistory, []);
+  assert.deepEqual(contexts[1].message.inboundHistory, contexts[0].message.inboundHistory);
   assert.deepEqual(fetch.mock.calls.map(call => String(call.arguments[0])).filter(url => url.includes("limit=20")),
-    [`${apiBase}/v1/chats/group/messages?limit=20&starting_after=reply`]);
+    [`${apiBase}/v1/chats/group/messages?limit=20&starting_after=reply`, `${apiBase}/v1/chats/group/messages?limit=20&starting_after=thanks`]);
   const facts = contexts[0].supplemental.channelStructuredContext[0].payload;
   assert.deepEqual(facts.participants[0], { name: "Juniper", type: "agent", role: "self" });
 });

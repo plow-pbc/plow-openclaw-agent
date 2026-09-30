@@ -15,7 +15,7 @@ function expectedEscalation(account: "chat" | "email", chatUid: string, text: st
 }
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
+  senderName?: string; threadTrust?: "ask" | "trusted" | "untrusted";
 } = {}) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
@@ -23,7 +23,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   const account = { apiBase, accountId, lineUid: "line", emailLineUid: "email-line", threadTrust: options.threadTrust ?? "ask" };
   const cfg = { channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const owner = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
-  const member = { ...owner, uid: "member", role: "member", display_name: options.senderName ?? "Joe" };
+  const member = { ...owner, uid: "member", role: "member", provider_key: "+15550000002", display_name: options.senderName ?? "Joe" };
   const self = { type: "agent", relationship: "self", line: { uid: accountId === "email" ? "email-line" : "line" } };
   const home = { uid: "cht_home", status: "active", trusted: true,
     participants: [{ ...self, line: { uid: "line" } }, owner] };
@@ -38,11 +38,11 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     if (init.method === "PUT") {
       updates.push({ url, body: JSON.parse(init.body as string) });
-      return options.trustUpdateFails ? Response.json({}, { status: 503 }) : Response.json({ trusted: true });
+      return Response.json({ trusted: true });
     }
     if (init.method === "POST" && (url.endsWith("/messages") || url.endsWith("/chats"))) {
       posts.push({ url, body: JSON.parse(init.body as string) });
-      return options.deliveryFails ? Response.json({}, { status: 503 }) : Response.json({ uid: "sent" });
+      return Response.json({ uid: "sent" });
     }
     const target = { ...chat, uid: "cht_target", participants: [self, owner, member] };
     const emailTarget = { ...chat, uid: "cht_email_target", participants: [{ ...self, line: { uid: "email-line" } }, member] };
@@ -61,7 +61,6 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   let tool: Tool | undefined;
   let result: unknown;
   let failure: unknown;
-  let retryFailure: unknown;
   const runtime = { system: { enqueueSystemEvent: (text: string, options: { sessionKey: string }) => {
     events.push({ text, sessionKey: options.sessionKey });
     return true;
@@ -76,10 +75,6 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
       dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
         try { result = await tool!.execute("call", args); }
         catch (error) { failure = error; }
-        if (options.deliveryFails || options.trustUpdateFails) {
-          try { await channel!.outbound.sendText({ cfg, accountId, to: chat.uid, text: "Retry" }); }
-          catch (error) { retryFailure = error; }
-        }
         replyOptions.onAgentRunTerminalOutcome("completed");
         controller.abort();
         return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
@@ -90,13 +85,13 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
   toolEntry.register({ registrationMode: "full", runtime, logger: { info() {} }, registerChannel() {},
     registerTool(factory: (context: object) => Tool) {
-      const candidate = factory({ config: cfg, sessionKey, messageChannel: "plow", agentAccountId: accountId, nativeChannelId: chat.uid });
+      const candidate = factory({ config: cfg, sessionKey, messageChannel: "plow", agentAccountId: accountId, nativeChannelId: chat.uid, requesterSenderId: scene.startsWith("member") ? member.provider_key : "plow-owner", senderIsOwner: !scene.startsWith("member") });
       if (candidate.name === toolName) tool = candidate;
     },
   });
   assert.ok(tool);
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
-  return { apiBase, chat, result, failure, retryFailure, posts, updates, events,
+  return { apiBase, chat, result, failure, posts, updates, events,
     transcript: async (key = "agent:main:main") => {
       const entry = getSessionEntry({ agentId: "main", sessionKey: key });
       return entry?.sessionId ? await readVisibleSessionTranscriptMessageEntries({ agentId: "main", sessionKey: key, sessionId: entry.sessionId }) : [];
@@ -131,15 +126,6 @@ test("ask mode requires an explicit trust choice", async t => {
   assert.deepEqual(posts, []);
 });
 
-test("an ambiguous trust change latches delivery for the rest of the turn", async t => {
-  const { apiBase, failure, retryFailure, updates, posts } = await runInboundTool(t, "owner DM", "plow_set_thread_trust",
-    { chat_uid: "cht_target", trusted: true }, { trustUpdateFails: true });
-  assert.match((failure as Error)?.message, /delivery is unknown/);
-  assert.match((retryFailure as Error)?.message, /delivery is unknown/);
-  assert.deepEqual(updates, [{ url: `${apiBase}/v1/chats/cht_target/trusted`, body: { trusted: true } }]);
-  assert.deepEqual(posts, []);
-});
-
 for (const scene of ["member group", "member DM", "member email"] as const) test(`an untrusted ${scene} can ask the owner with the source account and chat uid`, async t => {
   const { apiBase, chat, failure, posts, events, transcript } = await runInboundTool(t, scene, "plow_ask_owner", { text: "Joe proposed lunch Monday at 1. Want me to book it?" });
   assert.equal(failure, undefined);
@@ -171,16 +157,6 @@ test("member display names cannot add instructions to the owner notification", a
   assert.deepEqual((await transcript()).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", escalation]]);
 });
 
-test("an ambiguous owner notification latches delivery for the rest of the turn", async t => {
-  const { chat, failure, retryFailure, posts, events, transcript } = await runInboundTool(t, "member group", "plow_ask_owner", { text: "Please ask." }, { deliveryFails: true });
-  assert.match((failure as Error)?.message, /delivery is unknown/);
-  assert.match((retryFailure as Error)?.message, /delivery is unknown/);
-  assert.equal(posts.length, 1);
-  assert.deepEqual(events, []);
-  assert.deepEqual(await transcript(), []);
-  assert.equal((posts[0].body as { body: string }).body, expectedEscalation("chat", chat.uid, "Please ask."));
-});
-
 for (const scene of ["owner group", "member group", "owner email"] as const) test(`reply tool from ${scene}`, async t => {
   const { failure, posts } = await runInboundTool(t, scene, "plow_reply_to", {
     account: "email", chat_uid: "cht_email_target", text: "Robin approved lunch at noon.",
@@ -200,16 +176,6 @@ for (const { account, chatUid, text, sessionKey } of [
   assert.deepEqual((result as { details: unknown }).details, { message_uid: "sent" });
   assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/${chatUid}/messages`, body: { body: text, attachment_uids: [] } }]);
   assert.deepEqual((await transcript(sessionKey)).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", text]]);
-});
-
-test("an ambiguous approved reply latches delivery without mirroring", async t => {
-  const { failure, retryFailure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
-    account: "email", chat_uid: "cht_email_target", text: "Robin approved lunch at noon.",
-  }, { deliveryFails: true });
-  assert.match((failure as Error)?.message, /delivery is unknown/);
-  assert.match((retryFailure as Error)?.message, /delivery is unknown/);
-  assert.equal(posts.length, 1);
-  assert.deepEqual(await transcript("agent:main:plow:direct:cht_email_target"), []);
 });
 
 test("reply tool checks the destination account", async t => {

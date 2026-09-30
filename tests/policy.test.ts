@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
+import { nativeSendPolicy } from "./native-message-policy.ts";
 import entry from "../plugin/index.ts";
 
 for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools without a tool-call gate`, async () => {
@@ -46,16 +47,10 @@ test("start-thread returns a tool error without config and makes no request", as
   assert.equal(fetch.mock.callCount(), 0);
 });
 
-test("native sends without an active conversation are rejected", async t => {
-  let channel: { outbound: { sendText: (context: object) => Promise<unknown> } };
-  entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} }, on() {},
-    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
-  const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
-  for (const accountId of ["chat", "email"]) await assert.rejects(channel!.outbound.sendText({
-    cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "chat", emailLineUid: "email" } } },
-    accountId, to: "target", text: "Friday at noon.",
-  }), /current conversation/);
-  assert.equal(fetch.mock.callCount(), 0);
+test("native message sends enforce the host's source conversation and provider policy", () => {
+  nativeSendPolicy("cht_source", "cht_source");
+  assert.throws(() => nativeSendPolicy("cht_source", "cht_other"), /Cross-context messaging denied/);
+  assert.throws(() => nativeSendPolicy("cht_source", "cht_source", "slack"), /Cross-context messaging denied/);
 });
 
 test("native targets preserve opaque UID case and reject names and non-chat IDs", () => {

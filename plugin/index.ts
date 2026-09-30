@@ -1,65 +1,51 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { createHash } from "node:crypto";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
-import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome, type TurnIngress } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
-type SendPermit = { accountId: string; to: string; text: string };
-const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
-const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
-const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
-// The SDK loads the outbound adapter separately, so durable dispatch grants one exact send across module instances.
-const durableSendPermits = (shared.plowDurableSendPermits ??= new Set<SendPermit>());
-function consumeDurablePermit(accountId: string | null | undefined, to: string, text: string) {
-  for (const permit of durableSendPermits) if (permit.accountId === accountId && permit.to === to && permit.text === text) {
-    durableSendPermits.delete(permit);
-    return true;
-  }
-  return false;
-}
+type RequesterTurn = { chat: Chat; senderIsOwner: boolean; senderName: string; senderRole: string };
 
 function normalizedHandle(handle: string): string {
   const compact = handle.trim().replace(/[\s().-]/g, "");
   return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
 }
 
-function ownerDmTurn(account: Account, context: { sessionKey?: string; messageChannel?: string; agentAccountId?: string; nativeChannelId?: string }): ActiveTurn {
-  const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-  if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow"
-    || context.agentAccountId !== "chat" || !turn || !turn.senderIsOwner
-    || context.nativeChannelId !== turn.chat.uid || findOwnerChat(account, [turn.chat]) !== turn.chat) {
-    throw new Error("This action requires an active message in the owner's main Plow DM.");
-  }
+type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "requesterSenderId" | "senderIsOwner">;
+async function requesterTurn(account: Account, context: Requester): Promise<RequesterTurn> {
+  if (context.messageChannel !== "plow" || context.agentAccountId !== account.accountId || !context.nativeChannelId || !context.requesterSenderId) throw new Error("This action requires a Plow requester.");
+  const chat = await request<Chat>(account, `/chats/${encodeURIComponent(context.nativeChannelId)}`);
+  if (!accepts(account, chat)) throw new Error("Plow account does not serve this conversation");
+  const sender = chat.participants.find(p => p.type === "member" ? context.senderIsOwner ? p.role === "owner" : normalizedHandle(p.provider_key) === context.requesterSenderId : p.line.uid === context.requesterSenderId);
+  if (!sender) throw new Error("The requester is not a current chat participant.");
+  return { chat, senderIsOwner: context.senderIsOwner === true, senderName: (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? context.requesterSenderId, senderRole: sender.type === "member" ? sender.role : sender.relationship };
+}
+async function ownerDmTurn(account: Account, context: Requester): Promise<RequesterTurn> {
+  if (context.sessionKey !== "agent:main:main" || !context.senderIsOwner || context.agentAccountId !== "chat") throw new Error("This action requires the owner's main Plow DM.");
+  const turn = await requesterTurn(account, context);
+  if (findOwnerChat(account, [turn.chat]) !== turn.chat) throw new Error("This action requires the owner's main Plow DM.");
   return turn;
 }
 
-async function requestWithDeliveryState<T>(account: Account, path: string, body: unknown, turn = activeTurn.getStore(), method: "POST" | "PUT" = "POST"): Promise<T> {
-  if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
+async function requestDelivery<T>(account: Account, path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
   try { return await request<T>(account, path, body, undefined, method); }
   catch (error) {
     if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
-      if (turn) turn.deliveryUnknown = true;
       throw new DeliveryUnknownError();
     }
     throw error;
   }
 }
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], durable = false, turn = activeTurn.getStore()) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
   to = to.replace(/^plow:/i, "");
-  if (!durable && (!turn || account.accountId !== turn.accountId ||
-    (to !== turn.chat.uid && !(to === "plow-owner" && turn.senderIsOwner && findOwnerChat(account, [turn.chat]) === turn.chat)))) {
-    throw new Error("Native Plow sends must stay in the current conversation.");
-  }
   if (to === "plow-owner") to = (await ownerChat(account)).uid;
   if (!accepts(account, await request<Chat>(account, `/chats/${to}`))) {
     throw new Error("Plow account does not serve this conversation");
   }
-  if (turn?.deliveryUnknown) throw new DeliveryUnknownError();
   const attachments: string[] = [];
   for (const url of mediaUrls) {
     const media = await loadWebMedia(url);
@@ -70,32 +56,27 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
-  const sent = await requestWithDeliveryState<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments }, turn);
+  const sent = await requestDelivery<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments });
   return { channel: "plow" as const, messageId: sent.uid };
 }
 
-async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group") {
+async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group") {
   await runtime.channel.session.updateLastRoute({
     storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
-  const permit = { accountId, to, text };
-  let result;
-  try {
-    result = await activeTurn.run(turn, () => sendDurableMessageBatch({
-      cfg, channel: "plow", accountId, to, payloads: [{ text }],
-      session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
-      mirror: route, skipQueue: true, onPlatformSendDispatch: async () => { durableSendPermits.add(permit); },
-    }));
-  } finally { durableSendPermits.delete(permit); }
+  const result = await sendDurableMessageBatch({
+    cfg, channel: "plow", accountId, to, payloads: [{ text }],
+    session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
+    mirror: route, skipQueue: true,
+  });
   if (result.status !== "sent") {
-    turn.deliveryUnknown = true;
     throw new DeliveryUnknownError();
   }
   return result.results[0].messageId;
 }
 
-async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], log: (text: string) => void): Promise<TurnOutcome> {
+async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress | undefined, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
@@ -138,49 +119,47 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
-  activeTurns.set(route.sessionKey, turn);
-  return await activeTurn.run(turn, async () => {
-    let failure: unknown;
-    let observedReplyDelivery = false;
-    if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "start" }).catch(() => log("typing start failed"));
-    try {
-      const result = await runtime.channel.inbound.dispatch({
-        cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
-        replyOptions: {
-          sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
-          onObservedReplyDelivery: () => { observedReplyDelivery = true; },
-          onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
-        },
-        delivery: {
-          observeMessageSent: true,
-          preparePayload: (payload, info) => payload.isFallbackNotice || (observedReplyDelivery && info.kind === "final") ? null : payload,
-          deliver: async payload => {
-            const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
-            log(`delivered chat=${chat.uid} message=${sent.messageId}`);
-            return { messageIds: [sent.messageId] };
-          },
-          onError: error => { failure = error; },
-        },
-      });
-      if (activeTurn.getStore()!.deliveryUnknown) throw new DeliveryUnknownError();
-      if (failure) throw failure;
-      if (!result.dispatched) throw new Error("Turn was not dispatched");
-      const dispatchResult = result.dispatchResult;
-      if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
-      const outcome = hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
-        || dispatchResult.deferredToActiveRun || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
-      log(`${outcome} chat=${chat.uid} message=${message.uid}`);
-      return outcome;
-    } catch (error) {
-      if (activeTurn.getStore()!.deliveryUnknown) throw new DeliveryUnknownError();
-      throw error;
-    } finally {
-      if (account.accountId === "chat") await request(account, `/chats/${chat.uid}/typing`, { action: "stop" }).catch(() => log("typing stop failed"));
-    }
-  }).finally(() => {
-    if (activeTurns.get(route.sessionKey) === turn) activeTurns.delete(route.sessionKey);
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+    cfg, agentId: route.agentId, channel: "plow", accountId: account.accountId,
+    typing: account.accountId === "chat" ? {
+      start: () => request<void>(account, `/chats/${chat.uid}/typing`, { action: "start" }),
+      stop: () => request<void>(account, `/chats/${chat.uid}/typing`, { action: "stop" }),
+      keepaliveIntervalMs: 8_000, maxDurationMs: 10 * 60_000,
+      onStartError: () => log("typing start failed"), onStopError: () => log("typing stop failed"),
+    } : undefined,
   });
+  let failure: unknown;
+  let observedReplyDelivery = false;
+  const result = await runtime.channel.inbound.dispatch({
+    cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
+    dispatcherOptions: replyPipeline,
+    replyOptions: {
+      ...(ingress ? { turnAdoptionLifecycle: ingress } : {}),
+      onModelSelected,
+      onAgentRunStart: runId => log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`),
+      sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
+      onObservedReplyDelivery: () => { observedReplyDelivery = true; },
+      onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
+    },
+    delivery: {
+      observeMessageSent: true,
+      preparePayload: (payload, info) => payload.isFallbackNotice || (observedReplyDelivery && info.kind === "final") ? null : payload,
+      deliver: async payload => {
+        const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
+        log(`delivered chat=${chat.uid} message=${sent.messageId}`);
+        return { messageIds: [sent.messageId] };
+      },
+      onError: error => { failure = error; },
+    },
+  });
+  if (failure) throw failure;
+  if (!result.dispatched) throw new Error("Turn was not dispatched");
+  const dispatchResult = result.dispatchResult;
+  if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
+  const outcome = dispatchResult.deferredToActiveRun ? "deferred" : hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
+    || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
+  log(`${outcome} chat=${chat.uid} message=${message.uid}`);
+  return outcome;
 }
 
 const plugin: ChannelPlugin<Account> = {
@@ -202,13 +181,12 @@ const plugin: ChannelPlugin<Account> = {
   gateway: {
     startAccount: async ctx => {
       const log = (text: string) => ctx.log?.info(text);
-      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, log));
+      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history, ingress) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, ingress, log));
     },
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [],
-      typeof ctx.onPlatformSendDispatch === "function" && consumeDurablePermit(ctx.accountId, ctx.to, ctx.text)),
+    sendText: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text),
     sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },
 };
@@ -236,7 +214,7 @@ export default defineChannelPluginEntry({
           isError: true, content: [{ type: "text", text: "Plow configuration is unavailable." }], details: {},
         };
         const account = plugin.config.resolveAccount(context.config, "chat");
-        const turn = ownerDmTurn(account, context);
+        const turn = await ownerDmTurn(account, context);
         const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
         const members = [...new Set([owner.provider_key, ...args.members])].sort();
@@ -247,11 +225,11 @@ export default defineChannelPluginEntry({
           throw new Error("Starting a group requires an explicit trust choice.");
         }
         const trusted = account.threadTrust === "trusted" || (account.threadTrust === "ask" && args.trusted === true);
-        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, turn.messageUid, members, args.body, trusted])).digest("hex");
-        const chat = await requestWithDeliveryState<{ uid: string }>(account, "/chats", {
+        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");
+        const chat = await requestDelivery<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
           body: args.body, trusted, idempotency_key: idempotencyKey,
-        }, turn);
+        });
         api.logger.info(`plow started thread chat=${chat.uid}`);
         const result = { chat_uid: chat.uid, message_sent: true };
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
@@ -270,10 +248,10 @@ export default defineChannelPluginEntry({
       async execute(_id, args: { chat_uid: string; trusted: boolean }) {
         if (!context.config) throw new Error("Plow configuration is unavailable.");
         const account = plugin.config.resolveAccount(context.config, "chat");
-        const turn = ownerDmTurn(account, context);
+        await ownerDmTurn(account, context);
         const target = await request<Chat>(account, `/chats/${encodeURIComponent(args.chat_uid)}`);
         if (!accepts(account, target) || target.participants.length <= 2) throw new Error("Target must be a served Plow group.");
-        const result = await requestWithDeliveryState<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, turn, "PUT");
+        const result = await requestDelivery<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, "PUT");
         const details = { chat_uid: args.chat_uid, trusted: result.trusted };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
@@ -288,17 +266,14 @@ export default defineChannelPluginEntry({
       async execute(_id, args: { text: string }) {
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
-        const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-        if (context.messageChannel !== "plow" || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")
-          || !turn || turn.senderIsOwner || turn.chat.trusted
-          || context.nativeChannelId !== turn.chat.uid) {
-          throw new Error("Asking the owner requires an active untrusted non-owner turn.");
-        }
+        const account = plugin.config.resolveAccount(cfg, context.agentAccountId);
+        const turn = await requesterTurn(account, context);
+        if (turn.senderIsOwner || turn.chat.trusted) throw new Error("Asking the owner requires an untrusted non-owner turn.");
         const [name, role] = [turn.senderName, turn.senderRole].map(value =>
           JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`));
         const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource account: ${context.agentAccountId}\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(account="${context.agentAccountId}", chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
         const ownerSessionKey = "agent:main:main";
-        await durableSend(cfg, turn, { agentId: "main", sessionKey: ownerSessionKey }, "chat", "plow-owner", "plow-owner", escalation, "direct");
+        await durableSend(cfg, { agentId: "main", sessionKey: ownerSessionKey }, "chat", "plow-owner", "plow-owner", escalation, "direct");
         return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
       },
     }));
@@ -317,8 +292,7 @@ export default defineChannelPluginEntry({
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
-        const turn = ownerDmTurn(ownerAccount, context);
-        if (turn.deliveryUnknown) throw new DeliveryUnknownError();
+        await ownerDmTurn(ownerAccount, context);
         const destination = plugin.config.resolveAccount(cfg, args.account);
         const chat = await request<Chat>(destination, `/chats/${encodeURIComponent(args.chat_uid)}`);
         if (!accepts(destination, chat)) throw new Error("Plow account does not serve this conversation");
@@ -331,7 +305,7 @@ export default defineChannelPluginEntry({
         const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: args.account, peer: { kind, id: peerId } });
         let messageUid: string;
         try {
-          messageUid = await durableSend(cfg, turn, route, args.account, args.chat_uid,
+          messageUid = await durableSend(cfg, route, args.account, args.chat_uid,
             peerId === "plow-owner" ? peerId : args.chat_uid, args.text, kind);
         } catch (error) {
           if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, args.chat_uid);
