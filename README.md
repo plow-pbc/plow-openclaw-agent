@@ -147,8 +147,9 @@ conversations on its own lines. The dashboard shares `agent:main:main`, but a
 dashboard turn has no active owner DM and cannot start a group.
 Email is the exception to replying in place. An email turn's final text never
 reaches its thread: it goes privately to the owner, in the chat the thread was
-started from with `plow_send_email`, or else the owner's 1:1, under one line
-naming the email, and is recorded in that chat's session. `NO_REPLY` there sends
+started from with `plow_send_email` while it is still the owner's DM or a
+trusted group and readable, or else the owner's 1:1, under one line naming the
+email, and is recorded in that chat's session. `NO_REPLY` there sends
 nothing. Mail leaves only through `plow_send_email`, which replies in a thread by
 its chat uid, starts one from email addresses and a subject, or lists threads;
 `message` and `plow_reply_to` refuse email. On mail from anyone but the owner,

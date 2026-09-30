@@ -162,7 +162,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(message.reply_to ? { quote: { id: message.reply_to.uid, body: message.reply_to.body, sender: message.reply_to.sender.type === "member" ? message.reply_to.sender.display_name : message.reply_to.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to_chat_uid: origin ?? "the owner's 1:1 chat" } : {}) } }],
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
       ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
     },
     media,
@@ -228,8 +228,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
               const { kind, route, routeTo } = sessionRoute(cfg, phone, target);
               const label = emailLabel(chat, sender);
               const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind);
-              // People see no chat ids; the model in that chat learns the thread's, to reply there.
-              runtime.system.enqueueSystemEvent(`${label} is email thread ${chat.uid}; reply there with plow_send_email to "${chat.uid}".`, { sessionKey: route.sessionKey });
+              // People see no chat ids; the model in that chat learns the thread's, to reply there. Only
+              // Plow-issued text goes into this event: the label carries sender-written words.
+              runtime.system.enqueueSystemEvent(`The email report just delivered here is thread ${chat.uid}; reply there with plow_send_email to "${chat.uid}".`, { sessionKey: route.sessionKey });
               log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
               return { messageIds: [sent] };
             }

@@ -192,7 +192,7 @@ test("a thread started from a trusted group reports its finals to that group, re
   // The group sees no chat id; the group's model is told it, to reply in the thread.
   assert.equal(posts[0].body.body, `Email "Hello" from "sender@example.com":\nThey replied yes.`);
   assert.deepEqual(await transcript("agent:main:plow:chat:group:group"), [`Email "Hello" from "sender@example.com":\nThey replied yes.`]);
-  assert.deepEqual(events, [{ sessionKey: "agent:main:plow:chat:group:group", text: `Email "Hello" from "sender@example.com" is email thread started; reply there with plow_send_email to "started".` }]);
+  assert.deepEqual(events, [{ sessionKey: "agent:main:plow:chat:group:group", text: `The email report just delivered here is thread started; reply there with plow_send_email to "started".` }]);
 });
 
 for (const [name, response, expected] of [
@@ -271,24 +271,17 @@ test("a NO_REPLY line beside an email final is not delivered to the owner", asyn
   assert.deepEqual(posts.map(post => post.body.body), [`Email "Booking" from "sender@example.com":\nMorgan asked about Thursday.`]);
 });
 
-test("a transient failed read of the owner's 1:1 is retried and the final still arrives", async t => {
+for (const [name, failures, paths, completed] of [
+  ["transient, retried and delivered", 1, ["/chats/home/messages"], true],
+  ["persistent, failed rather than dropped as delivered", Infinity, [], false],
+] as const) test(`owner lookup failure: ${name}`, async t => {
   t.after(() => { listingFailures = 0; });
   const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
-    listingFailures = 1;
-    await final(dispatch, { text: "For you" });
-  });
-  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
-  assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
-});
-
-test("a persistently failed read of the owner's 1:1 fails the delivery instead of dropping it as delivered", async t => {
-  t.after(() => { listingFailures = 0; });
-  const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
-    listingFailures = Infinity;
+    listingFailures = failures;
     await final(dispatch, { text: "For you" }).catch(() => {});
   });
-  assert.deepEqual(posts, []);
-  assert.ok(!logs.some(line => line.startsWith("completed chat=thread")));
+  assert.deepEqual(posts.map(post => post.path), paths);
+  assert.equal(logs.some(line => line.startsWith("completed chat=thread")), completed);
   assert.ok(!logs.some(line => line.includes("nowhere to deliver")));
 });
 
