@@ -5,7 +5,7 @@ import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/p
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
-import { emailHeader, emailTurnPrompt, originOf, recordOrigin, signedAs } from "./email.ts";
+import { emailHeader, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
@@ -193,7 +193,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           },
           deliver: async payload => {
             if (email) {
-              if (NO_ANSWER_NOTICES.some(notice => payload.text?.startsWith(notice))) {
+              // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
+              const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").trim();
+              if (!text || NO_ANSWER_NOTICES.some(notice => text.startsWith(notice))) {
                 log(`silent chat=${chat.uid} message=${message.uid}`);
                 silent = true;
                 return { messageIds: [] };
@@ -214,7 +216,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
               // Durable, so the final is also recorded in the session of the chat it lands in. Trimmed,
               // because the durable send trims its text and its permit matches the exact text.
               const { kind, route, routeTo } = sessionRoute(cfg, phone, target);
-              const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${emailHeader(chat, sender)}\n\n${payload.text ?? ""}`.trim(), kind);
+              const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${emailHeader(chat, sender)}\n\n${text}`.trim(), kind);
               log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
               return { messageIds: [sent] };
             }
@@ -434,9 +436,10 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
-        const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
-        if (persona && owner?.type === "member" && signedAs(args.body, owner.display_name)) {
-          return refuse(`Nothing was sent. This mail goes out from ${persona}'s mailbox, so it is written and signed as ${persona}, never as the owner: refer to the owner in the third person, sign as ${persona}, and send it again. Mail in the owner's own name goes only from their own Gmail.`);
+        // As on the Hermes image: every mail ends with a line holding exactly the persona.
+        if (!persona) return refuse("Your mailbox has no persona name; nothing was sent.");
+        if (args.body.trim().split("\n").at(-1) !== persona) {
+          return refuse(`This sends from ${persona}'s mailbox, even when your owner says 'from me' or approves a draft. Write as ${persona} on their behalf and end body with a separate line containing exactly ${persona}. Never sign as your owner. Correct the body and call again; nothing was sent.`);
         }
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
@@ -463,7 +466,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person and sign it as ${persona || "yourself"}, never as the owner. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person and sign it as ${persona || "yourself"}, never as the owner, even for 'from me' or an approved draft. End body with a separate line containing exactly ${persona || "your persona name"}; any other signature is refused. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {

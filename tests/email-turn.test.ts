@@ -165,14 +165,14 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
   const results: { isError?: boolean; content: { text: string }[] }[] = [];
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async (_dispatch, tool) => {
     const send = tool();
-    for (const args of [{ to: "other", body: "hi" }, { to: ["new@example.com"], subject: "Hi", body: "hi" }, { action: "list" }, { to: "thread", body: "Thanks, noted." }]) {
+    for (const args of [{ to: "other", body: "hi" }, { to: ["new@example.com"], subject: "Hi", body: "hi" }, { action: "list" }, { to: "thread", body: "Thanks, noted.\n\nElm" }]) {
       results.push(await send.execute("call", args));
     }
   });
   assert.deepEqual(results.map(result => Boolean(result.isError)), [true, true, true, false]);
   assert.ok(results.slice(0, 3).every(result => JSON.parse(result.content[0].text).success === false));
   assert.deepEqual(JSON.parse(results[3].content[0].text), { sent: true, chat_uid: "thread" });
-  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted." } }]);
+  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\nElm" } }]);
 });
 
 test("a thread started from a trusted group reports its finals to that group, recorded in the group's session", async t => {
@@ -181,7 +181,7 @@ test("a thread started from a trusted group reports its finals to that group, re
   let receipt: unknown;
   await run(t, "chat", [{ chat: "group", sender: outsider }], async (_dispatch, tool) => {
     const send = tool();
-    receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
+    receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening\n\nElm" })).content[0].text);
   }, undefined, state);
   assert.deepEqual(receipt, { sent: true, chat_uid: "started" });
   const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
@@ -195,11 +195,11 @@ for (const [name, response, expected] of [
 ] as const) test(`a new thread's receipt is never an invented chat id and is sent once: ${name}`, async t => {
   let receipt: Record<string, unknown> = {};
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
-    receipt = JSON.parse((await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
+    receipt = JSON.parse((await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening\n\nElm" })).content[0].text);
   }, response);
   for (const [key, value] of Object.entries(expected)) assert.equal(receipt[key], value);
   assert.match(String(receipt.note ?? receipt.error), /resend|retry/i);
-  assert.deepEqual(posts, [{ path: "/chats", body: { line_uid: "mail", members: ["new@example.com"], subject: "Hello", body: "Opening" } }]);
+  assert.deepEqual(posts, [{ path: "/chats", body: { line_uid: "mail", members: ["new@example.com"], subject: "Hello", body: "Opening\n\nElm" } }]);
 });
 
 test("plow_send_email lists threads for the owner and refuses a non-owner in an untrusted chat", async t => {
@@ -221,11 +221,11 @@ test("plow_send_email lists threads for the owner and refuses a non-owner in an 
 test("a reply sent to a thread from the owner's DM lands there and is recorded in the thread's session", async t => {
   let receipt: unknown;
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
-    receipt = JSON.parse((await tool().execute("call", { to: "thread", body: "Thursday works." })).content[0].text);
+    receipt = JSON.parse((await tool().execute("call", { to: "thread", body: "Thursday works.\n\nElm" })).content[0].text);
   });
   assert.deepEqual(receipt, { sent: true, chat_uid: "thread" });
   assert.deepEqual(posts.map(post => post.path), ["/chats/thread/messages"]);
-  assert.deepEqual(await transcript("agent:main:plow:email:direct:thread"), ["Thursday works."]);
+  assert.deepEqual(await transcript("agent:main:plow:email:direct:thread"), ["Thursday works.\n\nElm"]);
 });
 
 test("the tool names the mailbox persona to sign as", () => {
@@ -242,7 +242,7 @@ test("a thread's recorded origin that is no longer trusted gets nothing; the fin
   const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
   t.after(() => { chats.group.trusted = true; return rm(state, { recursive: true }); });
   await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
-    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
+    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening\n\nElm" });
   }, undefined, state);
   chats.group.trusted = false;
   const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
@@ -253,7 +253,7 @@ test("a thread's recorded origin the agent can no longer read falls back to the 
   const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
   t.after(() => { forbidden.clear(); return rm(state, { recursive: true }); });
   await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
-    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
+    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening\n\nElm" });
   }, undefined, state);
   forbidden.add("group");
   const { posts, logs } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
@@ -271,13 +271,21 @@ test("sender-chosen subject and name stay on the header's one line", async t => 
 
 for (const [name, body, refused] of [
   ["signed as the owner", "Hi Casey,\n\nThursday works for me.\n\nThanks,\nOwner", true],
-  ["signed as the persona", "Hi Casey,\n\nOwner says Thursday works.\n\nThanks,\nElm", false],
-] as const) test(`plow_send_email refuses a mail signed as the owner: ${name}`, async t => {
+  ["no closing persona line", "Hi Casey, Alex's team says Thursday works.", true],
+  ["closing line is the persona", "Hi Casey,\n\nAlex's team says Thursday works.\n\nElm", false],
+] as const) test(`plow_send_email sends only mail whose closing line is the persona: ${name}`, async t => {
   let result: { isError?: boolean; content: { text: string }[] } | undefined;
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
     result = await tool().execute("call", { to: "thread", body });
   });
   assert.equal(Boolean(result!.isError), refused);
-  if (refused) assert.match(result!.content[0].text, /sign as Elm/);
+  if (refused) assert.match(result!.content[0].text, /exactly Elm/);
   assert.equal(posts.length, refused ? 0 : 1);
+});
+
+test("a NO_REPLY line beside an email final is not delivered to the owner", async t => {
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }, { chat: "other", sender: outsider }], async dispatch => {
+    await final(dispatch, { text: dispatch.ctxPayload.conversation.id === "thread" ? "Morgan asked about Thursday.\n\nNO_REPLY" : "NO_REPLY\n" });
+  });
+  assert.deepEqual(posts.map(post => post.body.body), [`Re: email "Booking" from "Sender (sender@example.com)" (thread thread)\n\nMorgan asked about Thursday.`]);
 });
