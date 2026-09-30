@@ -133,16 +133,16 @@ test("an ambiguous trust change latches delivery for the rest of the turn", asyn
 
 for (const scene of ["owner group", "member group", "owner email"] as const) test(`reply tool from ${scene}`, async t => {
   const { failure, posts } = await runInboundTool(t, scene, "plow_reply_to", {
-    account: "email", chat_uid: "cht_email_target", text: "Robin approved lunch at noon.",
+    account: "email", chat_uid: "cht_email_target", text: "Lunch is at noon.",
   });
   assert.match((failure as Error)?.message, /owner's main Plow DM/);
   assert.deepEqual(posts, []);
 });
 
 for (const { account, chatUid, text, sessionKey } of [
-  { account: "email", chatUid: "cht_email_target", text: "Robin approved lunch at noon.", sessionKey: "agent:main:plow:direct:cht_email_target" },
-  { account: "chat", chatUid: "cht_direct_target", text: "I booked lunch for two.", sessionKey: "agent:main:plow:direct:cht_direct_target" },
-] as const) test(`approved reply destination ${account}`, async t => {
+  { account: "email", chatUid: "cht_email_target", text: "Lunch is at noon.", sessionKey: "agent:main:plow:direct:cht_email_target" },
+  { account: "chat", chatUid: "cht_direct_target", text: "See you at lunch.", sessionKey: "agent:main:plow:direct:cht_direct_target" },
+] as const) test(`follow-up destination ${account}`, async t => {
   const { apiBase, result, failure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
     account, chat_uid: chatUid, text,
   });
@@ -152,9 +152,9 @@ for (const { account, chatUid, text, sessionKey } of [
   assert.deepEqual((await transcript(sessionKey)).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", text]]);
 });
 
-test("an ambiguous approved reply latches delivery without mirroring", async t => {
+test("an ambiguous follow-up latches delivery without mirroring", async t => {
   const { failure, retryFailure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
-    account: "email", chat_uid: "cht_email_target", text: "Robin approved lunch at noon.",
+    account: "email", chat_uid: "cht_email_target", text: "Lunch is at noon.",
   }, { deliveryFails: true });
   assert.match((failure as Error)?.message, /delivery is unknown/);
   assert.match((retryFailure as Error)?.message, /delivery is unknown/);

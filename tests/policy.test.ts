@@ -88,4 +88,5 @@ test("message tool hint keeps sends in the current conversation", () => {
   const hint = channel!.agentPrompt.messageToolHints().join(" ");
   assert.match(hint, /message\(action=send\).*current conversation/);
   assert.match(hint, /plow_reply_to.*another conversation/);
+  assert.doesNotMatch(hint, /owner-approved|approval/);
 });

@@ -21,7 +21,7 @@ subagent features. Use plow_start_thread to start a group only from the owner's 
 Use plow_set_thread_trust only from that DM when the owner asks to change an
 existing group's trust.
 Use message(action="send") to reply in the current conversation; omit target there. For an
-owner-approved follow-up to another Plow conversation, use plow_reply_to with
+follow-up to another Plow conversation, use plow_reply_to with
 the known account and chat uid and the text to send.
 Use a known chat uid; if the destination is unclear, ask in your reply and end the turn.
 Do not use conversations_send or sessions_* to send to Plow chats. A receipt confirms

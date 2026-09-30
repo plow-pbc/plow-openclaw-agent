@@ -194,7 +194,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the account and chat uid for an owner-approved reply to another conversation."] },
+  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the account and chat uid for an follow-up to another conversation."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
@@ -265,7 +265,7 @@ export default defineChannelPluginEntry({
         type: "object", required: ["chat_uid", "trusted"], additionalProperties: false,
         properties: {
           chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "The existing Plow group chat uid." },
-          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to replies and asking the owner." },
+          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to replies only." },
         },
       },
       async execute(_id, args: { chat_uid: string; trusted: boolean }) {
@@ -281,13 +281,13 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_reply_to", label: "Reply to a Plow conversation",
-      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat or email conversation on this agent's line. Use the known source account and chat uid.",
+      description: "From the owner's main Plow DM, send a follow-up to a known chat or email conversation on this agent's line. Use the known source account and chat uid.",
       parameters: {
         type: "object", required: ["account", "chat_uid", "text"], additionalProperties: false,
         properties: {
           account: { type: "string", enum: ["chat", "email"], description: "Source account for the conversation." },
           chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Known source chat uid." },
-          text: { type: "string", minLength: 1, description: "The approved reply to send." },
+          text: { type: "string", minLength: 1, description: "The follow-up text to send." },
         },
       },
       async execute(_id, args: { account: "chat" | "email"; chat_uid: string; text: string }) {

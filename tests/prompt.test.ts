@@ -81,6 +81,7 @@ test("the prompt directs existing-chat sends to the native tool", () => {
   assert.match(prompt, /message\(action="send"\).*current conversation/i);
   assert.doesNotMatch(prompt, /plow_ask_owner|escalation/i);
   assert.match(prompt, /plow_start_thread/);
+  assert.doesNotMatch(prompt, /owner-approved follow-up/);
 });
 
 test("the prompt treats offered tools as the owner's trust grant", () => {
