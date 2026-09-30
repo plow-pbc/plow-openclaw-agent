@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { readdir } from "node:fs/promises";
+import { mkdir, readdir, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import entry from "../plugin/index.ts";
@@ -11,7 +12,7 @@ type Tool = { name: string; execute: (id: string, args: object) => Promise<unkno
 type Scene = "owner DM" | "owner group" | "member group" | "owner email" | "member DM" | "member email";
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  concurrentAsk?: boolean; retryText?: string; deliveryStatus?: number; markdownHistory?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
+  setup?: (root: string, apiBase: string) => Promise<void>; ownerHistory?: { uid: string; body: string }[]; concurrentAsk?: boolean; retryText?: string; deliveryStatus?: number; markdownHistory?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
 } = {}) {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(60_000);
@@ -51,7 +52,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
       url.endsWith("/chats") ? { data: chat === home ? [home] : [home, chat, ...(options.concurrentAsk ? [parallelChat] : [])], has_more: false } :
       url.endsWith("/chats/cht_parallel") ? parallelChat :
       url.endsWith(`/chats/${chat.uid}`) ? chat : url.endsWith("/chats/cht_home") ? home :
-      url.includes("/chats/cht_home/messages?limit=20") && options.ownerReply ? { data: [{ uid: "sent", direction: "outbound", sender: home.participants[0], body: url.includes("format=text_decorations") ? question : options.markdownHistory ?? question, created_at: new Date().toISOString() }], has_more: false } : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+      url.includes("/chats/cht_home/messages?limit=20") && options.ownerReply ? { data: (options.ownerHistory ?? [{ uid: "sent", body: url.includes("format=text_decorations") ? question : options.markdownHistory ?? question }]).map(message => ({ ...message, direction: "outbound", sender: home.participants[0], created_at: new Date().toISOString() })), has_more: false } : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
   });
   server.on("connection", (socket: { send: (text: string) => void }) => { for (const source of options.concurrentAsk ? [chat, parallelChat] : [chat]) socket.send(JSON.stringify({
     event_type: "message_received", event_id: source.uid, chat_id: source.uid,
@@ -88,7 +89,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     inbound: {
       buildContext: async (ctx: typeof contexts[number]) => { contexts.push(ctx); return { sourceChat: ctx.conversation.id }; },
       dispatch: async ({ ctxPayload: ctx, replyOptions }: { ctxPayload: { sourceChat: string }; replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
-        if (options.ownerReply && contexts.at(-1)?.sender.id === "plow-owner") {
+        if (options.ownerReply && contexts.length > 1 && contexts.at(-1)?.sender.id === "plow-owner") {
           controller.abort();
           return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
         }
@@ -124,6 +125,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     },
   });
   assert.ok(tool);
+  await options.setup?.(root, apiBase);
   await Promise.all([channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } }),
     ...(accountId === "email" && options.ownerReply ? [channel!.gateway.startAccount({ account: { ...account, accountId: "chat" }, cfg, abortSignal: controller.signal, log: { info() {} } })] : [])]);
   return { root, apiBase, chat, outcomes, result, failure, retryFailure, posts, updates, events, contexts,
@@ -317,6 +319,29 @@ for (const { account, chatUid, text, sessionKey } of [
   assert.deepEqual((result as { details: unknown }).details, { message_uid: "sent" });
   assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/${chatUid}/messages`, body: { body: text, attachment_uids: [] } }]);
   assert.deepEqual((await transcript(sessionKey)).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", text]]);
+});
+
+test("answered asks no longer reload and asks older than 24 hours are ignored", async t => {
+  const question = "Does Thursday work for lunch?";
+  const { failure, contexts, posts } = await runInboundTool(t, "owner DM", "plow_reply_to",
+    { account: "chat", chat_uid: "cht_direct_target", text: "Thursday works." }, {
+      ownerReply: true, ownerHistory: [{ uid: "notification", body: question }],
+      setup: async (root, apiBase) => {
+        const key = createHash("sha256").update(JSON.stringify([apiBase, "line", question])).digest("hex");
+        const directory = `${root}/plow-owner-asks/${key}`;
+        await mkdir(directory, { recursive: true });
+        for (const [chat, ageHours] of [["cht_direct_target", 0], ["cht_other", 0], ["cht_stale", 25]] as const) {
+          const path = `${directory}/${chat}.json`;
+          await writeFile(path, JSON.stringify({ source_account: "chat", source_chat_uid: chat, member_name: "Joe", member_request: "Original lunch request" }));
+          const created = new Date(Date.now() - ageHours * 60 * 60 * 1000);
+          await utimes(path, created, created);
+        }
+      },
+    });
+  assert.equal(failure, undefined);
+  assert.equal(posts.length, 1);
+  const sources = (ctx: typeof contexts[number]) => (ctx.supplemental.channelStructuredContext[1]?.payload as { source_chat_uid: string }[]).map(ask => ask.source_chat_uid).sort();
+  assert.deepEqual(contexts.map(sources), [["cht_direct_target", "cht_other"], ["cht_other"]]);
 });
 
 test("an ambiguous approved reply latches delivery without mirroring", async t => {

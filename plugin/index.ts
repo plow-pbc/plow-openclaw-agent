@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
@@ -9,7 +9,7 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type TurnOutcome } from "./transport.ts";
 
 let runtime: PluginRuntime;
-type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; body: string; deliveryUnknown?: boolean };
+type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; body: string; history: Message[]; deliveryUnknown?: boolean };
 type OwnerAsk = {
   source_account: string; source_chat_uid: string;
   member_name: string; member_request: string;
@@ -22,15 +22,18 @@ function ownerAskDirectory(account: Account, text: string): string {
   return `${stateDir}/plow-owner-asks/${key}`;
 }
 
-async function ownerAsks(account: Account, history: Message[]): Promise<(OwnerAsk & { notification_uid: string })[]> {
+async function ownerAsks(account: Account, history: Message[], answered?: { account: string; chat_uid: string }): Promise<(OwnerAsk & { notification_uid: string })[]> {
   const asks: (OwnerAsk & { notification_uid: string })[] = [];
   for (const message of history) {
     if (message.direction !== "outbound" || message.sender.type !== "agent" || message.sender.relationship !== "self") continue;
     const directory = ownerAskDirectory(account, message.body);
     try {
       for (const file of await readdir(directory)) if (file.endsWith(".json")) {
-        const ask = JSON.parse(await readFile(`${directory}/${file}`, "utf8")) as OwnerAsk;
-        asks.push({ ...ask, notification_uid: message.uid });
+        const path = `${directory}/${file}`;
+        if (Date.now() - (await stat(path)).mtimeMs > 24 * 60 * 60 * 1000) continue;
+        const ask = JSON.parse(await readFile(path, "utf8")) as OwnerAsk;
+        if (answered && ask.source_account === answered.account && ask.source_chat_uid === answered.chat_uid) await unlink(path);
+        else asks.push({ ...ask, notification_uid: message.uid });
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
@@ -171,7 +174,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, body };
+  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, body, history };
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
@@ -391,6 +394,7 @@ export default defineChannelPluginEntry({
           if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, args.chat_uid);
           throw error;
         }
+        await ownerAsks(ownerAccount, turn.history, args);
         const details = { message_uid: messageUid };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },

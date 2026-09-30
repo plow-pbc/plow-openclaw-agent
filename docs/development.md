@@ -72,8 +72,9 @@ removes its source record before the SDK wraps the failed batch. An uncertain
 delivery blocks further asks before journaling. The owner must clarify when one
 question matches several sources. On an owner-DM turn, notifications
 in the loaded literal phone history supply structured
-context. No separate pending-request lifecycle is needed; the phone history
-selects the relevant asks, including after an agent restart. An owner history
+context. Records older than 24 hours are ignored. A successful `plow_reply_to`
+retires the loaded records for its source account and chat. Phone history still
+selects the relevant asks after an agent restart. An owner history
 fetch failure leaves the decision unacknowledged for recovery after reconnect.
 
 OpenClaw projects `supplemental.channelStructuredContext` into model context
