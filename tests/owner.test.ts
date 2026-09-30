@@ -18,7 +18,7 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   let routingPeer: Peer | undefined;
   let toolsDisabled: boolean | undefined;
   let replyMode: string | undefined;
-  let context: { access?: { toolPolicy?: { allow: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
+  let context: { access?: { toolPolicy?: { deny: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -36,8 +36,8 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   assert.ok(context);
   assert.equal(context.sender.id, role === "owner" ? "plow-owner" : sender.provider_key);
   assert.equal(context.sender.name, sender.display_name);
-  assert.deepEqual(context.access?.toolPolicy, !trusted && role === "member" ? { allow: ["plow_ask_owner"] } : undefined);
-  assert.equal(toolsDisabled, undefined);
+  assert.equal(context.access?.toolPolicy, undefined);
+  assert.equal(toolsDisabled, !trusted && role === "member" ? true : undefined);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
   assert.equal(facts.participants[0].role, role);
