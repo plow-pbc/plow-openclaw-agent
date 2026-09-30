@@ -392,7 +392,6 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       abort();
       await Promise.allSettled(dispatching);
       await Promise.all(queues.values());
-      pending.clear();
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
