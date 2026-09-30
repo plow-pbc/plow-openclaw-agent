@@ -207,7 +207,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
                 throw error;
               }) : undefined;
               const target = recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
-                : await ownerChat(phone).catch(error => { log(`no owner chat: ${(error as Error).message}`); return undefined; });
+                // Read fresh: a cached roster can be stale, and a failed read is not proof there is no 1:1.
+                : findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
               deliveredToOwner = true;
               if (!target) {
                 log(`dropped final chat=${chat.uid} message=${message.uid}: nowhere to deliver`);
@@ -436,10 +437,9 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
-        // As on the Hermes image: every mail ends with a line holding exactly the persona.
-        if (!persona) return refuse("Your mailbox has no persona name; nothing was sent.");
-        if (args.body.trim().split("\n").at(-1) !== persona) {
-          return refuse(`This sends from ${persona}'s mailbox, even when your owner says 'from me' or approves a draft. Write as ${persona} on their behalf and end body with a separate line containing exactly ${persona}. Never sign as your owner. Correct the body and call again; nothing was sent.`);
+        // As on the Hermes image: a mailbox with a persona signs every mail with it on the closing line.
+        if (persona && !args.body.trim().split("\n").at(-1)!.includes(persona)) {
+          return refuse(`This sends from ${persona}'s mailbox, even when your owner says 'from me' or approves a draft. Write as ${persona} on their behalf and end body with a sign-off line containing ${persona}. Never sign as your owner. Correct the body and call again; nothing was sent.`);
         }
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
@@ -466,7 +466,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person and sign it as ${persona || "yourself"}, never as the owner, even for 'from me' or an approved draft. End body with a separate line containing exactly ${persona || "your persona name"}; any other signature is refused. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person and sign it as ${persona || "yourself"}, never as the owner, even for 'from me' or an approved draft. End body with a sign-off line containing ${persona || "your persona name"}; a closing line without it is refused. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {

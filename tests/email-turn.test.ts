@@ -30,6 +30,8 @@ const chats: Record<string, { uid: string; status: string; trusted: boolean; dis
 };
 // Chats this agent's credential can no longer read: their GET answers 403.
 const forbidden = new Set<string>();
+// Set inside a turn to make the chat listing fail from then on.
+let listingFails = false;
 const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail", emailName: "Elm" } } };
 const transcript = async (sessionKey: string) => {
   const entry = getSessionEntry({ agentId: "main", sessionKey });
@@ -54,7 +56,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
       posts.push({ path, body: JSON.parse(options.body as string) });
       return path === "/chats" && posts.at(-1)!.body.line_uid === "mail" ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
     }
-    if (path === "/chats") return Response.json({ data: Object.values(chats), has_more: false });
+    if (path === "/chats") return listingFails ? Response.json({}, { status: 503 }) : Response.json({ data: Object.values(chats), has_more: false });
     if (forbidden.has(path.split("/")[2])) return Response.json({}, { status: 403 });
     // Only an email thread's newest message is served: the listing reads it for last activity.
     if (path.endsWith("/messages")) return Response.json(new URL(url).searchParams.get("limit") !== "1" || !["thread", "other", "started"].includes(path.split("/")[2]) ? { data: [], has_more: false } : { data: [{ uid: "newest", direction: "outbound", sender: self("mail"), body: "Earlier", attachments: [], created_at: "2026-09-28T12:00:00Z" }], has_more: false });
@@ -273,13 +275,14 @@ for (const [name, body, refused] of [
   ["signed as the owner", "Hi Casey,\n\nThursday works for me.\n\nThanks,\nOwner", true],
   ["no closing persona line", "Hi Casey, Alex's team says Thursday works.", true],
   ["closing line is the persona", "Hi Casey,\n\nAlex's team says Thursday works.\n\nElm", false],
-] as const) test(`plow_send_email sends only mail whose closing line is the persona: ${name}`, async t => {
+  ["closing line contains the persona", "Hi Casey,\n\nThursday works.\n\n— Elm (on behalf of Alex)", false],
+] as const) test(`plow_send_email sends only mail whose closing line names the persona: ${name}`, async t => {
   let result: { isError?: boolean; content: { text: string }[] } | undefined;
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
     result = await tool().execute("call", { to: "thread", body });
   });
   assert.equal(Boolean(result!.isError), refused);
-  if (refused) assert.match(result!.content[0].text, /exactly Elm/);
+  if (refused) assert.match(result!.content[0].text, /sign-off line containing Elm/);
   assert.equal(posts.length, refused ? 0 : 1);
 });
 
@@ -288,4 +291,27 @@ test("a NO_REPLY line beside an email final is not delivered to the owner", asyn
     await final(dispatch, { text: dispatch.ctxPayload.conversation.id === "thread" ? "Morgan asked about Thursday.\n\nNO_REPLY" : "NO_REPLY\n" });
   });
   assert.deepEqual(posts.map(post => post.body.body), [`Re: email "Booking" from "Sender (sender@example.com)" (thread thread)\n\nMorgan asked about Thursday.`]);
+});
+
+test("a mailbox with no persona name sends without a sign-off gate", async t => {
+  const persona = cfg.channels.plow.emailName;
+  delete (cfg.channels.plow as { emailName?: string }).emailName;
+  t.after(() => { cfg.channels.plow.emailName = persona; });
+  let result: { isError?: boolean } | undefined;
+  const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
+    result = await tool().execute("call", { to: "thread", body: "Thursday works." });
+  });
+  assert.ok(!result!.isError);
+  assert.equal(posts.length, 1);
+});
+
+test("a failed read of the owner's 1:1 fails the delivery instead of dropping it as delivered", async t => {
+  t.after(() => { listingFails = false; });
+  const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    listingFails = true;
+    await final(dispatch, { text: "For you" }).catch(() => {});
+  });
+  assert.deepEqual(posts, []);
+  assert.ok(!logs.some(line => line.startsWith("completed chat=thread")));
+  assert.ok(!logs.some(line => line.includes("nowhere to deliver")));
 });
