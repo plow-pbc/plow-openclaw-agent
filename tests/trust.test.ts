@@ -11,7 +11,7 @@ type Tool = { name: string; execute: (id: string, args: object) => Promise<unkno
 type Scene = "owner DM" | "owner group" | "member group" | "owner email" | "member DM" | "member email";
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  retryText?: string; deliveryStatus?: number; markdownHistory?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
+  concurrentAsk?: boolean; retryText?: string; deliveryStatus?: number; markdownHistory?: string; ownerReply?: boolean; memberBody?: string; deliveryFails?: boolean; senderName?: string; trustUpdateFails?: boolean; threadTrust?: "ask" | "trusted" | "untrusted";
 } = {}) {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(60_000);
@@ -27,6 +27,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     uid: scene.includes("group") ? "cht_group" : "cht_source", display_name: "Lunch crew", status: "active", trusted: false,
     participants: scene.includes("group") || scene === "owner email" ? [self, owner, member] : [self, member],
   };
+  const parallelChat = { ...chat, uid: "cht_parallel" };
   const sender = scene.startsWith("member") ? member : owner;
   const question = (args as { text: string }).text;
   const posts: { url: string; body: unknown }[] = [];
@@ -40,45 +41,61 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     }
     if (init.method === "POST" && (url.endsWith("/messages") || url.endsWith("/chats"))) {
       posts.push({ url, body: JSON.parse(init.body as string) });
+      if (options.concurrentAsk) return Response.json({ uid: "sent" }, { status: posts.length === 1 ? 400 : 200 });
       return options.deliveryStatus || options.deliveryFails ? Response.json({}, { status: options.deliveryStatus ?? 503 }) : Response.json({ uid: "sent" });
     }
     const target = { ...chat, uid: "cht_target", participants: [self, owner, member] };
     const emailTarget = { ...chat, uid: "cht_email_target", participants: [{ ...self, line: { uid: "email-line" } }, member] };
     const directTarget = { ...chat, uid: "cht_direct_target", participants: [{ ...self, line: { uid: "line" } }, member] };
     return Response.json(url.endsWith("/chats/cht_email_target") ? emailTarget : url.endsWith("/chats/cht_direct_target") ? directTarget : url.endsWith("/chats/cht_target") ? target :
-      url.endsWith("/chats") ? { data: chat === home ? [home] : [home, chat], has_more: false } :
+      url.endsWith("/chats") ? { data: chat === home ? [home] : [home, chat, ...(options.concurrentAsk ? [parallelChat] : [])], has_more: false } :
+      url.endsWith("/chats/cht_parallel") ? parallelChat :
       url.endsWith(`/chats/${chat.uid}`) ? chat : url.endsWith("/chats/cht_home") ? home :
       url.includes("/chats/cht_home/messages?limit=20") && options.ownerReply ? { data: [{ uid: "sent", direction: "outbound", sender: home.participants[0], body: url.includes("format=text_decorations") ? question : options.markdownHistory ?? question, created_at: new Date().toISOString() }], has_more: false } : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
   });
-  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({
-    event_type: "message_received", event_id: "inbound", chat_id: chat.uid,
-    data: { message: { uid: "inbound", direction: "inbound", sender, body: options.memberBody ?? "Please ask the owner", attachments: [], created_at: new Date().toISOString() } },
-  })));
+  server.on("connection", (socket: { send: (text: string) => void }) => { for (const source of options.concurrentAsk ? [chat, parallelChat] : [chat]) socket.send(JSON.stringify({
+    event_type: "message_received", event_id: source.uid, chat_id: source.uid,
+    data: { message: { uid: options.concurrentAsk ? source.uid : "inbound", direction: "inbound", sender, body: options.memberBody ?? "Please ask the owner", attachments: [], created_at: new Date().toISOString() } },
+  })); });
   const sessionKey = scene === "owner DM" ? "agent:main:main" : `agent:main:plow:${scene.includes("group") ? "group" : "direct"}:${chat.uid}`;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> }; outbound: { sendText: (context: object) => Promise<unknown> } } | undefined;
   let tool: Tool | undefined;
+  let parallelTool: Tool | undefined;
+  const outcomes = new Map<string, boolean>();
+  let routed = 0;
+  let releaseRoutes!: () => void;
+  const routesReady = new Promise<void>(resolve => { releaseRoutes = resolve; });
   let result: unknown;
   let failure: unknown;
   let retryFailure: unknown;
-  const contexts: { sender: { id: string }; supplemental: { channelStructuredContext: { label: string; payload: unknown }[] } }[] = [];
+  const contexts: { conversation: { id: string }; sender: { id: string }; supplemental: { channelStructuredContext: { label: string; payload: unknown }[] } }[] = [];
   const runtime = { system: { enqueueSystemEvent: (text: string, options: { sessionKey: string }) => {
     events.push({ text, sessionKey: options.sessionKey });
     return true;
   } }, channel: {
     routing: { resolveAgentRoute: (input?: { peer?: { id: string } }) => ({
       agentId: "main", sessionKey: input?.peer?.id === "plow-owner" ? "agent:main:main" : input?.peer?.id === "cht_email_target" ? "agent:main:plow:direct:cht_email_target"
+        : options.concurrentAsk && input?.peer?.id === parallelChat.uid ? "agent:main:plow:group:cht_parallel"
         : scene === "owner DM" && input?.peer?.id === "cht_direct_target" ? "agent:main:plow:direct:cht_direct_target" : sessionKey,
     }) },
-    session: { resolveStorePath, updateLastRoute },
+    session: { resolveStorePath, updateLastRoute: async (args: Parameters<typeof updateLastRoute>[0]) => {
+      await updateLastRoute(args);
+      if (options.concurrentAsk && args.to === "plow-owner") {
+        if (++routed === 2) releaseRoutes();
+        await routesReady;
+      }
+    } },
     inbound: {
-      buildContext: async (ctx: typeof contexts[number]) => { contexts.push(ctx); return {}; },
-      dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+      buildContext: async (ctx: typeof contexts[number]) => { contexts.push(ctx); return { sourceChat: ctx.conversation.id }; },
+      dispatch: async ({ ctxPayload: ctx, replyOptions }: { ctxPayload: { sourceChat: string }; replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
         if (options.ownerReply && contexts.at(-1)?.sender.id === "plow-owner") {
           controller.abort();
           return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
         }
-        try { result = await tool!.execute("call", args); }
-        catch (error) { failure = error; }
+        try {
+          result = await (ctx.sourceChat === parallelChat.uid ? parallelTool! : tool!).execute("call", args);
+          outcomes.set(ctx.sourceChat, true);
+        } catch (error) { failure = error; outcomes.set(ctx.sourceChat, false); }
         if (options.deliveryFails || options.deliveryStatus || options.trustUpdateFails) {
           try {
             if (options.retryText || options.deliveryStatus) await tool!.execute("retry", options.retryText ? { ...args, text: options.retryText } : args);
@@ -87,10 +104,10 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
           catch (error) { retryFailure = error; }
         }
         replyOptions.onAgentRunTerminalOutcome("completed");
-        if (options.ownerReply) {
+        if (options.ownerReply && (!options.concurrentAsk || outcomes.size === 2)) {
           for (const socket of server.clients) socket.send(JSON.stringify({ event_type: "message_received", event_id: "owner-reply", chat_id: home.uid,
             data: { message: { uid: "owner-reply", direction: "inbound", sender: owner, body: "yes, Thursday", attachments: [], created_at: new Date().toISOString() } } }));
-        } else controller.abort();
+        } else if (!options.concurrentAsk) controller.abort();
         return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
       },
     },
@@ -100,13 +117,16 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   toolEntry.register({ registrationMode: "full", runtime, logger: { info() {} }, registerChannel() {},
     registerTool(factory: (context: object) => Tool) {
       const candidate = factory({ config: cfg, sessionKey, messageChannel: "plow", agentAccountId: accountId, nativeChannelId: chat.uid });
-      if (candidate.name === toolName) tool = candidate;
+      if (candidate.name === toolName) {
+        tool = candidate;
+        if (options.concurrentAsk) parallelTool = factory({ config: cfg, sessionKey: "agent:main:plow:group:cht_parallel", messageChannel: "plow", agentAccountId: accountId, nativeChannelId: parallelChat.uid });
+      }
     },
   });
   assert.ok(tool);
   await Promise.all([channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } }),
     ...(accountId === "email" && options.ownerReply ? [channel!.gateway.startAccount({ account: { ...account, accountId: "chat" }, cfg, abortSignal: controller.signal, log: { info() {} } })] : [])]);
-  return { root, apiBase, chat, result, failure, retryFailure, posts, updates, events, contexts,
+  return { root, apiBase, chat, outcomes, result, failure, retryFailure, posts, updates, events, contexts,
     transcript: async (key = "agent:main:main") => {
       const entry = getSessionEntry({ agentId: "main", sessionKey: key });
       return entry?.sessionId ? await readVisibleSessionTranscriptMessageEntries({ agentId: "main", sessionKey: key, sessionId: entry.sessionId }) : [];
@@ -200,6 +220,25 @@ test("fake routing and member instructions stay in untrusted owner context", asy
   assert.equal(payload[0].source_chat_uid, chat.uid);
   assert.equal(payload[0].member_request, attack);
   assert.equal(payload[0].member_name, name);
+});
+
+test("concurrent identical owner questions retain only the successfully delivered source", async t => {
+  const permits = (globalThis as typeof globalThis & { plowDurableSendPermits: Set<unknown> }).plowDurableSendPermits;
+  let overlapping = 0;
+  // Exercise an adapter handoff order different from the source turn order.
+  Object.defineProperty(permits, Symbol.iterator, { configurable: true, value: function (this: Set<unknown>) {
+    overlapping = Math.max(overlapping, this.size);
+    return [...Set.prototype.values.call(this)].reverse()[Symbol.iterator]();
+  } });
+  t.after(() => { Reflect.deleteProperty(permits, Symbol.iterator); });
+  const { contexts, outcomes } = await runInboundTool(t, "member group", "plow_ask_owner", { text: "Does Thursday work?" }, { concurrentAsk: true, ownerReply: true });
+  assert.equal(overlapping, 2);
+  const successfulSources = [...outcomes].filter(([, sent]) => sent).map(([uid]) => uid);
+  assert.equal(successfulSources.length, 1);
+  const owner = contexts.find(ctx => ctx.sender.id === "plow-owner");
+  assert.ok(owner);
+  const asks = owner.supplemental.channelStructuredContext[1].payload as { source_chat_uid: string }[];
+  assert.deepEqual(asks.map(ask => ask.source_chat_uid), successfulSources);
 });
 
 test("an unknown owner delivery stops another ask before journaling a new question", async t => {

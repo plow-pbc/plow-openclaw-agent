@@ -37,14 +37,14 @@ async function ownerAsks(account: Account, history: Message[]): Promise<(OwnerAs
   return asks;
 }
 
-type SendPermit = { accountId: string; to: string; text: string; literal?: boolean; rejected?: boolean; onRejected?: () => Promise<void> };
+type SendPermit = { turn: ActiveTurn; accountId: string; to: string; text: string; literal?: boolean; rejected?: boolean; onRejected?: () => Promise<void> };
 const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
 const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
 const activeTurns = (shared.plowActiveTurns ??= new Map<string, ActiveTurn>());
 // The SDK loads the outbound adapter separately, so durable dispatch grants one exact send across module instances.
 const durableSendPermits = (shared.plowDurableSendPermits ??= new Set<SendPermit>());
 function consumeDurablePermit(accountId: string | null | undefined, to: string, text: string) {
-  for (const permit of durableSendPermits) if (permit.accountId === accountId && permit.to === to && (permit.literal ? permit.text.trimEnd() : permit.text) === text) {
+  for (const permit of durableSendPermits) if (permit.turn === activeTurn.getStore() && permit.accountId === accountId && permit.to === to && (permit.literal ? permit.text.trimEnd() : permit.text) === text) {
     durableSendPermits.delete(permit);
     return permit;
   }
@@ -108,7 +108,7 @@ async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agent
     storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
-  const permit: SendPermit = { accountId, to, text, literal, onRejected };
+  const permit: SendPermit = { turn, accountId, to, text, literal, onRejected };
   let result;
   try {
     result = await activeTurn.run(turn, () => sendDurableMessageBatch({
