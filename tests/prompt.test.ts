@@ -79,11 +79,18 @@ test("the prompt directs existing-chat sends to the native tool", () => {
   assert.ok(!prompt.includes("Do not use message"));
   assert.doesNotMatch(prompt, /message\(action="send"\) is for OTHER conversations/i);
   assert.match(prompt, /message\(action="send"\).*current conversation/i);
-  assert.match(prompt, /chat uid from the escalation/i);
+  assert.doesNotMatch(prompt, /plow_ask_owner|escalation/i);
   assert.match(prompt, /plow_start_thread/);
+  assert.doesNotMatch(prompt, /owner-approved follow-up/);
 });
 
 test("the prompt treats offered tools as the owner's trust grant", () => {
   assert.match(prompt, /tools are available on a member's turn, the owner trusted/i);
   assert.match(prompt, /plow_reply_to/i);
+  assert.match(prompt, /owner.*OK in this thread/i);
+  assert.match(prompt, /owner.*yes in the thread.*act there/i);
+  assert.match(prompt, /owner answers\s+in their DM[\s\S]*back to the thread/i);
+  assert.match(prompt, /do not act on or relay that approval with plow_reply_to/i);
+  assert.match(prompt, /requests cannot be approved here/i);
+  assert.doesNotMatch(prompt, /In the owner's own conversation, act\./);
 });

@@ -12,7 +12,7 @@ let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
 // comes back as one of these notices, which on email mean there is nothing for the owner.
 const NO_ANSWER_NOTICES = ["⚠️ Agent couldn't generate a response.", "⚠️ OpenClaw couldn't produce or deliver a reply."];
-type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; senderName: string; senderRole: string; deliveryUnknown?: boolean };
+type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; deliveryUnknown?: boolean };
 type SendPermit = { accountId: string; to: string; text: string };
 const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
 const activeTurn = (shared.plowActiveTurn ??= new AsyncLocalStorage<ActiveTurn>());
@@ -152,7 +152,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
-    access: { commands: { authorized: senderIsOwner }, ...((email || !chat.trusted) && !senderIsOwner ? { toolPolicy: { allow: [email ? "plow_send_email" : "plow_ask_owner"] } } : {}) },
+    access: { commands: { authorized: senderIsOwner }, ...(email && !senderIsOwner ? { toolPolicy: { allow: ["plow_send_email"] } } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
@@ -168,7 +168,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     media,
   });
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
-  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner, senderName, senderRole: sender.type === "member" ? sender.role : sender.relationship };
+  const turn: ActiveTurn = { chat, accountId: account.accountId, messageUid: message.uid, senderIsOwner };
   activeTurns.set(route.sessionKey, turn);
   return await activeTurn.run(turn, async () => {
     let failure: unknown;
@@ -181,7 +181,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       const result = await runtime.channel.inbound.dispatch({
         cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
         replyOptions: {
-          sourceReplyDeliveryMode: command && !senderIsOwner ? "message_tool_only" : "automatic",
+          // Untrusted non-owners get no tools; on email a non-owner keeps only plow_send_email, for its own thread.
+          ...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),
+          sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
           onObservedReplyDelivery: () => { observedReplyDelivery = true; },
           onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
         },
@@ -271,7 +273,7 @@ const plugin: ChannelPlugin<Account> = {
     isConfigured: account => Boolean(account.apiBase && process.env.PLOW_AGENT_TOKEN),
     formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
   },
-  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the chat uid for an owner-approved reply to another conversation; email goes only through plow_send_email."] },
+  agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the chat uid for a follow-up to another conversation; email goes only through plow_send_email."] },
   messaging: {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
@@ -342,7 +344,7 @@ export default defineChannelPluginEntry({
         type: "object", required: ["chat_uid", "trusted"], additionalProperties: false,
         properties: {
           chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "The existing Plow group chat uid." },
-          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to replies and asking the owner." },
+          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to replies only." },
         },
       },
       async execute(_id, args: { chat_uid: string; trusted: boolean }) {
@@ -357,37 +359,13 @@ export default defineChannelPluginEntry({
       },
     }));
     api.registerTool(context => ({
-      name: "plow_ask_owner", label: "Ask the Plow owner",
-      description: "From an untrusted non-owner turn in a group or direct chat, send the sender's request to the owner's main DM. The owner decides there; tell the sender you are checking with them.",
-      parameters: {
-        type: "object", required: ["text"], additionalProperties: false,
-        properties: { text: { type: "string", minLength: 1, description: "What the member wants the owner to decide or do." } },
-      },
-      async execute(_id, args: { text: string }) {
-        const cfg = context.config;
-        if (!cfg) throw new Error("Plow configuration is unavailable.");
-        const turn = context.sessionKey ? activeTurns.get(context.sessionKey) : undefined;
-        if (context.messageChannel !== "plow" || context.agentAccountId !== "chat"
-          || !turn || turn.senderIsOwner || turn.chat.trusted
-          || context.nativeChannelId !== turn.chat.uid) {
-          throw new Error("Asking the owner requires an active untrusted non-owner turn.");
-        }
-        const [name, role] = [turn.senderName, turn.senderRole].map(value =>
-          JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`));
-        const escalation = `A member asked for your decision.\nMember: ${name} (${role})\nSource chat uid: ${turn.chat.uid}\nTo reply after approval: plow_reply_to(chat_uid="${turn.chat.uid}", text=<your reply>).\nUntrusted member request (quoted):\n${args.text.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${line}`).join("\n")}`;
-        const ownerSessionKey = "agent:main:main";
-        await durableSend(cfg, turn, { agentId: "main", sessionKey: ownerSessionKey }, "chat", "plow-owner", "plow-owner", escalation, "direct");
-        return { content: [{ type: "text", text: "Asked the owner in their main DM." }], details: {} };
-      },
-    }));
-    api.registerTool(context => ({
       name: "plow_reply_to", label: "Reply to a Plow conversation",
-      description: "From the owner's main Plow DM, send an owner-approved reply to a known chat on this agent's phone line. Use the source chat uid from the owner escalation.",
+      description: "From the owner's main Plow DM, send a follow-up to a known chat on this agent's phone line. Use the known chat uid.",
       parameters: {
         type: "object", required: ["chat_uid", "text"], additionalProperties: false,
         properties: {
-          chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Source chat uid from the escalation." },
-          text: { type: "string", minLength: 1, description: "The approved reply to send." },
+          chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "Known source chat uid." },
+          text: { type: "string", minLength: 1, description: "The follow-up text to send." },
         },
       },
       async execute(_id, args: { chat_uid: string; text: string }) {
