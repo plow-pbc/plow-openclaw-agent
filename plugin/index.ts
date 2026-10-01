@@ -15,7 +15,6 @@ let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
-const UNSCHEDULED_REMINDER_NOTE = "Note: I did not schedule a reminder in this turn";
 type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; deliveryUnknown?: boolean };
 type SendPermit = { accountId: string; to: string; text: string };
 const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
@@ -203,9 +202,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           },
           deliver: async payload => {
             if (email) {
-              // A NO_REPLY line the model left beside its text is the silence marker, and the runtime's
-              // unscheduled-reminder note is about the model's turn; neither is words for the owner.
-              const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY" && !line.startsWith(UNSCHEDULED_REMINDER_NOTE)).join("\n").trim();
+              // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
+              const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").replace(/\n{3,}/g, "\n\n").trim();
               // Only the no-reply fallback is silence; an error notice is a real failure and reaches the owner.
               if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
                 log(`silent chat=${chat.uid} message=${message.uid}`);

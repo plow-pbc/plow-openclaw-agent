@@ -257,12 +257,12 @@ test("sender-chosen subject and name stay on the header's one line", async t => 
   assert.equal(String(posts[0].body.body).split(/[\n\u2028\u2029]/).length, 2, "one header line, then the final");
 });
 
-test("a NO_REPLY line and the runtime's reminder note beside an email final are not delivered to the owner", async t => {
+test("a NO_REPLY line beside an email final is dropped; the runtime's reminder note still reaches the owner", async t => {
+  const note = "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }, { chat: "other", sender: outsider }], async dispatch => {
-    await final(dispatch, { text: dispatch.ctxPayload.conversation.id === "thread"
-      ? "Morgan asked about Thursday.\n\nNO_REPLY\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically." : "NO_REPLY\n" });
+    await final(dispatch, { text: dispatch.ctxPayload.conversation.id === "thread" ? `Morgan asked about Thursday.\n\nNO_REPLY\n\n${note}` : "NO_REPLY\n" });
   });
-  assert.deepEqual(posts.map(post => post.body.body), [`Email "Booking" from "sender@example.com":\nMorgan asked about Thursday.`]);
+  assert.deepEqual(posts.map(post => post.body.body), [`Email "Booking" from "sender@example.com":\nMorgan asked about Thursday.\n\n${note}`]);
 });
 
 for (const [name, failures, paths, completed] of [
