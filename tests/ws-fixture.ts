@@ -14,7 +14,8 @@ export async function websocketFixture(t: TestContext) {
   t.after(async () => {
     for (const socket of server.clients) socket.terminate();
     await new Promise<void>(resolve => server.close(resolve));
-    await rm(root, { recursive: true });
+    // Session storage can still be flushing when a durable send ends a test.
+    await rm(root, { recursive: true, maxRetries: 5 });
   });
   const abortAfter = (ms = 2000) => {
     const controller = new AbortController();

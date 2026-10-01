@@ -2,7 +2,7 @@
   "id": "plow",
   "name": "Plow",
   "channels": ["plow"],
-  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to"] },
+  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"] },
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false },
   "channelConfigs": {
@@ -15,6 +15,7 @@
           "apiBase": { "type": "string" },
           "lineUid": { "type": "string" },
           "emailLineUid": { "type": "string" },
+          "emailName": { "type": "string" },
           "threadTrust": { "type": "string", "enum": ["ask", "trusted", "untrusted"] }
         }
       }

@@ -24,7 +24,7 @@ export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; o
 const historyOverlap = 20;
 export type TurnOutcome = "completed" | "incomplete" | "deferred";
 export type Page<T> = { data: T[]; has_more: boolean };
-export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; threadTrust?: "ask" | "trusted" | "untrusted" };
+export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; emailName?: string; threadTrust?: "ask" | "trusted" | "untrusted" };
 
 export class HttpError extends Error {
   status: number;

@@ -151,6 +151,16 @@ Replies stay in their source conversation. The agent can start groups only from
 an active owner message in the main Plow DM and send follow-ups to active
 conversations on its own lines. The dashboard shares `agent:main:main`, but a
 dashboard turn has no active owner DM and cannot start a group.
+Email is the exception to replying in place. An email turn's final text never
+reaches its thread: it goes privately to the owner, in the chat the thread was
+started from with `plow_send_email` while it is still the owner's DM or a
+trusted group and readable, or else the owner's 1:1, under one line naming the
+email, and is recorded in that chat's session. `NO_REPLY` there sends
+nothing. Mail leaves only through `plow_send_email`, which replies in a thread by
+its chat uid, starts one from email addresses and a subject, or lists threads;
+`message` and `plow_reply_to` refuse email. On mail from anyone but the owner,
+the turn can only reply in its own thread. The mailbox comes from `mailbox` on
+`/v1/agents/me`, so it is served before its first thread.
 Clarifications are ordinary replies. When connected through Latch, the owner's
 Mac provides its tools and instructions. Mac unavailability does not prevent
 texting. Long-running MCP responses stream without a fixed bridge timeout;
@@ -216,11 +226,12 @@ loopback interface.
 Trust controls tool access per turn. In a trusted group, every sender can
 use the agent's tools, including the owner's Mac, mail and files. In any
 untrusted conversation, the owner still has full tools; other senders get replies
-only, with no tools. This includes direct chats and email threads, whose senders
-can be anyone. If the owner is absent, tool-requiring requests cannot be approved
+only, with no tools. This includes direct chats, whose senders can be anyone;
+email threads follow the email rules above. If the owner is absent, tool-requiring requests cannot be approved
 there. When the owner is present, a new request needs their OK in the same thread;
 the owner approves there and the agent acts there. An owner answering in their DM is
-pointed back to that thread. The owner can switch a group with
+pointed back to that thread. Email never uses in-thread approval: the owner decides
+privately in their chat, and the agent then sends. The owner can switch a group with
 `plow_set_thread_trust` from their main DM, or with the app toggle.
 New groups require an explicit trust choice in the default `ask` mode.
 `PLOW_THREAD_TRUST=untrusted` creates untrusted groups without asking;

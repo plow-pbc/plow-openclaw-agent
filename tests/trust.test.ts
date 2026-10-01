@@ -119,18 +119,16 @@ test("ask mode requires an explicit trust choice", async t => {
 
 for (const scene of ["owner group", "member group", "owner email"] as const) test(`reply tool from ${scene}`, async t => {
   const { failure, posts } = await runInboundTool(t, scene, "plow_reply_to", {
-    account: "email", chat_uid: "cht_email_target", text: "Lunch is at noon.",
+    chat_uid: "cht_direct_target", text: "Lunch is at noon.",
   });
   assert.match((failure as Error)?.message, /owner's main Plow DM/);
   assert.deepEqual(posts, []);
 });
 
-for (const { account, chatUid, text, sessionKey } of [
-  { account: "email", chatUid: "cht_email_target", text: "Lunch is at noon.", sessionKey: "agent:main:plow:direct:cht_email_target" },
-  { account: "chat", chatUid: "cht_direct_target", text: "See you at lunch.", sessionKey: "agent:main:plow:direct:cht_direct_target" },
-] as const) test(`follow-up destination ${account}`, async t => {
+test("follow-up to another phone chat", async t => {
+  const [chatUid, text, sessionKey] = ["cht_direct_target", "See you at lunch.", "agent:main:plow:direct:cht_direct_target"];
   const { apiBase, result, failure, posts, transcript } = await runInboundTool(t, "owner DM", "plow_reply_to", {
-    account, chat_uid: chatUid, text,
+    chat_uid: chatUid, text,
   });
   assert.equal(failure, undefined);
   assert.deepEqual((result as { details: unknown }).details, { message_uid: "sent" });
@@ -138,9 +136,9 @@ for (const { account, chatUid, text, sessionKey } of [
   assert.deepEqual((await transcript(sessionKey)).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", text]]);
 });
 
-test("reply tool checks the destination account", async t => {
+test("reply tool serves only phone chats, never an email thread", async t => {
   const { failure, posts } = await runInboundTool(t, "owner DM", "plow_reply_to", {
-    account: "chat", chat_uid: "cht_email_target", text: "Approved.",
+    chat_uid: "cht_email_target", text: "Approved.",
   });
   assert.match((failure as Error)?.message, /does not serve this conversation/);
   assert.deepEqual(posts, []);

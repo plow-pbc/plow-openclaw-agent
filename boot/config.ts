@@ -4,10 +4,11 @@ import JSON5 from "json5";
 
 export type Participant =
   | { type: "member"; uid: string; role: string }
-  | { type: "agent"; relationship: string; line: { uid: string; provider_type?: string } };
+  | { type: "agent"; relationship: string; line: { uid: string } };
 export type Identity = {
   agent?: { name?: string | null; web_url?: string | null };
   line: { uid: string };
+  mailbox?: { uid: string; display_name: string } | null;
   chats: { uid: string; status: string; participants: Participant[] }[];
   mcp_url?: string | null;
 };
@@ -18,8 +19,6 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
   }
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
-  const email = identity.chats.flatMap(chat => chat.participants).find(p =>
-    p.type === "agent" && p.relationship === "self" && p.line.provider_type === "email");
   return {
     meta: {},
     gateway: {
@@ -51,7 +50,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     messages: { visibleReplies: "automatic", queue: { mode: "collect" } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust,
-      ...(email?.type === "agent" ? { emailLineUid: email.line.uid } : {}),
+      ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
     bindings: [{ agentId: "main", match: { channel: "plow", accountId: "chat", peer: { kind: "direct", id: "plow-owner" } }, session: { dmScope: "main" } }],
@@ -60,7 +59,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to"], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"] },
   };
 }
 

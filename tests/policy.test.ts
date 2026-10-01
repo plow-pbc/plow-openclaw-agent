@@ -12,7 +12,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
     registerTool(factory: (context: object) => { name: string }) { names.push(factory({}).name); },
     on(name: string) { hooks.push(name); },
   });
-  assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to"]);
+  assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
   assert.ok(!hooks.includes("before_tool_call"));
@@ -51,6 +51,18 @@ test("native message sends enforce the host's source conversation and provider p
   nativeSendPolicy("cht_source", "cht_source");
   assert.throws(() => nativeSendPolicy("cht_source", "cht_other"), /Cross-context messaging denied/);
   assert.throws(() => nativeSendPolicy("cht_source", "cht_source", "slack"), /Cross-context messaging denied/);
+});
+
+test("native email sends are rejected before making a request", async t => {
+  let channel: { outbound: { sendText: (context: object) => Promise<unknown> } };
+  entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} }, on() {},
+    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
+  const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
+  await assert.rejects(channel!.outbound.sendText({
+    cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "chat", emailLineUid: "email" } } },
+    accountId: "email", to: "target", text: "Friday at noon.",
+  }), /plow_send_email/);
+  assert.equal(fetch.mock.callCount(), 0);
 });
 
 test("native targets preserve opaque UID case and reject names and non-chat IDs", () => {
