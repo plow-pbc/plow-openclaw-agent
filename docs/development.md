@@ -36,8 +36,11 @@ its release commit `eb377ac59e6c9fd6c7705028034812becf00271b`.
 
 ## Defaults we inherit
 
-Plow dispatches each inbound message immediately and sets the global queue mode
-to `collect`. Host concurrency and queue tuning inherit the pinned defaults:
+Plow prepares messages in arrival order within each chat, releasing the chat lane
+at the dispatch call rather than model completion, and sets the global queue mode
+to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/bot-core.ts#L257)
+also orders ordinary messages using [conversation keys](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/sequential-key.ts#L250).
+Host concurrency and queue tuning inherit the pinned defaults:
 500 ms debounce, cap 20 pending messages, and summarize overflow. Retained prompts
 are joined without a Plow text cap; overflow keeps bounded 160-character previews,
 so text beyond 20 pending messages can be summarized or omitted. At 1.5-second

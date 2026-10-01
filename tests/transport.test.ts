@@ -577,6 +577,7 @@ test("out-of-order adoption keeps the newest cursor and remembers both sources a
       if (text.startsWith("acked chat=chat message=first ")) controller.abort();
     }, async (_chat, message, _first, _history, ingress) => {
       calls.push(message.uid);
+      ingress.onSubmitted();
       if (message.uid === "first") await secondAdopted.promise;
       await ingress!.onAdopted();
       if (message.uid === "second") secondAdopted.resolve();
@@ -605,8 +606,9 @@ for (const listed of [true, false]) test(`restart mid-turn replays unfinished ch
   for (; boot < 3; boot++) {
     const controller = abortAfter();
     await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
-      if (boot === 0 && text.startsWith("acked chat=fast message=fast")) controller.abort();
-    }, async (_chat, message) => {
+      if (boot === 0 && completed.includes("fast") && completed.includes("later") && text.startsWith("acked")) controller.abort();
+    }, async (_chat, message, _first, _history, ingress) => {
+      ingress.onSubmitted();
       if (boot === 0 && message.uid === "slow") {
         await new Promise<void>(resolve => controller.signal.addEventListener("abort", () => resolve(), { once: true }));
         interrupted.push(message.uid);
@@ -685,6 +687,7 @@ test("a failed adoption write does not poison a later in-flight acknowledgement"
     logs.push(text);
     if (text.startsWith("transport stopped")) controller.abort();
   }, async (_chat, message, _first, _history, ingress) => {
+    ingress.onSubmitted();
     if (message.uid === "later") laterRequested.resolve();
     await ingress.onAdopted();
     return "completed";
@@ -745,7 +748,8 @@ test("email chats run concurrently and drain received work after socket close", 
   const completed: string[] = [];
   const running = listen({ ...account, apiBase, accountId: "email", emailLineUid: "line" }, controller.signal, text => {
     if (text.startsWith("acked chat=slow-email message=first")) controller.abort();
-  }, async (_chat, message) => {
+  }, async (_chat, message, _first, _history, ingress) => {
+    ingress.onSubmitted();
     turns.push(message.uid);
     if (message.uid === "first") await release.promise;
     if (message.uid === "fast") started.resolve();

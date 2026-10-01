@@ -25,6 +25,8 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       socket.send(JSON.stringify({ event_type: "message_received", event_id: msg.uid, chat_id: chat.uid, data: { message: msg } }));
   });
   const contexts: { message: { inboundHistory?: unknown[] }; supplemental: { channelStructuredContext: { payload: { participants: unknown[] } }[] } }[] = [];
+  const secondDispatched = Promise.withResolvers<void>();
+  controller.signal.addEventListener("abort", () => secondDispatched.resolve());
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } };
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -35,6 +37,8 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
           contexts.push(value); return {};
         },
         dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+          if (contexts.length === 1) await secondDispatched.promise;
+          else secondDispatched.resolve();
           replyOptions.onAgentRunTerminalOutcome("completed");
           if (contexts.length === 2) controller.abort();
           return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };

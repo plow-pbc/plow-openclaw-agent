@@ -20,7 +20,7 @@ export type Message = {
   attachments: { url: string; content_type: string; filename: string }[];
   reply_to?: Message;
 };
-export type TurnIngress = { abortSignal: AbortSignal; onAdopted: () => Promise<void> };
+export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; onAdopted: () => Promise<void> };
 const historyOverlap = 20;
 export type TurnOutcome = "completed" | "incomplete" | "deferred";
 export type Page<T> = { data: T[]; has_more: boolean };
@@ -179,7 +179,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     if (checkpoint.startsWith("first:")) await ack(chat, checkpoint);
     initializedRecent.add(chat);
   };
-  const dispatchTurn = async ({ chat, cursor, message }: Queued) => {
+  const dispatchTurn = async ({ chat, cursor, message }: Queued, onSubmitted: () => void) => {
     let acknowledged: Promise<void> | undefined;
     const acknowledge = (stage: string) => acknowledged ??= (async () => {
       if (account.accountId === "chat") await ack(chat.uid, message.uid, cursor);
@@ -187,7 +187,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       remember(message.uid);
       log(`acked chat=${chat.uid} message=${message.uid} stage=${stage}`);
     })();
-    const ingress = { abortSignal: signal, onAdopted: () => acknowledge("adoption") };
+    const ingress = { abortSignal: signal, onSubmitted, onAdopted: () => acknowledge("adoption") };
     const owner = findOwnerChat(account, [...discovered.values()]);
     let outcome: TurnOutcome = "incomplete";
     try {
@@ -237,9 +237,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     const item = { chat, message, cursor };
     pending.add(message.uid);
-    const task = dispatchTurn(item);
+    let onSubmitted!: () => void;
+    const submitted = new Promise<void>(resolve => { onSubmitted = resolve; });
+    const task = dispatchTurn(item, onSubmitted).finally(onSubmitted);
     dispatching.add(task);
     void task.catch(error => failDispatch(error)).finally(() => dispatching.delete(task));
+    await submitted;
   };
 
   while (!signal.aborted) {

@@ -122,7 +122,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   });
   let failure: unknown;
   let observedReplyDelivery = false;
-  const result = await runtime.channel.inbound.dispatch({
+  const dispatched = runtime.channel.inbound.dispatch({
     cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
     dispatcherOptions: replyPipeline,
     replyOptions: {
@@ -145,6 +145,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       onError: error => { failure = error; },
     },
   });
+  ingress.onSubmitted();
+  const result = await dispatched;
   if (failure) throw failure;
   if (!result.dispatched) throw new Error("Turn was not dispatched");
   const dispatchResult = result.dispatchResult;
