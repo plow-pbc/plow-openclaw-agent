@@ -224,7 +224,8 @@ only, with no tools. This includes direct chats, whose senders can be anyone;
 email threads follow the email rules above. If the owner is absent, tool-requiring requests cannot be approved
 there. When the owner is present, a new request needs their OK in the same thread;
 the owner approves there and the agent acts there. An owner answering in their DM is
-pointed back to that thread, except for email, which the owner decides in their chat. The owner can switch a group with
+pointed back to that thread. Email never uses in-thread approval: the owner decides
+privately in their chat, and the agent then sends. The owner can switch a group with
 `plow_set_thread_trust` from their main DM, or with the app toggle.
 New groups require an explicit trust choice in the default `ask` mode.
 `PLOW_THREAD_TRUST=untrusted` creates untrusted groups without asking;

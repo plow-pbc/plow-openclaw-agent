@@ -69,11 +69,10 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   let channel: Parameters<typeof turn>[2] & { gateway: { startAccount: (context: object) => Promise<void> } };
   const factories: ((context: object) => Tool)[] = [];
   const contexts: Context[] = [];
-  const events: { sessionKey: string; text: string }[] = [];
   const logs: string[] = [];
   const api = { registrationMode: "full", logger: { info() {} }, on() {}, registerTool() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
-    runtime: { system: { enqueueSystemEvent: (text: string, { sessionKey }: { sessionKey: string }) => events.push({ sessionKey, text }) }, channel: {
+    runtime: { channel: {
       routing: { resolveAgentRoute: ({ accountId, peer }: { accountId: string; peer: { kind: string; id: string } }) =>
         ({ agentId: "main", sessionKey: peer.id === "plow-owner" ? "agent:main:main" : `agent:main:plow:${accountId}:${peer.kind}:${peer.id}` }) },
       session: { resolveStorePath, updateLastRoute },
@@ -93,7 +92,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   // Tools run in a separate module instance, as they do in the gateway.
   toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) { factories.push(factory); } });
   await channel!.gateway.startAccount({ account, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
-  return { posts, contexts, logs, events };
+  return { posts, contexts, logs };
 }
 
 async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
@@ -116,6 +115,7 @@ test("a non-owner email turn's final goes to the owner's 1:1, labelled, and noth
   assert.doesNotMatch(prompt, /Sender|Owner\b/);
   assert.match(prompt, /plow_send_email, to "thread"/);
   assert.match(prompt, /never sent to this thread/);
+  assert.match(prompt, /never ask them to approve anything in this thread/);
 });
 
 test("NO_REPLY on an email turn is silence: no fallback notice anywhere, and the turn completes", async t => {
@@ -126,12 +126,14 @@ test("NO_REPLY on an email turn is silence: no fallback notice anywhere, and the
   assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
 });
 
-for (const notice of [{ text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }, { text: "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. Reference: run-1." }]) test(`NO_REPLY that the runtime reports as no answer is silence on an email turn: ${notice.text.slice(3, 20)}`, async t => {
-  const { posts, logs } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
-    await dispatch.delivery.deliver(notice);
+for (const [name, payload, toOwner] of [
+  ["the no-reply fallback is silence", { text: "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. Reference: run-1." }, false],
+  ["an error notice reaches the owner", { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }, true],
+] as const) test(`runtime notices on an email turn: ${name}`, async t => {
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    await dispatch.delivery.deliver(payload);
   }, undefined, undefined, "failed");
-  assert.deepEqual(posts, []);
-  assert.ok(logs.some(line => line.startsWith("completed chat=thread")));
+  assert.deepEqual(posts.map(post => post.path), toOwner ? ["/chats/home/messages"] : []);
 });
 
 test("a runtime error notice on an email turn goes to the owner, never to the thread", async t => {
@@ -187,12 +189,11 @@ test("a thread started from a trusted group reports its finals to that group, re
     receipt = JSON.parse((await send.execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" })).content[0].text);
   }, undefined, state);
   assert.deepEqual(receipt, { sent: true, chat_uid: "started" });
-  const { posts, events } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
+  const { posts } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
   assert.deepEqual(posts.map(post => post.path), ["/chats/group/messages"]);
-  // The group sees no chat id; the group's model is told it, to reply in the thread.
+  // The group sees no chat id; the group's session copy keeps it, to reply in the thread.
   assert.equal(posts[0].body.body, `Email "Hello" from "sender@example.com":\nThey replied yes.`);
-  assert.deepEqual(await transcript("agent:main:plow:chat:group:group"), [`Email "Hello" from "sender@example.com":\nThey replied yes.`]);
-  assert.deepEqual(events, [{ sessionKey: "agent:main:plow:chat:group:group", text: `The email report just delivered here is thread started; reply there with plow_send_email to "started".` }]);
+  assert.deepEqual(await transcript("agent:main:plow:chat:group:group"), [`Email "Hello" from "sender@example.com" (thread started):\nThey replied yes.`]);
 });
 
 for (const [name, response, expected] of [
@@ -256,9 +257,10 @@ test("sender-chosen subject and name stay on the header's one line", async t => 
   assert.equal(String(posts[0].body.body).split(/[\n\u2028\u2029]/).length, 2, "one header line, then the final");
 });
 
-test("a NO_REPLY line beside an email final is not delivered to the owner", async t => {
+test("a NO_REPLY line and the runtime's reminder note beside an email final are not delivered to the owner", async t => {
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }, { chat: "other", sender: outsider }], async dispatch => {
-    await final(dispatch, { text: dispatch.ctxPayload.conversation.id === "thread" ? "Morgan asked about Thursday.\n\nNO_REPLY" : "NO_REPLY\n" });
+    await final(dispatch, { text: dispatch.ctxPayload.conversation.id === "thread"
+      ? "Morgan asked about Thursday.\n\nNO_REPLY\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically." : "NO_REPLY\n" });
   });
   assert.deepEqual(posts.map(post => post.body.body), [`Email "Booking" from "sender@example.com":\nMorgan asked about Thursday.`]);
 });

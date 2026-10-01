@@ -3,15 +3,19 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { buildOutboundSessionContext, sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+// @ts-expect-error The pinned SDK ships this runtime entry without type declarations.
+import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
-// The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY
-// comes back as one of these notices, which on email mean there is nothing for the owner.
-const NO_ANSWER_NOTICES = ["⚠️ Agent couldn't generate a response.", "⚠️ OpenClaw couldn't produce or deliver a reply."];
+// The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
+// back as its no-reply fallback, which on email means there is nothing for the owner.
+const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
+const UNSCHEDULED_REMINDER_NOTE = "Note: I did not schedule a reminder in this turn";
 type ActiveTurn = { chat: Chat; accountId: string; messageUid: string; senderIsOwner: boolean; deliveryUnknown?: boolean };
 type SendPermit = { accountId: string; to: string; text: string };
 const shared = globalThis as typeof globalThis & { plowActiveTurn?: AsyncLocalStorage<ActiveTurn>; plowActiveTurns?: Map<string, ActiveTurn>; plowDurableSendPermits?: Set<SendPermit> };
@@ -97,24 +101,27 @@ function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
   return { kind, route, routeTo: peerId === "plow-owner" ? peerId : chat.uid } as const;
 }
 
-async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group") {
+// With sessionText, an existing session the send lands in records that text instead of what people saw.
+async function durableSend(cfg: OpenClawConfig, turn: ActiveTurn, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", sessionText?: string) {
   await runtime.channel.session.updateLastRoute({
     storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
+  const sessionId = sessionText ? getSessionEntry({ agentId: route.agentId, sessionKey: route.sessionKey })?.sessionId : undefined;
   const permit = { accountId, to, text };
   let result;
   try {
     result = await activeTurn.run(turn, () => sendDurableMessageBatch({
       cfg, channel: "plow", accountId, to, payloads: [{ text }],
       session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
-      mirror: route, skipQueue: true, onPlatformSendDispatch: async () => { durableSendPermits.add(permit); },
+      mirror: sessionId ? undefined : route, skipQueue: true, onPlatformSendDispatch: async () => { durableSendPermits.add(permit); },
     }));
   } finally { durableSendPermits.delete(permit); }
   if (result.status !== "sent") {
     turn.deliveryUnknown = true;
     throw new DeliveryUnknownError();
   }
+  if (sessionId) await appendAssistantMirrorMessageByIdentity({ ...route, sessionId, text: sessionText, config: cfg });
   return result.results[0].messageId;
 }
 
@@ -196,9 +203,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           },
           deliver: async payload => {
             if (email) {
-              // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
-              const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").trim();
-              if (!text || NO_ANSWER_NOTICES.some(notice => text.startsWith(notice))) {
+              // A NO_REPLY line the model left beside its text is the silence marker, and the runtime's
+              // unscheduled-reminder note is about the model's turn; neither is words for the owner.
+              const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY" && !line.startsWith(UNSCHEDULED_REMINDER_NOTE)).join("\n").trim();
+              // Only the no-reply fallback is silence; an error notice is a real failure and reaches the owner.
+              if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
                 log(`silent chat=${chat.uid} message=${message.uid}`);
                 silent = true;
                 return { messageIds: [] };
@@ -229,10 +238,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
               // because the durable send trims its text and its permit matches the exact text.
               const { kind, route, routeTo } = sessionRoute(cfg, phone, target);
               const label = emailLabel(chat, sender);
-              const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind);
-              // People see no chat ids; the model in that chat learns the thread's, to reply there. Only
-              // Plow-issued text goes into this event: the label carries sender-written words.
-              runtime.system.enqueueSystemEvent(`The email report just delivered here is thread ${chat.uid}; reply there with plow_send_email to "${chat.uid}".`, { sessionKey: route.sessionKey });
+              // People see no chat ids; that chat's session copy keeps the thread's, to reply there.
+              const sent = await durableSend(cfg, activeTurn.getStore()!, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind,
+                `${label} (thread ${chat.uid}):\n${text}`);
               log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
               return { messageIds: [sent] };
             }
