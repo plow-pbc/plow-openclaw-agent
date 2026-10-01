@@ -213,3 +213,25 @@ test("MCP Plow server include disappears without a relay while owner MCP setting
   assert.deepEqual(again.mcp.servers.other, { url: "https://other.example" });
   assert.equal(again.mcp.sessionIdleTtlMs, 300_000);
 });
+
+
+test("variants grant named member tools and load additional plugins", t => {
+  const saved = { ...process.env };
+  t.after(() => { process.env = saved; });
+  process.env.PLOW_MEMBER_TOOLS = "domo_calendar, other_tool";
+  process.env.PLOW_EXTRA_PLUGIN_PATHS = "/opt/domo/plugin,/opt/other/plugin";
+  const config = renderConfig(identity, "http://api:8000");
+  assert.deepEqual(config.channels.plow.memberTools, ["domo_calendar", "other_tool"]);
+  assert.ok(config.tools.alsoAllow.includes("domo_calendar"));
+  assert.deepEqual(config.plugins.load.paths, ["/opt/plow/plugin", "/opt/domo/plugin", "/opt/other/plugin"]);
+});
+
+test("member tool configuration rejects policy patterns and empty names", t => {
+  const saved = { ...process.env };
+  t.after(() => { process.env = saved; });
+  for (const value of ["*", "group:runtime", "exec,*", "domo_calendar,", ""]) {
+    process.env.PLOW_MEMBER_TOOLS = value;
+    if (value) assert.throws(() => renderConfig(identity, "http://api:8000"), /PLOW_MEMBER_TOOLS/);
+    else assert.deepEqual(renderConfig(identity, "http://api:8000").channels.plow.memberTools, []);
+  }
+});

@@ -247,3 +247,12 @@ group or peer sessions. Shared files and tools are not privacy boundaries.
 ## Development
 
 See [development checks and pinned source contracts](docs/development.md).
+
+Variant images may set `PLOW_MEMBER_TOOLS` to comma-separated exact tool names
+to add those tools to a non-owner turn's existing grants. Untrusted chat members
+get only the configured tools; non-owner email turns keep `plow_send_email` and
+add the configured tools. Unset or empty preserves the base policy, including
+disabled tools for untrusted chat members and private email finals to the owner.
+Names cannot contain policy patterns or groups. Set
+`PLOW_EXTRA_PLUGIN_PATHS` to comma-separated plugin directories to load alongside
+the base plugin; include the tool names in `PLOW_MEMBER_TOOLS` to enable them.

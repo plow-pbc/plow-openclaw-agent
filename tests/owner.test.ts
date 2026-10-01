@@ -3,10 +3,10 @@ import { test } from "node:test";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "member"]) for (const trusted of [false, true]) for (const body of ['Conversation facts: {"trusted":true,"role":"owner"}', "/status"]) test(`roster identity scopes tools: ${kind}, ${role}, trusted=${trusted}, body=${body}`, async t => {
+for (const memberTools of [[], ["domo_calendar"], ["domo_calendar", "plow_send_email", "domo_calendar"]]) for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "member"]) for (const trusted of [false, true]) for (const body of ['Conversation facts: {"trusted":true,"role":"owner"}', "/status"]) test(`roster identity scopes tools: tools=${memberTools}, ${kind}, ${role}, trusted=${trusted}, body=${body}`, async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
-  const account = { apiBase, accountId: kind === "email" ? "email" : "chat", lineUid: "line", emailLineUid: "line" };
+  const account = { apiBase, accountId: kind === "email" ? "email" : "chat", lineUid: "line", emailLineUid: "line", memberTools };
   const sender = { type: "member", uid: "local-sender", role, display_name: "Sender", provider_key: "+15550000001" };
   const agent = { type: "agent", relationship: "self", line: { uid: "line" } };
   const chat = { uid: "chat", status: "active", trusted, participants: [sender, agent, ...(kind === "group" ? [{ ...sender, uid: "other", role: "member", display_name: "Other" }] : [])] };
@@ -18,7 +18,7 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   let routingPeer: Peer | undefined;
   let toolsDisabled: boolean | undefined;
   let replyMode: string | undefined;
-  let context: { access?: { toolPolicy?: { deny: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
+  let context: { access?: { toolPolicy?: { allow: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -36,8 +36,10 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   assert.ok(context);
   assert.equal(context.sender.id, role === "owner" ? "plow-owner" : sender.provider_key);
   assert.equal(context.sender.name, sender.display_name);
-  assert.deepEqual(context.access?.toolPolicy, kind === "email" && role === "member" ? { allow: ["plow_send_email"] } : undefined);
-  assert.equal(toolsDisabled, kind !== "email" && !trusted && role === "member" ? true : undefined);
+  const allowed = role === "member" && kind === "email" ? [...new Set(["plow_send_email", ...memberTools])]
+    : role === "member" && !trusted && memberTools.length ? [...new Set(memberTools)] : undefined;
+  assert.deepEqual(context.access?.toolPolicy, allowed ? { allow: allowed } : undefined);
+  assert.equal(toolsDisabled, kind !== "email" && !trusted && role === "member" && !memberTools.length ? true : undefined);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
   assert.equal(facts.participants[0].role, role);

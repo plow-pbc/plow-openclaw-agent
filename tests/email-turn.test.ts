@@ -16,7 +16,7 @@ type Dispatch = {
   route: { sessionKey: string };
   delivery: { preparePayload: (payload: Payload, info: { kind: string }) => Payload | null; deliver: (payload: Payload) => Promise<unknown> };
 };
-type Context = { supplemental: { groupSystemPrompt?: string; channelStructuredContext: { label: string; payload: unknown }[] } };
+type Context = { access?: { toolPolicy?: { allow: string[] } }; supplemental: { groupSystemPrompt?: string; channelStructuredContext: { label: string; payload: unknown }[] } };
 
 const self = (line: string) => ({ type: "agent", relationship: "self", line: { uid: line, display_name: line === "mail" ? "Elm" : "Phone" } });
 const owner = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "owner@example.com" };
@@ -33,7 +33,7 @@ const chats: Record<string, { uid: string; status: string; trusted: boolean; dis
 const forbidden = new Set<string>();
 // Set inside a turn to make the next N chat listings fail.
 let listingFailures = 0;
-const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail", emailName: "Elm" } } };
+const cfg = { channels: { plow: { lineUid: "line", emailLineUid: "mail", emailName: "Elm", memberTools: ["domo_calendar"] } } };
 const transcript = async (sessionKey: string) => {
   const entry = getSessionEntry({ agentId: "main", sessionKey });
   return entry?.sessionId ? (await readVisibleSessionTranscriptMessageEntries({ agentId: "main", sessionKey, sessionId: entry.sessionId }))
@@ -108,6 +108,7 @@ test("a non-owner email turn's final goes to the owner's 1:1, labelled, and noth
     await final(dispatch, { text: "working on it" }, "block");
     await final(dispatch, { text });
   });
+  assert.deepEqual(contexts[0].access?.toolPolicy?.allow, ["plow_send_email", "domo_calendar"]);
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
   assert.equal(posts[0].body.body, `Email "Booking" from "sender@example.com":\n${text.trim()}`);
   assert.ok(logs.some(line => line.startsWith("completed chat=thread")));

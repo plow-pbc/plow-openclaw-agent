@@ -17,6 +17,9 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
   if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
     throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
   }
+  const memberTools = process.env.PLOW_MEMBER_TOOLS?.trim() ? process.env.PLOW_MEMBER_TOOLS.split(",").map(name => name.trim()) : [];
+  if (memberTools.some(name => !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name))) throw new Error("PLOW_MEMBER_TOOLS must contain comma-separated tool names");
+  const extraPluginPaths = process.env.PLOW_EXTRA_PLUGIN_PATHS?.split(",").map(path => path.trim()).filter(Boolean) ?? [];
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
   return {
@@ -46,10 +49,10 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
-    plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
+    plugins: { load: { paths: ["/opt/plow/plugin", ...extraPluginPaths] }, entries: { plow: { enabled: true } } },
     messages: { visibleReplies: "automatic", queue: { mode: "collect" } },
     channels: { plow: {
-      apiBase, lineUid: identity.line.uid, threadTrust,
+      apiBase, lineUid: identity.line.uid, threadTrust, memberTools,
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
@@ -59,7 +62,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", ...memberTools], deny: ["ask_user"] },
   };
 }
 

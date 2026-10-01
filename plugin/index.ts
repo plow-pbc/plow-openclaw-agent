@@ -119,6 +119,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
+  const restricted = !senderIsOwner && (email || !chat.trusted);
+  const toolAllow = [...new Set([...(email ? ["plow_send_email"] : []), ...(account.memberTools ?? [])])];
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
   const persona = (email && account.emailName) || selfName;
@@ -133,7 +135,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
-    access: { commands: { authorized: senderIsOwner }, ...(email && !senderIsOwner ? { toolPolicy: { allow: ["plow_send_email"] } } : {}) },
+    access: { commands: { authorized: senderIsOwner }, ...(restricted && toolAllow.length ? { toolPolicy: { allow: toolAllow } } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
@@ -170,8 +172,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       turnAdoptionLifecycle: ingress,
       onModelSelected,
       onAgentRunStart: runId => log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`),
-      // Untrusted non-owners get no tools; on email a non-owner keeps only plow_send_email, for its own thread.
-      ...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),
+      ...(restricted && !toolAllow.length ? { disableTools: true } : {}),
       sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
       onObservedReplyDelivery: () => { observedReplyDelivery = true; },
       onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
