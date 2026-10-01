@@ -46,8 +46,9 @@ are joined without a Plow text cap; overflow keeps bounded 160-character preview
 so text beyond 20 pending messages can be summarized or omitted. At 1.5-second
 spacing, a busy run lasting roughly 32 seconds can reach that limit.
 
-Every Plow tool uses the SDK's per-run requester, account, native conversation and
-owner fields, then fetches current Plow chat facts. No shared receipt registry or
+Every Plow tool uses the SDK's per-run requester, account and owner fields, resolving
+the conversation from its native ID or retained delivery route on collected follow-ups,
+then fetches current Plow chat facts. No shared receipt registry or
 async execution context is needed. Thread creation keys use the host tool-call ID.
 Native message sends use OpenClaw's cross-context policy with both within-provider
 and across-provider permissions false; the Plow send adapter checks served lines

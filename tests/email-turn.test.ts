@@ -229,6 +229,34 @@ test("plow_send_email lists threads for the owner and refuses a non-owner in an 
   assert.match(refused.content[0].text, /owner's authority/);
 });
 
+test("collected email tools use the host route and retain owner authority", async t => {
+  const { apiBase } = await websocketFixture(t);
+  const config = { channels: { plow: { ...cfg.channels.plow, apiBase } } };
+  const posts: object[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
+    if (options.method === "POST") {
+      posts.push(JSON.parse(options.body as string));
+      return Response.json({ status: "sent", chat_uid: "started" });
+    }
+    return Response.json(chats.home);
+  });
+  for (const senderIsOwner of [true, false]) {
+    let tool: Tool;
+    toolEntry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+      registerTool(factory: (context: object) => Tool) {
+        const candidate = factory({ config, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
+          requesterSenderId: senderIsOwner ? "plow-owner" : "+15550000002", senderIsOwner,
+          deliveryContext: { channel: "plow", accountId: "chat", to: "plow:home" } });
+        if (candidate.name === "plow_send_email") tool = candidate;
+      },
+    });
+    const result = await tool.execute("collected-email", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
+    if (senderIsOwner) assert.deepEqual(JSON.parse(result.content[0].text), { sent: true, chat_uid: "started" });
+    else { assert.equal(result.isError, true); assert.match(result.content[0].text, /owner's authority/); }
+  }
+  assert.equal(posts.length, 1);
+});
+
 test("a reply sent to a thread from the owner's DM lands there and is recorded in the thread's session", async t => {
   let receipt: unknown;
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {

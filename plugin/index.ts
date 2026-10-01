@@ -22,9 +22,12 @@ function normalizedHandle(handle: string): string {
 }
 
 type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
-async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat: Chat }> {
+function conversationUid(context: Requester): string | undefined {
   // Collected follow-ups retain their delivery route without a native conversation id.
-  const chatUid = (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
+  return (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
+}
+async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat: Chat }> {
+  const chatUid = conversationUid(context);
   if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow" || !context.senderIsOwner
     || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
   const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
@@ -388,10 +391,11 @@ export default defineChannelPluginEntry({
         const phone = plugin.config.resolveAccount(cfg, "chat");
         const mailbox = { ...phone, accountId: "email" };
         if (!phone.emailLineUid) return refuse("You have no mailbox.");
-        if (context.messageChannel !== "plow" || !context.sessionKey || !context.nativeChannelId || !context.requesterSenderId
+        const chatUid = conversationUid(context);
+        if (context.messageChannel !== "plow" || !context.sessionKey || !chatUid || !context.requesterSenderId
           || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")) return refuse("Sending email requires an active Plow message.");
         const account = plugin.config.resolveAccount(cfg, context.agentAccountId);
-        const chat = await request<Chat>(account, `/chats/${encodeURIComponent(context.nativeChannelId)}`);
+        const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
         if (!accepts(account, chat)) return refuse("Sending email requires an active Plow message.");
         const turn = { chat, accountId: context.agentAccountId, senderIsOwner: context.senderIsOwner === true };
         const emailTurn = turn.accountId === "email";
