@@ -347,6 +347,7 @@ test("an omitted checkpointed chat recovers before its first live frame advances
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [], has_more: true } :
     url.endsWith("/chats/omitted") ? chat :
+    url.includes("starting_after=old") ? { data: [], has_more: false } :
     url.includes("limit=50") ? { data: [incoming("live"), incoming("missed"), incoming("old")], has_more: false } :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
   server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({

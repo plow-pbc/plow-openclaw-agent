@@ -17,6 +17,7 @@ test("a deferred source stays pending across a WebSocket reconnect until adoptio
   server.on("connection", () => { connections++; });
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/home") ? chat :
+    url.includes("starting_after=old") ? { data: [], has_more: false } :
     url.includes("limit=50") ? { data: [...(connections > 1 ? [message("later")] : []), message("deferred"),
       { ...message("old"), direction: "outbound" }], has_more: false } :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));

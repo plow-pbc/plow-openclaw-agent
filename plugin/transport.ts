@@ -147,7 +147,14 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   };
   const readCheckpoint = async (chat: string) => {
     const saved = await readFile(`${dir}/${encodeURIComponent(chat)}`, "utf8");
-    if (!saved.startsWith("{")) return saved;
+    if (!saved.startsWith("{")) {
+      if (saved) {
+        const uid = saved.replace(/^first:/, "");
+        const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50&starting_after=${uid}`);
+        recent.set(chat, new Set([...page.data.map(message => message.uid).reverse(), ...(saved.startsWith("first:") ? [] : [uid])]));
+      }
+      return saved;
+    }
     const checkpoint = JSON.parse(saved) as { uid: string; recent: string[] };
     recent.set(chat, new Set(checkpoint.recent));
     return checkpoint.uid;
