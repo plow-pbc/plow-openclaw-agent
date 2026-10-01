@@ -9,6 +9,48 @@ const chat: Chat = { uid: "home", status: "active", trusted: true, participants:
 const inbound = (uid: string): Message => ({ uid, direction: "inbound", sender, body: uid, attachments: [], created_at: "2026-09-29T12:00:00Z" });
 const frame = (message: Message) => JSON.stringify({ event_type: "message_received", event_id: `event-${message.uid}`, chat_id: chat.uid, data: { message } });
 
+for (const unfinished of ["pending", "incomplete"] as const) test(`a later outbound acknowledgement cannot skip ${unfinished} inbound work across restart`, async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/home`, JSON.stringify({ uid: "old", recent: ["old"] }));
+  const outbound: Message = { ...inbound("outbound"), direction: "outbound", sender: chat.participants[1] };
+  const messages = [outbound, inbound("unfinished"), inbound("old")];
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } :
+    url.endsWith("/chats/home") ? chat :
+    url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : messages, has_more: false } : { ticket: "ticket" }));
+  const account: Account = { apiBase, accountId: "chat", lineUid: "line" };
+  const turns: string[] = [];
+  const logs: string[] = [];
+  for (let boot = 0; boot < 3; boot++) {
+    const controller = abortAfter(200);
+    await listen(account, controller.signal, text => {
+      logs.push(text);
+      if (boot === 0 && text === "acked chat=home message=outbound") controller.abort();
+      if (boot === 1 && text.startsWith("acked chat=home message=unfinished ")) controller.abort();
+    }, async (_chat, message, _first, _history, ingress) => {
+      turns.push(message.uid);
+      if (boot === 0) {
+        if (unfinished === "pending") {
+          ingress.onSubmitted();
+          await new Promise<void>(resolve => controller.signal.addEventListener("abort", () => resolve(), { once: true }));
+        }
+        return "incomplete";
+      }
+      return "completed";
+    });
+    if (boot === 0) {
+      const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/home`, "utf8"));
+      assert.equal(saved.uid, "old", "recovery must stay before the unfinished source");
+      assert.ok(saved.recent.includes("outbound"), "later handled rows must remain deduplicated");
+      assert.ok(!saved.recent.includes("unfinished"));
+    }
+  }
+  assert.deepEqual(turns, ["unfinished", "unfinished"]);
+  assert.equal(logs.filter(text => text === "acked chat=home message=outbound").length, 1);
+  assert.equal(logs.filter(text => text.startsWith("acked chat=home message=unfinished ")).length, 1);
+});
+
 for (const inclusive of [false, true]) test(`legacy checkpoints deduplicate buffered older frames before replay; inclusive=${inclusive}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   await mkdir(`${root}/plow-checkpoints`);

@@ -115,6 +115,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   await mkdir(dir, { recursive: true });
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
+  const unadopted = new Map<string, Set<string>>();
   type Queued = { chat: Chat; message: Message };
   const pending = new Set<string>();
   const dispatching = new Set<Promise<void>>();
@@ -135,12 +136,17 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const ack = (chat: string, uid: string, adopted = true) => {
     const write = (checkpointWrites.get(chat) ?? Promise.resolve()).then(async () => {
       const handled = new Set(recent.get(chat));
-      if (adopted) handled.add(uid);
+      if (adopted) {
+        handled.add(uid);
+        unadopted.get(chat)?.delete(uid);
+      }
       while (handled.size > 512) handled.delete(handled.values().next().value!);
       recent.set(chat, handled);
-      await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid, recent: [...handled] }));
+      // Later handled rows must not move recovery past an unfinished source.
+      const cursor = unadopted.get(chat)?.size ? checkpoints.get(chat)! : uid;
+      await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
       await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
-      checkpoints.set(chat, uid);
+      checkpoints.set(chat, cursor);
     });
     checkpointWrites.set(chat, write.catch(() => {}));
     return write;
@@ -216,6 +222,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       return;
     }
     const item = { chat, message };
+    if (account.accountId === "chat") {
+      if (!unadopted.has(chatUid)) unadopted.set(chatUid, new Set());
+      unadopted.get(chatUid)!.add(message.uid);
+    }
     pending.add(message.uid);
     let onSubmitted!: () => void;
     const submitted = new Promise<void>(resolve => { onSubmitted = resolve; });
