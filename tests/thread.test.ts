@@ -4,6 +4,37 @@ import entry from "../plugin/index.ts";
 
 type Tool = { name: string; execute: (id: string, args: object) => Promise<unknown> };
 
+test("collected owner tools resolve the host delivery route and still refuse other callers or conversations", async t => {
+  process.env.PLOW_AGENT_TOKEN = "test-token";
+  const cfg = { channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "ask" } } };
+  const owner = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
+  const home = { uid: "home", status: "active", trusted: true, participants: [owner,
+    { type: "agent", relationship: "self", line: { uid: "line" } }] };
+  const posts: object[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    if (options.method === "POST") {
+      posts.push(JSON.parse(options.body as string));
+      return Response.json({ uid: "created" });
+    }
+    return Response.json(url.endsWith("/home") ? home : { ...home, uid: "group", participants: [...home.participants, { ...owner, uid: "member", role: "member" }] });
+  });
+  for (const scenario of ["owner", "non-owner", "other-conversation"] as const) {
+    let tool: Tool;
+    entry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+      registerTool(factory: (context: object) => Tool) {
+        const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
+          requesterSenderId: scenario === "non-owner" ? "+15550000002" : "plow-owner", senderIsOwner: scenario !== "non-owner",
+          deliveryContext: { channel: "plow", accountId: "chat", to: `plow:${scenario === "other-conversation" ? "group" : "home"}` } });
+        if (candidate.name === "plow_start_thread") tool = candidate;
+      },
+    });
+    const invoke = () => tool.execute("collected-call", { members: ["+15550000002"], body: "Meet Friday?", trusted: false });
+    if (scenario === "owner") assert.deepEqual((await invoke() as { details: unknown }).details, { chat_uid: "created", message_sent: true });
+    else await assert.rejects(invoke(), /requires the owner's main Plow DM/);
+  }
+  assert.equal(posts.length, 1);
+});
+
 for (const toolName of ["plow_start_thread", "message"]) {
   for (const status of [200, 403, 408, 424, 503, "network"] as const) test(`${toolName}: delivery errors and tool-call idempotency, status=${status}`, async t => {
     process.env.PLOW_AGENT_TOKEN = "test-token";

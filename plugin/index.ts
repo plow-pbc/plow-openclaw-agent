@@ -21,11 +21,13 @@ function normalizedHandle(handle: string): string {
   return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
 }
 
-type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "requesterSenderId" | "senderIsOwner">;
+type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
 async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat: Chat }> {
+  // Collected follow-ups retain their delivery route without a native conversation id.
+  const chatUid = (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
   if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow" || !context.senderIsOwner
-    || context.agentAccountId !== "chat" || !context.nativeChannelId || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
-  const chat = await request<Chat>(account, `/chats/${encodeURIComponent(context.nativeChannelId)}`);
+    || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
+  const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
   if (findOwnerChat(account, [chat]) !== chat) throw new Error("This action requires the owner's main Plow DM.");
   return { chat };
 }
