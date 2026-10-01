@@ -3,7 +3,7 @@ import { test } from "node:test";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-test("a checkpointed outbound opener still seeds the first group turn", async t => {
+test("a checkpointed outbound opener seeds ordered submissions despite slow preparation", async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const self = { type: "agent", relationship: "self", line: { uid: "line", display_name: "Willow" } };
@@ -24,7 +24,8 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
     for (const msg of messages)
       socket.send(JSON.stringify({ event_type: "message_received", event_id: msg.uid, chat_id: chat.uid, data: { message: msg } }));
   });
-  const contexts: { message: { inboundHistory?: unknown[] }; supplemental: { channelStructuredContext: { payload: { participants: unknown[] } }[] } }[] = [];
+  const contexts: { messageId: string; message: { inboundHistory?: unknown[] }; supplemental: { channelStructuredContext: { payload: { participants: unknown[] } }[] } }[] = [];
+  const submitted: string[] = [];
   const secondDispatched = Promise.withResolvers<void>();
   controller.signal.addEventListener("abort", () => secondDispatched.resolve());
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } };
@@ -34,9 +35,11 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: "group" }) },
       inbound: {
         buildContext: async (value: typeof contexts[number]) => {
-          contexts.push(value); return {};
+          if (value.messageId === "reply") await new Promise(resolve => setImmediate(resolve));
+          contexts.push(value); return { MessageSid: value.messageId };
         },
-        dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+        dispatch: async ({ ctxPayload, replyOptions }: { ctxPayload: { MessageSid: string }; replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+          submitted.push(ctxPayload.MessageSid);
           if (contexts.length === 1) await secondDispatched.promise;
           else secondDispatched.resolve();
           replyOptions.onAgentRunTerminalOutcome("completed");
@@ -47,6 +50,8 @@ test("a checkpointed outbound opener still seeds the first group turn", async t 
     } },
   });
   await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { agents: { entries: { main: { identity: { name: "Juniper" } } } } }, abortSignal: controller.signal });
+  assert.deepEqual(submitted, ["reply", "thanks"]);
+  assert.notEqual(controller.signal.reason?.name, "TimeoutError");
   assert.equal(contexts.length, 2);
   assert.deepEqual(contexts[0].message.inboundHistory, [
     { sender: "Guest", body: "Let's plan lunch", timestamp: Date.parse(opener.created_at), messageId: "older" },
