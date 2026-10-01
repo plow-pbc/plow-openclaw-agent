@@ -234,24 +234,16 @@ test("a reply sent to a thread from the owner's DM lands there and is recorded i
   assert.deepEqual(await transcript("agent:main:plow:email:direct:thread"), ["Thursday works.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co"]);
 });
 
-test("a thread's recorded origin that is no longer trusted gets nothing; the final goes to the owner's 1:1", async t => {
+for (const [name, invalidate, cleanup] of [
+  ["no longer trusted", () => { chats.group.trusted = false; }, () => { chats.group.trusted = true; }],
+  ["no longer readable", () => { forbidden.add("group"); }, () => { forbidden.clear(); }],
+] as const) test(`a thread's recorded origin that is ${name} falls back to the owner's 1:1`, async t => {
   const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
-  t.after(() => { chats.group.trusted = true; return rm(state, { recursive: true }); });
+  t.after(() => { cleanup(); return rm(state, { recursive: true }); });
   await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
     await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
   }, undefined, state);
-  chats.group.trusted = false;
-  const { posts, events } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
-  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
-});
-
-test("a thread's recorded origin the agent can no longer read falls back to the owner's 1:1", async t => {
-  const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
-  t.after(() => { forbidden.clear(); return rm(state, { recursive: true }); });
-  await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
-    await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
-  }, undefined, state);
-  forbidden.add("group");
+  invalidate();
   const { posts, logs } = await run(t, "email", [{ chat: "started", sender: outsider }], async dispatch => { await final(dispatch, { text: "They replied yes." }); }, undefined, state);
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
   assert.ok(logs.some(line => line.startsWith("completed chat=started")));
