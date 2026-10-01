@@ -177,11 +177,14 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
     },
     delivery: {
+      durable: email ? false : { to: chat.uid, replyToId: null },
       observeMessageSent: true,
       preparePayload: (payload, info) => {
         if (payload.isFallbackNotice) { silent ||= email; return null; }
         if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
-        return !email && observedReplyDelivery && info.kind === "final" ? null : payload;
+        if (!email && observedReplyDelivery && info.kind === "final") return null;
+        // Plow sends unquoted replies; implicit quote targets would bypass durable delivery.
+        return email ? payload : { ...payload, replyToId: undefined, replyToCurrent: false };
       },
       deliver: async payload => {
         if (email) {
@@ -267,6 +270,7 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
+    deliveryCapabilities: { durableFinal: { text: true, media: true, messageSendingHooks: true } },
     sendText: ctx => (resolveOutboundSendDep<typeof send>(ctx.deps, "plow") ?? send)(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text),
     sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
   },

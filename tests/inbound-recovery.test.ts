@@ -9,7 +9,7 @@ const chat: Chat = { uid: "home", status: "active", trusted: true, participants:
 const inbound = (uid: string): Message => ({ uid, direction: "inbound", sender, body: uid, attachments: [], created_at: "2026-09-29T12:00:00Z" });
 const frame = (message: Message) => JSON.stringify({ event_type: "message_received", event_id: `event-${message.uid}`, chat_id: chat.uid, data: { message } });
 // The inbound clock lags the outbound clock; HTTP history orders them by timestamp.
-test("catch-up overlaps the checkpoint and deduplicates a late older inbound across restart", async t => {
+test("a late frame older than the checkpoint is deduplicated across restart", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   await mkdir(`${root}/plow-checkpoints`);
   await writeFile(`${root}/plow-checkpoints/home`, "outbound");

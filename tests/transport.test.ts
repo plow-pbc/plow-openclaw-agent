@@ -14,17 +14,23 @@ const acceptedChat = (uid: string) => ({
 });
 const inbound = (uid: string) => ({ uid, direction: "inbound", sender: { type: "member" } });
 
-test("recovery walks older pages to the checkpoint and replays oldest first", async t => {
+test("catch-up reads only the newest 50 and warns when older unread counts are unavailable", async t => {
   process.env.PLOW_AGENT_TOKEN = "test-token";
-  const urls: string[] = [];
+  const urls: string[] = [], logs: string[] = [];
+  const newest = Array.from({ length: 50 }, (_, i) => message(`new-${49 - i}`));
   t.mock.method(globalThis, "fetch", async (url: string) => {
     urls.push(url);
-    return Response.json(url.includes("starting_after=newer")
-      ? { data: [message("missed"), message("acked"), message("old")], has_more: true }
-      : { data: [message("newest"), message("newer")], has_more: true });
+    return Response.json(url.includes("starting_after=")
+      ? { data: [message("acked")], has_more: false }
+      : { data: newest, has_more: true });
   });
-  assert.deepEqual((await recover(account, "chat", "acked")).map(m => m.uid), ["missed", "newer", "newest"]);
-  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?limit=50", "http://fixture/v1/chats/chat/messages?limit=50&starting_after=newer"]);
+  assert.deepEqual((await recover(account, "chat", "acked", text => logs.push(text))).map(m => m.uid), [...newest].reverse().map(m => m.uid));
+  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?limit=50"]);
+  assert.match(logs.join("\n"), /warning.*chat=chat.*fetched=50.*older_unread_skipped=unknown/);
+  urls.length = logs.length = 0;
+  assert.deepEqual((await recover(account, "chat", "new-47", text => logs.push(text))).map(m => m.uid), ["new-48", "new-49"]);
+  assert.equal(urls.length, 1);
+  assert.deepEqual(logs, []);
 });
 
 test("empty first-install checkpoint still recovers the first missed message", async t => {
@@ -107,7 +113,7 @@ for (const owner of [false, true]) test(`a frame arriving while a synthesized ch
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), message.uid);
 });
 
-test("recovery beyond the seen cache does not replay buffered frames or rewind the checkpoint", async t => {
+test("bounded recovery does not replay buffered frames or rewind the checkpoint", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   await mkdir(`${root}/plow-checkpoints`);
   await writeFile(`${root}/plow-checkpoints/group`, "old");
@@ -118,12 +124,12 @@ test("recovery beyond the seen cache does not replay buffered frames or rewind t
   t.mock.method(globalThis, "fetch", async (url: string) => {
     if (url.includes("limit=50") && !buffered) {
       buffered = true;
-      for (const socket of server.clients) socket.send(JSON.stringify({ event_type: "message_received", event_id: "duplicate", chat_id: chat.uid, data: { message: messages[0] } }));
+      for (const socket of server.clients) socket.send(JSON.stringify({ event_type: "message_received", event_id: "duplicate", chat_id: chat.uid, data: { message: messages.at(-1) } }));
     }
     const cursor = new URL(url).searchParams.get("starting_after");
     const history = [...(live ? [inbound("live")] : []), ...[...messages].reverse(), { uid: "old" }];
     return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/group") ? chat :
-      url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : cursor ? history.slice(history.findIndex(m => m.uid === cursor) + 1) : history, has_more: false } : { ticket: "ticket" });
+      url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : cursor ? history.slice(history.findIndex(m => m.uid === cursor) + 1) : history.slice(0, 50), has_more: history.length > 50 } : { ticket: "ticket" });
   });
   const received: string[] = [];
   await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
@@ -134,7 +140,7 @@ test("recovery beyond the seen cache does not replay buffered frames or rewind t
     if (text.startsWith("acked chat=group message=live ")) controller.abort();
   }, async (_chat, message) => { received.push(message.uid); return "completed"; });
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
-  assert.deepEqual(received, [...messages.map(message => message.uid), "live"]);
+  assert.deepEqual(received, [...messages.slice(-50).map(message => message.uid), "live"]);
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), "live");
 });
 
@@ -557,7 +563,58 @@ test("a buffered message preceding the HTTP baseline runs first without replay a
   }
 });
 
-test("out-of-order adoption keeps the newest cursor and remembers both sources across restart", async t => {
+test("acknowledgement records its cursor without fetching history", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/chat`, JSON.stringify({ uid: "old", recent: [] }));
+  const chat = acceptedChat("chat");
+  let adopting = false;
+  let acknowledgementReads = 0;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (adopting && url.includes("limit=50")) acknowledgementReads++;
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
+      url.endsWith("/chats/chat") ? chat : url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+  });
+  server.on("connection", socket => socket.send(JSON.stringify({ event_type: "message_received", chat_id: chat.uid,
+    data: { message: inbound("new") } })));
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
+    if (text.startsWith("acked chat=chat message=new ")) controller.abort();
+  }, async (_chat, _message, _first, _history, ingress) => {
+    adopting = true;
+    await ingress.onAdopted();
+    return "completed";
+  });
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "new");
+  assert.equal(acknowledgementReads, 0);
+});
+
+test("reconnect recovers at most four chats concurrently", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  const chats = Array.from({ length: 5 }, (_, i) => acceptedChat(`chat-${i}`));
+  await mkdir(`${root}/plow-checkpoints`);
+  for (const chat of chats) await writeFile(`${root}/plow-checkpoints/${chat.uid}`, JSON.stringify({ uid: "old", recent: [] }));
+  const release = Promise.withResolvers<void>();
+  let active = 0, peak = 0, started = 0;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.includes("limit=50")) {
+      active++;
+      peak = Math.max(peak, active);
+      if (++started === 4) setTimeout(release.resolve, 25);
+      await release.promise;
+      active--;
+      if (started === 5) controller.abort();
+      return Response.json({ data: [], has_more: false });
+    }
+    return Response.json(url.endsWith("/chats") ? { data: chats, has_more: false } : { ticket: "ticket" });
+  });
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async () => assert.fail("Empty recovery cannot dispatch"));
+  assert.equal(started, 5);
+  assert.equal(peak, 4);
+});
+
+test("out-of-order adoption records its cursor and remembers both sources across restart", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   await mkdir(`${root}/plow-checkpoints`);
   await writeFile(`${root}/plow-checkpoints/chat`, "old");
@@ -583,7 +640,7 @@ test("out-of-order adoption keeps the newest cursor and remembers both sources a
       if (message.uid === "second") secondAdopted.resolve();
       return "completed";
     });
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "second");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "first");
   }
   assert.deepEqual(calls, ["first", "second"]);
 });
@@ -624,7 +681,7 @@ for (const listed of [true, false]) test(`restart mid-turn replays unfinished ch
   }
   assert.deepEqual(interrupted, ["slow"]);
   assert.deepEqual([...completed].sort(), ["fast", "later", "slow"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "later");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "slow");
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`), "fast");
 });
 

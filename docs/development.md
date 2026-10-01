@@ -54,8 +54,11 @@ and across-provider permissions false; the Plow send adapter checks served lines
 and active destinations. Tool Search remains disabled.
 
 External plugins cannot use OpenClaw's trusted durable ingress. Plow retains UID
-deduplication, a 20-row recovery overlap, and atomic per-chat checkpoints with a
-512-UID recent set. Adoption callbacks acknowledge sources, not successful replies;
+deduplication and atomic per-chat checkpoints with a 512-UID recent set. Catch-up
+reads only the newest 50 messages per chat, stopping at the checkpoint; four chats
+can recover concurrently. Truncation warnings report the fetched count and an
+unknown older unread count because the API provides no total. Automatic phone
+finals use the SDK inbound dispatcher’s durable outbound queue. Adoption callbacks acknowledge sources, not successful replies;
 deferred sources remain pending until the host adopts them. Terminal commands
 without model runs acknowledge at completion. Uncertain delivery is not blindly
 replayed, but later explicit model sends are allowed. There is no run-wide latch.
