@@ -9,7 +9,7 @@ import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/sess
 import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, postMessage, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
@@ -36,20 +36,12 @@ async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat
   return { chat };
 }
 
-async function requestDelivery<T>(account: Account, path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
-  try { return await request<T>(account, path, body, undefined, method); }
-  catch (error) {
-    if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
-      throw new DeliveryUnknownError();
-    }
-    throw error;
-  }
-}
-
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
   to = to.replace(/^plow:/i, "");
   if (account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
-  if (to === "plow-owner") to = (await ownerChat(account)).uid;
+  // Heartbeats are routed to their own alias (boot/config.ts) so their sends can be marked.
+  const heartbeat = to === "plow-heartbeat";
+  if (to === "plow-owner" || heartbeat) to = (await ownerChat(account)).uid;
   const chat = await request<Chat>(account, `/chats/${to}`);
   if (chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
     throw new Error("Email is sent with plow_send_email, not message.");
@@ -67,8 +59,7 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
-  const sent = await requestDelivery<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments });
-  return { channel: "plow" as const, messageId: sent.uid };
+  return await postMessage(account, to, text, attachments, heartbeat ? "heartbeat" : undefined);
 }
 
 
@@ -95,10 +86,7 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
     cfg, channel: "plow", accountId, to, payloads: [{ text }],
     session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
     mirror: sessionId ? undefined : route, skipQueue: true,
-    ...(accountId === "email" ? { deps: { plow: async (account: Account, to: string, text: string) => {
-      const sent = await requestDelivery<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: [] });
-      return { channel: "plow" as const, messageId: sent.uid };
-    } } } : {}),
+    ...(accountId === "email" ? { deps: { plow: async (account: Account, to: string, text: string) => await postMessage(account, to, text) } } : {}),
   });
   if (result.status !== "sent") throw new DeliveryUnknownError();
   if (sessionId) await appendAssistantMirrorMessageByIdentity({ ...route, sessionId, text: sessionText, config: cfg });
@@ -266,9 +254,9 @@ const plugin: ChannelPlugin<Account> = {
   },
   agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the chat uid for a follow-up to another conversation; email goes only through plow_send_email."] },
   messaging: {
-    inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
+    inferTargetChatType: ({ to }) => to === "plow-owner" || to === "plow-heartbeat" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
-    targetResolver: { looksLikeId: (raw, normalized) => (normalized ?? raw.trim().replace(/^plow:/i, "")) === "plow-owner" || /^cht_[A-Za-z0-9_-]+$/.test(normalized ?? raw.trim().replace(/^plow:/i, "")), hint: "Use a Plow chat uid (cht_…)." },
+    targetResolver: { looksLikeId: (raw, normalized) => ["plow-owner", "plow-heartbeat"].includes(normalized ?? raw.trim().replace(/^plow:/i, "")) || /^cht_[A-Za-z0-9_-]+$/.test(normalized ?? raw.trim().replace(/^plow:/i, "")), hint: "Use a Plow chat uid (cht_…)." },
   },
   gateway: {
     startAccount: async ctx => {

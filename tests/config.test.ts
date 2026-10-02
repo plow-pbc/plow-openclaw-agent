@@ -26,6 +26,7 @@ test("only the owner's phone DM becomes main; other peers and groups stay isolat
   assert.ok(!("ownerChatUid" in config.channels.plow));
   assert.ok(!("ownerMemberUid" in config.channels.plow));
   assert.deepEqual(config.commands.ownerAllowFrom, ["plow-owner"]);
+  assert.deepEqual(config.agents.defaults.heartbeat, { target: "plow", to: "plow-heartbeat", accountId: "chat" }, "heartbeats reach the owner through an alias their sends are marked by");
   assert.equal(config.session.dmScope, "per-account-channel-peer");
   assert.equal(config.session.groupScope, "per-group");
   assert.deepEqual(config.bindings[0], {

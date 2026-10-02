@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 import fs, { mkdir, readFile, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, invalidateContextualizedHistory, type Account, type Chat, type Message } from "../plugin/transport.ts";
+import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, invalidateContextualizedHistory, postMessage, type Account, type Chat, type Message } from "../plugin/transport.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat" } as Account;
 const message = (uid: string) => ({ uid }) as Message;
@@ -858,4 +858,21 @@ for (const listed of [false, true]) test(`empty and dot-segment chat IDs are rej
   assert.deepEqual(turns, ["message-valid"]);
   assert.ok(!logs.some(text => text.startsWith("transport stopped")));
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
+});
+
+test("a reply ending in NO_REPLY is never posted, and heartbeat sends say what they are", async t => {
+  process.env.PLOW_AGENT_TOKEN = "test-token";
+  const posts: { url: string; kind: string | null; body: unknown }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    posts.push({ url, kind: new Headers(init.headers).get("Plow-Message-Kind"), body: JSON.parse(String(init.body)) });
+    return Response.json({ uid: "msg_1" });
+  });
+  for (const silent of ["No active subagents, nothing pending.\n\nNO_REPLY", "NO_REPLY", "Already handled. NO_REPLY\n"]) {
+    assert.deepEqual(await postMessage(account, "chat", silent), { channel: "plow", messageId: "", outcome: "not_sent" });
+  }
+  assert.equal(posts.length, 0, "silence reaches no one");
+  assert.deepEqual(await postMessage(account, "chat", "I'll reply with a bare NO_REPLY when there's nothing new."), { channel: "plow", messageId: "msg_1" });
+  await postMessage(account, "chat", "Your recap is ready.", [], "heartbeat");
+  assert.deepEqual(posts.map(p => p.kind), [null, "heartbeat"]);
+  assert.deepEqual(posts[1], { url: "http://fixture/v1/chats/chat/messages", kind: "heartbeat", body: { body: "Your recap is ready.", attachment_uids: [] } });
 });
