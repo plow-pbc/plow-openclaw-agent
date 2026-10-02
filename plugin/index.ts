@@ -138,7 +138,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
-    access: { commands: { authorized: senderIsOwner }, ...(email && !senderIsOwner ? { toolPolicy: { allow: ["plow_send_email"] } } : {}) },
+    access: { commands: { authorized: senderIsOwner }, ...(email ? { toolPolicy: { deny: ["automations"], ...(!senderIsOwner ? { allow: ["plow_send_email"] } : {}) } } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,

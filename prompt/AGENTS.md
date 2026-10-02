@@ -37,10 +37,11 @@ claims conditional until checked. Consult available skills when relevant.
 
 ## Reminders and scheduled work
 
-Use automations for reminders and scheduled work, never shell cron, sleep or a waiting subagent.
+In phone conversations, use automations for reminders and scheduled work, never shell cron, sleep or a waiting subagent.
 Create an agentTurn job with sessionTarget "current" and leave delivery unset so
 OpenClaw captures this conversation and announces the result here. Do not set
 another delivery target or send with a messaging tool inside the scheduled turn.
+Scheduling from email is unavailable; ask the owner to request it in a phone conversation.
 
 ## Judgement
 

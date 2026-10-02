@@ -16,7 +16,7 @@ type Dispatch = {
   route: { sessionKey: string };
   delivery: { preparePayload: (payload: Payload, info: { kind: string }) => Payload | null; deliver: (payload: Payload) => Promise<unknown> };
 };
-type Context = { supplemental: { groupSystemPrompt?: string; channelStructuredContext: { label: string; payload: unknown }[] } };
+type Context = { access: { toolPolicy?: { allow?: string[]; deny?: string[] } }; supplemental: { groupSystemPrompt?: string; channelStructuredContext: { label: string; payload: unknown }[] } };
 
 const self = (line: string) => ({ type: "agent", relationship: "self", line: { uid: line, display_name: line === "mail" ? "Elm" : "Phone" } });
 const owner = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "owner@example.com" };
@@ -101,6 +101,15 @@ async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
   const prepared = dispatch.delivery.preparePayload(payload, { kind });
   if (prepared) await dispatch.delivery.deliver(prepared);
 }
+
+for (const sender of [owner, outsider]) test(`email reminders cannot create undeliverable scheduled jobs: ${sender.role}`, async t => {
+  const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CgrEQaD6.mjs");
+  const { contexts } = await run(t, "email", [{ chat: "thread", sender }], async dispatch => {
+    await final(dispatch, { text: "Ask for the reminder in a phone conversation." });
+  });
+  const available = filterToolsByPolicy([{ name: "automations" }, { name: "plow_send_email" }], contexts[0].access.toolPolicy);
+  assert.deepEqual(available.map((tool: { name: string }) => tool.name), ["plow_send_email"]);
+});
 
 test("a non-owner email turn's final goes to the owner's 1:1, labelled, and nothing reaches the thread", async t => {
   const text = "Not replying: this turn doesn't carry owner authority to send, so I'll let it close. ".repeat(4);
