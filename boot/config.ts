@@ -47,7 +47,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
-    messages: { visibleReplies: "automatic", queue: { mode: "collect" } },
+    messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust,
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
@@ -74,6 +74,7 @@ const ownedPaths = [
   ["commands", ["commands"]],
   ["visible-replies", ["messages", "visibleReplies"]],
   ["message-queue", ["messages", "queue"]],
+  ["inbound-debounce", ["messages", "inbound", "byChannel", "plow"]],
   ["identity", ["agents", "entries", "main", "identity"]],
   ["session", ["session"]],
   ["memory", ["memory"]],

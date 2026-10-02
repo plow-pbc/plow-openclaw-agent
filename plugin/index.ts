@@ -6,6 +6,7 @@ import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDur
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // @ts-expect-error The pinned SDK ships this runtime entry without type declarations.
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
@@ -270,7 +271,48 @@ const plugin: ChannelPlugin<Account> = {
   gateway: {
     startAccount: async ctx => {
       const log = (text: string) => ctx.log?.info(text);
-      await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history, ingress) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, ingress, log));
+      type Inbound = { chat: Chat; message: Message; firstContact: boolean; history: Message[]; ingress: TurnIngress; resolve: (outcome: TurnOutcome) => void; reject: (error: unknown) => void };
+      const pending = new Set<Inbound>();
+      const key = (item: Inbound) => `${item.chat.uid}/${item.message.sender.type === "member" ? item.message.sender.uid : item.message.sender.line.uid}`;
+      const { debouncer } = createChannelInboundDebouncer<Inbound>({
+        cfg: ctx.cfg, channel: "plow",
+        buildKey: key,
+        shouldDebounce: item => ctx.account.accountId === "chat" && shouldDebounceTextInbound({
+          cfg: ctx.cfg, text: item.message.body, hasMedia: item.message.attachments.length > 0,
+        }),
+        onFlush: items => {
+          const first = items[0], last = items.at(-1)!;
+          let submitted!: () => void;
+          const admission = new Promise<void>(resolve => { submitted = resolve; });
+          const completion = (async () => {
+            const outcome = ctx.abortSignal.aborted ? "incomplete" : await receive(ctx.account, ctx.cfg, first.chat,
+              { ...last.message, body: items.map(item => item.message.body).join("\n") }, first.firstContact, first.history,
+              { abortSignal: ctx.abortSignal, onSubmitted: () => { for (const item of items) item.ingress.onSubmitted(); submitted(); },
+                onAdopted: async () => { for (const item of items) await item.ingress.onAdopted(); } }, log);
+            for (const item of items) item.resolve(outcome);
+          })().finally(submitted);
+          return { admission, completion };
+        },
+        onError: (error, items) => { for (const item of items) item.reject(error); },
+        onCancel: items => { for (const item of items) item.resolve("incomplete"); },
+      });
+      const cancel = () => { for (const item of pending) debouncer.cancelKey(key(item)); };
+      ctx.abortSignal.addEventListener("abort", cancel, { once: true });
+      try {
+        await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history, ingress) => {
+          let resolve!: Inbound["resolve"], reject!: Inbound["reject"];
+          const outcome = new Promise<TurnOutcome>((done, failed) => { resolve = done; reject = failed; });
+          const item = { chat, message, firstContact, history, ingress, resolve, reject };
+          pending.add(item);
+          // Release transport intake while waiting for the rest of a text burst.
+          if (debouncer.shouldBuffer(item)) ingress.onSubmitted();
+          void debouncer.enqueue(item).catch(reject);
+          return outcome.finally(() => pending.delete(item));
+        });
+      } finally {
+        ctx.abortSignal.removeEventListener("abort", cancel);
+        await debouncer.drain();
+      }
     },
   },
   outbound: {

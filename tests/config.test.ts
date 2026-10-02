@@ -124,7 +124,7 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic", queue: { mode: "collect" } });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
   assert.deepEqual(config.meta, {});
 });
 
@@ -212,4 +212,14 @@ test("MCP Plow server include disappears without a relay while owner MCP setting
   assert.equal(again.mcp.servers.plow, undefined);
   assert.deepEqual(again.mcp.servers.other, { url: "https://other.example" });
   assert.equal(again.mcp.sessionIdleTtlMs, 300_000);
+});
+
+test("boot owns only Plow's inbound debounce and preserves other channels", async t => {
+  const { path, includes } = await configFixture(t);
+  await writeFile(path, JSON.stringify({ messages: { inbound: { debounceMs: 800, byChannel: { plow: 1, signal: 500 } } } }));
+  await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
+  const saved = JSON5.parse(await readFile(path, "utf8"));
+  assert.equal(saved.messages.inbound.debounceMs, 800);
+  assert.equal(saved.messages.inbound.byChannel.signal, 500);
+  assert.deepEqual(JSON5.parse(await readFile(saved.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
 });
