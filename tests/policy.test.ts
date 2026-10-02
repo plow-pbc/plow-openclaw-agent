@@ -3,6 +3,19 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { nativeSendPolicy } from "./native-message-policy.ts";
 import entry from "../plugin/index.ts";
+import { renderConfig } from "../boot/config.ts";
+import { probeIdentity } from "../boot/probe-fixture.ts";
+
+test("the messaging agent can schedule durable reminders with the native scheduler", async () => {
+  const { resolveToolProfilePolicy, mergeAlsoAllowPolicy } = await import("/app/dist/tool-policy-BFtbULCH.mjs");
+  const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CgrEQaD6.mjs");
+  const { tools } = renderConfig(probeIdentity, "http://fixture");
+  const profile = mergeAlsoAllowPolicy(resolveToolProfilePolicy(tools.profile), tools.alsoAllow);
+  const available = filterToolsByPolicy([{ name: "automations" }, { name: "message" }, { name: "ask_user" }], {
+    ...profile, deny: tools.deny,
+  });
+  assert.deepEqual(available.map((tool: { name: string }) => tool.name), ["automations", "message"]);
+});
 
 for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools without a tool-call gate`, async () => {
   const names: string[] = [];
