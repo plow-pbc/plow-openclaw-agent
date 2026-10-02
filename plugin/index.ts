@@ -106,6 +106,8 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
 }
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
+  chat = await request<Chat>(account, `/chats/${encodeURIComponent(chat.uid)}`);
+  if (!accepts(account, chat)) return "incomplete";
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
@@ -273,6 +275,7 @@ const plugin: ChannelPlugin<Account> = {
       const log = (text: string) => ctx.log?.info(text);
       type Inbound = { chat: Chat; message: Message; firstContact: boolean; history: Message[]; ingress: TurnIngress; resolve: (outcome: TurnOutcome) => void; reject: (error: unknown) => void };
       const pending = new Set<Inbound>();
+      const lastSpeaker = new Map<string, string>();
       const key = (item: Inbound) => `${item.chat.uid}/${item.message.sender.type === "member" ? item.message.sender.uid : item.message.sender.line.uid}`;
       const { debouncer } = createChannelInboundDebouncer<Inbound>({
         cfg: ctx.cfg, channel: "plow",
@@ -299,10 +302,14 @@ const plugin: ChannelPlugin<Account> = {
       const cancel = () => { for (const item of pending) debouncer.cancelKey(key(item)); };
       ctx.abortSignal.addEventListener("abort", cancel, { once: true });
       try {
-        await listen(ctx.account, ctx.abortSignal, log, (chat, message, firstContact, history, ingress) => {
+        await listen(ctx.account, ctx.abortSignal, log, async (chat, message, firstContact, history, ingress) => {
           let resolve!: Inbound["resolve"], reject!: Inbound["reject"];
           const outcome = new Promise<TurnOutcome>((done, failed) => { resolve = done; reject = failed; });
           const item = { chat, message, firstContact, history, ingress, resolve, reject };
+          const previous = lastSpeaker.get(chat.uid);
+          if (previous && previous !== key(item)) await debouncer.flushKey(previous);
+          if (ctx.abortSignal.aborted) return "incomplete";
+          lastSpeaker.set(chat.uid, key(item));
           pending.add(item);
           // Release transport intake while waiting for the rest of a text burst.
           if (debouncer.shouldBuffer(item)) ingress.onSubmitted();

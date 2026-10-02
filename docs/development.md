@@ -40,7 +40,10 @@ Plow prepares messages in arrival order within each chat, releasing the chat lan
 at the dispatch call rather than model completion, and sets the global queue mode
 to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/bot-core.ts#L257)
 also orders ordinary messages using [conversation keys](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/sequential-key.ts#L250).
-Host concurrency and queue tuning inherit the pinned defaults:
+Before dispatch, Plow waits 2 seconds for same-sender text bubbles in a chat
+(`messages.inbound.byChannel.plow`). A speaker change, command or media message
+flushes the pending burst immediately; chat trust is refreshed before dispatch.
+Host concurrency and active-run queue tuning inherit the pinned defaults:
 500 ms debounce, cap 20 pending messages, and summarize overflow. Retained prompts
 are joined without a Plow text cap; overflow keeps bounded 160-character previews,
 so text beyond 20 pending messages can be summarized or omitted. At 1.5-second

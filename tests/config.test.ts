@@ -173,6 +173,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
   old.messages.queue = { mode: "steer", cap: 99 };
+  old.messages.inbound = { debounceMs: 800, byChannel: { plow: 1, signal: 500 } };
   old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
@@ -183,6 +184,9 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
   assert.deepEqual(JSON5.parse(await readFile(join(includes, "message-queue.json5"), "utf8")), { mode: "collect" });
   assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
+  assert.equal(owner.messages.inbound.debounceMs, 800);
+  assert.equal(owner.messages.inbound.byChannel.signal, 500);
+  assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
@@ -212,14 +216,4 @@ test("MCP Plow server include disappears without a relay while owner MCP setting
   assert.equal(again.mcp.servers.plow, undefined);
   assert.deepEqual(again.mcp.servers.other, { url: "https://other.example" });
   assert.equal(again.mcp.sessionIdleTtlMs, 300_000);
-});
-
-test("boot owns only Plow's inbound debounce and preserves other channels", async t => {
-  const { path, includes } = await configFixture(t);
-  await writeFile(path, JSON.stringify({ messages: { inbound: { debounceMs: 800, byChannel: { plow: 1, signal: 500 } } } }));
-  await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
-  const saved = JSON5.parse(await readFile(path, "utf8"));
-  assert.equal(saved.messages.inbound.debounceMs, 800);
-  assert.equal(saved.messages.inbound.byChannel.signal, 500);
-  assert.deepEqual(JSON5.parse(await readFile(saved.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
 });
