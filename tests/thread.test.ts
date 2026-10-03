@@ -1,16 +1,32 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import entry from "../plugin/index.ts";
 
-type Tool = { name: string; execute: (id: string, args: object) => Promise<unknown> };
+type Tool = { name: string; parameters?: object; execute: (id: string, args: object) => Promise<unknown> };
+
+test("plow_start_thread takes phone numbers and iMessage emails as members, as Plow does", () => {
+  let tool: Tool | undefined;
+  entry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+    registerTool(factory: (context: object) => Tool) {
+      const candidate = factory({});
+      if (candidate.name === "plow_start_thread") tool = candidate;
+    },
+  });
+  const check = (members: string[]) => validateToolArguments(tool as never, { type: "toolCall", id: "call", name: "plow_start_thread", arguments: { members, body: "Meet Friday?" } } as never);
+  assert.doesNotThrow(() => check(["+15550000002", "joe@icloud.com"]));
+  for (const member of ["5550000002", "joe", "joe@", "@icloud.com", "joe @icloud.com", "cht_home"]) {
+    assert.throws(() => check([member]), /Validation failed/, member);
+  }
+});
 
 test("collected owner tools resolve the host delivery route and still refuse other callers or conversations", async t => {
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const cfg = { channels: { plow: { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "ask" } } };
-  const owner = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
+  const owner = { type: "member", uid: "owner", role: "owner", provider_key: "Owner@Example.test" };
   const home = { uid: "home", status: "active", trusted: true, participants: [owner,
     { type: "agent", relationship: "self", line: { uid: "line" } }] };
-  const posts: object[] = [];
+  const posts: Record<string, unknown>[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
     if (options.method === "POST") {
       posts.push(JSON.parse(options.body as string));
@@ -28,11 +44,12 @@ test("collected owner tools resolve the host delivery route and still refuse oth
         if (candidate.name === "plow_start_thread") tool = candidate;
       },
     });
-    const invoke = () => tool.execute("collected-call", { members: ["+15550000002"], body: "Meet Friday?", trusted: false });
+    const invoke = () => tool.execute("collected-call", { members: ["+15550000002", "owner@example.test", "Guest@Example.test", "guest@example.test"], body: "Meet Friday?", trusted: false });
     if (scenario === "owner") assert.deepEqual((await invoke() as { details: unknown }).details, { chat_uid: "created", message_sent: true });
     else await assert.rejects(invoke(), /requires the owner's main Plow DM/);
   }
   assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].members, ["+15550000002", "guest@example.test", "owner@example.test"]);
 });
 
 for (const toolName of ["plow_start_thread", "message"]) {

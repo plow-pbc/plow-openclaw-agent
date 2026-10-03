@@ -339,11 +339,11 @@ export default defineChannelPluginEntry({
   registerCapabilities(api) {
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
-          members: { type: "array", minItems: 1, items: { type: "string", pattern: "^\\+[1-9][0-9]{1,14}$" }, description: "Recipient phone numbers in E.164 format. The owner is included automatically." },
+          members: { type: "array", minItems: 1, items: { type: "string", pattern: "^(\\+[1-9][0-9]{1,14}|[^\\s@]+@[^\\s@]+\\.[^\\s@]+)$" }, description: "Recipient phone numbers in E.164 format, or iMessage email addresses. The owner is included automatically." },
           body: { type: "string", minLength: 1, description: "The first message to send." },
           trusted: { type: "boolean", description: "The owner's full-trust choice, required in ask mode. Preset modes enforce their configured choice." },
         },
@@ -356,7 +356,7 @@ export default defineChannelPluginEntry({
         const turn = await ownerDmTurn(account, context);
         const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
-        const members = [...new Set([owner.provider_key, ...args.members])].sort();
+        const members = [...new Set([owner.provider_key, ...args.members].map(normalizedHandle))].sort();
         if (account.threadTrust !== "ask" && account.threadTrust !== "trusted" && account.threadTrust !== "untrusted") {
           throw new Error("Plow group trust mode is unavailable.");
         }
