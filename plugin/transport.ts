@@ -13,8 +13,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 
 export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
+export type RosterMember = Omit<Member, "provider_key"> & { provider_key?: string | null };
 export type Agent = { type: "agent"; relationship: string; line: { uid: string; display_name?: string } };
-export type Chat = { uid: string; status: string; trusted: boolean; display_name?: string; participants: (Member | Agent)[] };
+export type Chat = { uid: string; status: string; trusted: boolean; display_name?: string; participants: (RosterMember | Agent)[] };
 export type Message = {
   uid: string; direction: string; body: string; sender: Member | Agent; created_at: string;
   attachments: { url: string; content_type: string; filename: string }[];
