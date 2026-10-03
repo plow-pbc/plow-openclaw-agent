@@ -412,10 +412,12 @@ export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path
 // (2026-10-02), one of them after the person asked twice to stop. The token ending the text is the
 // model choosing silence, so nothing is posted. Heartbeat sends say so, which lets the server tell
 // them apart from any other message instead of guessing from the text.
-// Only when the marker is the entire last line, decorated or not ("*NO_REPLY*", ".NO_REPLY"): a
-// marker inside a sentence or on another line of a transcript is a real message and still sends.
+// The silence-marker grammar is DELIBERATELY COPIED from Hermes (hermes-plugin-plow,
+// plow-chat-platform/_transport.py `_ends_silent`), the component that sends these messages; Plow's
+// server-side guard copies it too. All three must stay identical, and each repo carries the same case
+// list (tests/transport.test.ts here), so a copy that drifts fails a test instead of a review.
 export const isSilent = (text: string) =>
-  text.split("\n").filter(line => line.trim()).at(-1)?.replace(/^[\s.*_`]+|[\s.*_`!?,;:]+$/g, "") === "NO_REPLY";
+  text.split("\n").filter(line => line.trim()).at(-1)?.trim().replace(/^[.*_ `]+|[.*_ `]+$/g, "") === "NO_REPLY";
 
 export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
   if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
