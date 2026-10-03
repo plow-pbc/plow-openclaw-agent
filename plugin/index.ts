@@ -133,6 +133,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const participants = chat.participants.map(p => ({
     ...(p.type === "agent" && p.relationship === "self" ? { name: persona } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
+    ...(p.type === "member" && p.provider_key ? { handle: normalizedHandle(p.provider_key) } : {}),
   }));
   const phone = { ...account, accountId: "chat" };
   const origin = email ? await originOf(chat.uid) : undefined;

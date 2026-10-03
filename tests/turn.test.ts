@@ -18,7 +18,13 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const controller = abortAfter();
   const account = { apiBase, accountId: "chat", lineUid: "line" };
   const sender = { type: "member", uid: "member", role: "member", display_name: "Member", provider_key: "+15550000001" };
-  const chat = { uid: "chat", status: "active", trusted, participants: [{ ...sender, uid: "owner", role: "owner", display_name: "Owner" }, sender, { type: "agent", relationship: "self", line: { uid: "line", provider_key: "+15550000002" } }] };
+  const silent = [
+    { ...sender, uid: "phone", display_name: "Phone", provider_key: "+1 (555) 000-0002" },
+    { ...sender, uid: "email", display_name: "Email", provider_key: "Guest@Example.test" },
+    { ...sender, uid: "null", display_name: "Null", provider_key: null },
+    { ...sender, uid: "missing", display_name: "Missing", provider_key: undefined },
+  ];
+  const chat = { uid: "chat", status: "active", trusted, participants: [{ ...sender, uid: "owner", role: "owner", display_name: "Owner" }, sender, ...silent, { type: "agent", relationship: "self", line: { uid: "line", provider_key: "+15550000002" } }] };
   const fetch = t.mock.method(globalThis, "fetch", async (url: string, _init?: RequestInit) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") || url.endsWith("/chats/other") ? chat :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket", uid: "reply" }));
@@ -125,8 +131,12 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   const facts = JSON.parse(JSON.stringify(factsEntry.payload));
   assert.equal(facts.trusted, trusted);
   assert.deepEqual(facts.participants, [
-    { name: "Owner", type: "member", role: "owner" },
-    { name: "Member", type: "member", role: "member" },
+    { name: "Owner", type: "member", role: "owner", handle: sender.provider_key },
+    { name: "Member", type: "member", role: "member", handle: sender.provider_key },
+    { name: "Phone", type: "member", role: "member", handle: "+15550000002" },
+    { name: "Email", type: "member", role: "member", handle: "guest@example.test" },
+    { name: "Null", type: "member", role: "member" },
+    { name: "Missing", type: "member", role: "member" },
     { type: "agent", role: "self" },
   ]);
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), ["aborted", "failed", "empty", "native-other", "deferred", "duplicate", "error-notice", "terminal-notice"].includes(outcome) ? "first:inbound" : "inbound");
