@@ -179,7 +179,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let outcome: TurnOutcome = "incomplete";
     try {
       const checkpoint = checkpoints.get(chat.uid);
-      const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
+      const firstContact = account.accountId === "chat" && (chat.uid === owner?.uid || chat.participants.length > 2)
+        && (checkpoint === "" || checkpoint === `first:${message.uid}`);
       let history: Message[] = [];
       const historyVersion = state.versions.get(chat.uid) ?? 0;
       let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);

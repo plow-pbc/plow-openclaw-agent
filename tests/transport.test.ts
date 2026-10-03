@@ -167,7 +167,8 @@ for (const outcome of ["completed", "incomplete"] as const) test(`unknown delive
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), outcome === "completed" ? "next" : "uncertain");
 });
 
-for (const scenario of ["waited", "pending", "buffered", "buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history", "unanswered-before-connect", "newer-during-baseline", "interrupted", "answered", "peer", "group", "fresh"]) test(`first contact and restart: ${scenario}`, async t => {
+for (const scenarioName of ["waited", "pending", "buffered", "buffered-before-read", "buffered-after-read", "two-during-baseline", "two-during-history", "unanswered-before-connect", "newer-during-baseline", "interrupted", "answered", "peer", "group", "fresh", "group-waited", "group-fresh", "group-two-during-baseline", "group-interrupted"]) test(`first contact and restart: ${scenarioName}`, async t => {
+  const scenario = scenarioName.replace(/^group-/, "");
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   if (scenario === "waited") {
     await mkdir(`${root}/plow-checkpoints`);
@@ -175,7 +176,7 @@ for (const scenario of ["waited", "pending", "buffered", "buffered-before-read",
   }
   const fixture = { ...account, apiBase, lineUid: "line" };
   const sender = { type: "member", uid: "owner", role: "owner", display_name: "Owner" };
-  const chat = { uid: "home", status: "active", participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }, ...(scenario === "group" ? [{ ...sender, uid: "guest", role: "member" }] : [])] };
+  const chat = { uid: "home", status: "active", participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }, ...(scenario === "group" || scenarioName.startsWith("group-") ? [{ ...sender, uid: "guest", role: "member" }] : [])] };
   const first = { uid: "first", body: "What is 17 + 25?", direction: scenario === "answered" ? "outbound" : "inbound",
     sender: scenario === "peer" ? { type: "agent", relationship: "peer", line: { uid: "peer" } } : sender };
   const older = { ...first, uid: "older", direction: "outbound" };
