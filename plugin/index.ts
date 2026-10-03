@@ -184,8 +184,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       },
       deliver: async payload => {
         if (email) {
-          // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
-          const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").replace(/\n{3,}/g, "\n\n").trim();
+          // A NO_REPLY line the model left beside its text, decorated or not, is the silence marker, not words
+          // for the owner. Same predicate as delivery, so a marker kept here can't later drop the whole digest.
+          const text = (payload.text ?? "").split("\n").filter(line => !isSilent(line)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
           // Only the no-reply fallback is silence; an error notice is a real failure and reaches the owner.
           if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
             log(`silent chat=${chat.uid} message=${message.uid}`);
