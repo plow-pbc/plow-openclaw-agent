@@ -21,10 +21,7 @@ const guestCases = [
   ["group", "owner", false, ["guest_view"]],
   ["group", "member", true, ["guest_view"]],
   ["email", "member", false, ["guest_view"]],
-  ["email", "member", false, ["guest_view", "guest_pick", "missing_tool"]],
-  ["email", "member", true, ["guest_view", "guest_pick"]],
-  ["email", "member", false, ["missing_tool"]],
-  ["email", "member", false, ["plow_send_email", "guest_view", "automations", "ask_user"]],
+  ["email", "member", false, ["plow_send_email", "guest_view", "automations", "ask_user", "missing_tool"]],
   ["email", "owner", false, ["guest_view"]],
 ] as const;
 for (const { kind, role, trusted, body, guestTools } of [

@@ -127,6 +127,8 @@ test("a non-owner email turn's final goes to the owner's 1:1, labelled, and noth
   assert.match(prompt, /plow_send_email, to "thread"/);
   assert.match(prompt, /never sent to this thread/);
   assert.match(prompt, /never ask them to approve anything in this thread/);
+  assert.match(prompt, /Configured guest tools available on this turn are already authorized/);
+  assert.match(prompt, /For requests beyond those tools, the owner decides privately/);
 });
 
 test("NO_REPLY on an email turn is silence: no fallback notice anywhere, and the turn completes", async t => {
