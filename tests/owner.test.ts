@@ -21,6 +21,10 @@ const guestCases = [
   ["group", "owner", false, ["guest_view"]],
   ["group", "member", true, ["guest_view"]],
   ["email", "member", false, ["guest_view"]],
+  ["email", "member", false, ["guest_view", "guest_pick", "missing_tool"]],
+  ["email", "member", true, ["guest_view", "guest_pick"]],
+  ["email", "member", false, ["missing_tool"]],
+  ["email", "member", false, ["plow_send_email", "guest_view", "automations", "ask_user"]],
   ["email", "owner", false, ["guest_view"]],
 ] as const;
 for (const { kind, role, trusted, body, guestTools } of [
@@ -75,11 +79,11 @@ for (const { kind, role, trusted, body, guestTools } of [
   assert.equal(context.sender.name, sender.display_name);
   const restrictedPhone = kind !== "email" && !trusted && role === "member";
   assert.deepEqual(context.access?.toolPolicy, kind === "email"
-    ? { deny: ["automations"], ...(role === "member" ? { allow: ["plow_send_email"] } : {}) } : restrictedPhone && guestTools.length ? { allow: guestTools } : undefined);
+    ? { deny: ["automations"], ...(role === "member" ? { allow: [...new Set(["plow_send_email", ...guestTools])] } : {}) } : restrictedPhone && guestTools.length ? { allow: guestTools } : undefined);
   assert.equal(toolsDisabled, restrictedPhone && !guestTools.length ? true : undefined);
   const baseline = catalog.filter(name => !["guest_view", "guest_pick", "guest_admin", "ask_user"].includes(name) || guestTools.includes(name));
   assert.deepEqual(available, kind === "email"
-    ? role === "member" ? ["plow_send_email"] : baseline.filter(name => name !== "automations")
+    ? role === "member" ? catalog.filter(name => (name === "plow_send_email" || guestTools.includes(name)) && !["automations", "ask_user"].includes(name)) : baseline.filter(name => name !== "automations")
     : restrictedPhone ? guestTools.filter(name => catalog.includes(name)) : baseline);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);

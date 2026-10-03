@@ -198,9 +198,9 @@ In `ask` mode, `plow_start_thread` requires an explicit `trusted` choice. In
 the two preset modes, the configured choice is enforced even if a tool call
 supplies a different value.
 
-To give non-owners specific tools in untrusted phone chats, register ordinary
-OpenClaw plugin tools with `api.registerTool` in your variant's loaded plugin
-and list their names once in the image:
+To give non-owners specific tools in untrusted phone chats and email threads,
+register ordinary OpenClaw plugin tools with `api.registerTool` in your variant's
+loaded plugin and list their names once in the image:
 
 ```dockerfile
 ENV PLOW_GUEST_TOOLS=meetly_view_request,meetly_pick_time
@@ -209,9 +209,11 @@ ENV PLOW_GUEST_TOOLS=meetly_view_request,meetly_pick_time
 `PLOW_GUEST_TOOLS` is a comma-separated list, empty by default. Boot renders it
 as `channels.plow.guestTools` and adds the names to `tools.alsoAllow`. Non-owner
 turns in untrusted phone chats receive that list through OpenClaw's per-turn
-tool policy; an empty list disables tools. Unregistered names grant no tools.
-Owner turns, trusted chats, and email policy are unchanged. Guest tools should
-use the runtime tool context for sender and chat identity, never model arguments.
+tool policy; an empty list disables tools. Non-owner email turns get
+`plow_send_email` plus that list, with `automations` still denied. Unregistered
+names grant no tools. Owner turns and trusted phone chats are unchanged. Guest
+tools should use the runtime tool context for sender and chat identity, never
+model arguments.
 
 To ask the owner privately from a group, a variant plugin tool can use
 `sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound` with

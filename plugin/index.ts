@@ -129,7 +129,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const email = account.accountId === "email";
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
   const toolPolicy = email
-    ? { deny: ["automations"], ...(!senderIsOwner ? { allow: ["plow_send_email"] } : {}) }
+    ? { deny: ["automations"], ...(!senderIsOwner ? { allow: [...new Set(["plow_send_email", ...account.guestTools ?? []])] } : {}) }
     : guestTools?.length ? { allow: guestTools } : undefined;
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
