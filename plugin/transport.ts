@@ -11,6 +11,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { on, once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 
 export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
 export type RosterMember = Omit<Member, "provider_key"> & { provider_key?: string | null };
@@ -109,7 +111,7 @@ async function earliestUnansweredOwnerMessage(account: Account, chat: string, ne
   return earliest;
 }
 
-export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress) => Promise<TurnOutcome>) {
+export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress) => Promise<TurnOutcome>, cfg: OpenClawConfig = {}) {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
   const dir = `${root}/plow-checkpoints`;
@@ -117,8 +119,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
   const unadopted = new Map<string, Set<string>>();
-  type Queued = { chat: Chat; message: Message };
-  const pending = new Set<string>();
+  type Queued = { chatUid: string; message: Message; resolve: () => void; reject: (error: unknown) => void };
+  const pending = new Map<string, Queued>();
   const dispatching = new Set<Promise<void>>();
   let failDispatch: (error: unknown) => void;
   const checkpointWrites = new Map<string, Promise<void>>();
@@ -166,25 +168,39 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     recent.set(chat, new Set(checkpoint.recent));
     return checkpoint.uid;
   };
-  const dispatchTurn = async ({ chat, message }: Queued, onSubmitted: () => void) => {
+  const dispatchTurn = async (items: Queued[], onSubmitted: () => void) => {
+    if (signal.aborted) return;
+    const first = items[0], last = items.at(-1)!;
+    const chat = await request<Chat>(account, `/chats/${first.chatUid}`);
+    if (!accepts(account, chat)) {
+      for (const item of items) {
+        unadopted.get(first.chatUid)?.delete(item.message.uid);
+        pending.delete(item.message.uid);
+      }
+      return;
+    }
+    discovered.set(chat.uid, chat);
+    const owner = findOwnerChat(account, [...discovered.values()]);
+    const message = { ...last.message, body: items.map(item => item.message.body).join("\n") };
     let acknowledged: Promise<void> | undefined;
     const acknowledge = (stage: string) => acknowledged ??= (async () => {
-      if (account.accountId === "chat") await ack(chat.uid, message.uid);
-      pending.delete(message.uid);
-      remember(message.uid);
-      log(`acked chat=${chat.uid} message=${message.uid} stage=${stage}`);
+      for (const item of items) {
+        if (account.accountId === "chat") await ack(chat.uid, item.message.uid);
+        pending.delete(item.message.uid);
+        remember(item.message.uid);
+        log(`acked chat=${chat.uid} message=${item.message.uid} stage=${stage}`);
+      }
     })();
     const ingress = { abortSignal: signal, onSubmitted, onAdopted: () => acknowledge("adoption") };
-    const owner = findOwnerChat(account, [...discovered.values()]);
     let outcome: TurnOutcome = "incomplete";
     try {
       const checkpoint = checkpoints.get(chat.uid);
-      const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${message.uid}`);
+      const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${first.message.uid}`);
       let history: Message[] = [];
       const historyVersion = state.versions.get(chat.uid) ?? 0;
       let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
       if (!historyLoaded) {
-        try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${message.uid}`)).data.reverse(); historyLoaded = true; }
+        try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${first.message.uid}`)).data.reverse(); historyLoaded = true; }
         catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
       }
       outcome = await turn(chat, message, firstContact, history, ingress);
@@ -206,34 +222,57 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       log(`turn incomplete chat=${chat.uid} message=${message.uid}; left unacked`);
     }
     if (outcome === "completed") await acknowledge("terminal");
-    else if (outcome === "incomplete") pending.delete(message.uid);
+    else if (outcome === "incomplete") for (const item of items) pending.delete(item.message.uid);
   };
 
+  const lastSpeaker = new Map<string, string>();
+  const key = (item: Queued) => `${account.accountId}/${item.chatUid}/${item.message.sender.type === "member" ? item.message.sender.uid : item.message.sender.line.uid}`;
+  const { debouncer } = createChannelInboundDebouncer<Queued>({
+    cfg, channel: "plow", buildKey: key,
+    shouldDebounce: item => account.accountId === "chat" && shouldDebounceTextInbound({
+      cfg, text: item.message.body, hasMedia: item.message.attachments.length > 0,
+    }),
+    onFlush: items => {
+      let submitted!: () => void;
+      const admission = new Promise<void>(resolve => { submitted = resolve; });
+      const completion = dispatchTurn(items, submitted).then(() => {
+        for (const item of items) item.resolve();
+      }).finally(submitted);
+      return { admission, completion };
+    },
+    onError: (error, items) => { for (const item of items) { pending.delete(item.message.uid); item.reject(error); } },
+    onCancel: items => { for (const item of items) item.resolve(); },
+  });
+  const cancel = () => { for (const item of pending.values()) debouncer.cancelKey(key(item)); };
+  signal.addEventListener("abort", cancel, { once: true });
   const consume = async (chatUid: string, message: Message) => {
     if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;
-    const chat = await request<Chat>(account, `/chats/${chatUid}`);
-    if (!accepts(account, chat)) return;
-    discovered.set(chat.uid, chat);
-    findOwnerChat(account, [...discovered.values()]);
+    const chat = discovered.get(chatUid);
+    if (chat && !accepts(account, chat)) return;
     const sender = message.sender;
     if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
+      if (!accepts(account, await request<Chat>(account, `/chats/${chatUid}`))) return;
       if (account.accountId === "chat") await ack(chatUid, message.uid);
       remember(message.uid);
       log(`acked chat=${chatUid} message=${message.uid}`);
       return;
     }
-    const item = { chat, message };
+    let resolve!: () => void, reject!: (error: unknown) => void;
+    const outcome = new Promise<void>((done, failed) => { resolve = done; reject = failed; });
+    const item = { chatUid, message, resolve, reject };
+    const previous = lastSpeaker.get(chatUid);
+    if (previous && previous !== key(item)) await debouncer.flushKey(previous);
+    if (signal.aborted) return;
+    lastSpeaker.set(chatUid, key(item));
     if (account.accountId === "chat") {
       if (!unadopted.has(chatUid)) unadopted.set(chatUid, new Set());
       unadopted.get(chatUid)!.add(message.uid);
     }
-    pending.add(message.uid);
-    let onSubmitted!: () => void;
-    const submitted = new Promise<void>(resolve => { onSubmitted = resolve; });
-    const task = dispatchTurn(item, onSubmitted).finally(onSubmitted);
-    dispatching.add(task);
-    void task.catch(error => failDispatch(error)).finally(() => dispatching.delete(task));
-    await submitted;
+    pending.set(message.uid, item);
+    dispatching.add(outcome);
+    void outcome.catch(error => failDispatch(error)).finally(() => dispatching.delete(outcome));
+    if (debouncer.shouldBuffer(item)) log(`buffered chat=${chatUid} sender=${key(item)} message=${message.uid} timestamp=${Date.now()}`);
+    await debouncer.enqueue(item);
   };
 
   while (!signal.aborted) {
@@ -394,5 +433,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
+  signal.removeEventListener("abort", cancel);
+  await debouncer.drain();
   if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
 }

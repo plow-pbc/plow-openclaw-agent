@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import entry from "../plugin/index.ts";
@@ -71,4 +71,74 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
   const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
   assert.deepEqual(saved.recent, sourceIds);
   assert.equal(saved.uid, sourceIds.at(-1));
+});
+
+for (const firstContact of [false, true]) test(`WS arrival debounces slow chat and owner-history reads once per burst: firstContact=${firstContact}`, async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter(12_000);
+  const sender = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
+  const chat = { uid: "chat", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
+  const first = { uid: "first", direction: "inbound", sender, body: "pitch him this:", attachments: [], created_at: new Date().toISOString() };
+  const second = { ...first, uid: "second", body: "https://notion.so/example" };
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/chat`, JSON.stringify({ uid: firstContact ? "first:first" : "baseline", recent: firstContact ? [] : ["baseline"] }));
+  const recovered = Promise.withResolvers<void>();
+  let chatReads = 0, historyReads = 0;
+  const historyUrls: string[] = [];
+  const phases: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string | URL) => {
+    const path = String(url);
+    if (path.endsWith("/chats/chat")) { phases.push("chat read"); await delay(700 * ++chatReads); return Response.json(chat); }
+    if (path.includes("limit=20")) {
+      phases.push("history read");
+      historyUrls.push(path);
+      await delay(700 * ++historyReads);
+      return Response.json({ data: [], has_more: false });
+    }
+    if (path.includes("limit=50")) recovered.resolve();
+    return Response.json(path.endsWith("/chats") ? { data: [chat], has_more: false } : path.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+  });
+  server.on("connection", socket => {
+    void recovered.promise.then(async () => {
+      const send = (message: typeof first) => socket.send(JSON.stringify({ event_type: "message_received", chat_id: chat.uid, data: { message } }));
+      send(first);
+      await delay(1500);
+      send(second);
+      send(second);
+    });
+  });
+  const contexts: { messageId: string; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { first_contact: boolean } }[] } }[] = [];
+  const logs: string[] = [];
+  let channel: { gateway: { startAccount: (ctx: object) => Promise<void> } } | undefined;
+  entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
+    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
+    runtime: { channel: {
+      routing: { resolveAgentRoute: () => ({ sessionKey: "main" }) },
+      inbound: {
+        buildContext: async (context: typeof contexts[number]) => { contexts.push(context); return context; },
+        dispatch: async ({ replyOptions }: { replyOptions: { turnAdoptionLifecycle: { onAdopted: () => Promise<void> } } }) => {
+          await replyOptions.turnAdoptionLifecycle.onAdopted();
+          if (contexts.at(-1)!.message.rawBody.includes(second.body) || contexts.length === 2) controller.abort();
+          return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
+        },
+      },
+    } },
+  });
+  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: 2000 } } } }, abortSignal: controller.signal, log: { info: (line: string) => { logs.push(line); if (line.startsWith("buffered ")) phases.push("buffered"); } } });
+  assert.notEqual(controller.signal.reason?.name, "TimeoutError");
+  assert.deepEqual(contexts.map(context => context.message.rawBody), [`${first.body}\n${second.body}`]);
+  assert.equal(contexts[0].messageId, second.uid);
+  assert.equal(contexts[0].supplemental.channelStructuredContext[0].payload.first_contact, firstContact);
+  assert.deepEqual(phases, ["buffered", "buffered", "chat read", "history read"]);
+  assert.equal(chatReads, 1);
+  assert.equal(historyReads, 1);
+  assert.deepEqual(historyUrls, [`${apiBase}/v1/chats/chat/messages?limit=20&starting_after=first`]);
+  const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
+  assert.deepEqual(saved.recent, [...(firstContact ? [] : ["baseline"]), "first", "second"]);
+  assert.equal(saved.uid, "second");
+  const buffered = logs.filter(line => line.startsWith("buffered "));
+  assert.equal(buffered.length, 2);
+  assert.ok(buffered.every(line => line.includes("chat=chat") && line.includes("sender=chat/chat/owner") && /timestamp=\d+/.test(line)));
+  assert.ok(buffered[0].includes("message=first") && buffered[1].includes("message=second"));
+  assert.ok(buffered.every(line => !line.includes(first.body) && !line.includes(second.body)));
 });
