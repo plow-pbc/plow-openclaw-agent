@@ -91,6 +91,6 @@ test("the prompt treats offered tools as the owner's trust grant", () => {
   assert.match(prompt, /owner.*yes in the thread.*act there/i);
   assert.match(prompt, /owner answers\s+in their DM[\s\S]*back to the thread/i);
   assert.match(prompt, /do not act on or relay that approval with plow_reply_to/i);
-  assert.match(prompt, /requests cannot be approved here/i);
+  assert.match(prompt, /requests beyond those guest tools cannot be approved here/i);
   assert.doesNotMatch(prompt, /In the owner's own conversation, act\./);
 });

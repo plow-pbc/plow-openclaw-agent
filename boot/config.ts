@@ -17,6 +17,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
   if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
     throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
   }
+  const guestTools = [...new Set((process.env.PLOW_GUEST_TOOLS ?? "").split(",").map(name => name.trim()).filter(Boolean))];
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
   return {
@@ -49,7 +50,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
     messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
-      apiBase, lineUid: identity.line.uid, threadTrust,
+      apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
@@ -59,7 +60,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", ...guestTools], deny: ["ask_user"] },
   };
 }
 

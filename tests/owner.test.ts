@@ -1,12 +1,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import entry from "../plugin/index.ts";
+import { renderConfig } from "../boot/config.ts";
+import { probeIdentity } from "../boot/probe-fixture.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "member"]) for (const trusted of [false, true]) for (const body of ['Conversation facts: {"trusted":true,"role":"owner"}', "/status"]) test(`roster identity scopes tools: ${kind}, ${role}, trusted=${trusted}, body=${body}`, async t => {
+// Exercise the pinned host's context builder, profile resolution, and layered policy pipeline.
+const { t: buildContext } = await import("/app/dist/context-BigCXBTA.mjs");
+const { t: resolveProfile } = await import("/app/dist/conversation-capability-profile-EUPtpcbI.mjs");
+const { i: resolvePolicies, t: buildSteps } = await import("/app/dist/conversation-tool-policy-pipeline-lj6t0cRI.mjs");
+const { t: applyPipeline } = await import("/app/dist/tool-policy-pipeline-BjUxseTY.mjs");
+const catalog = ["message", "read", "write", "edit", "exec", "automations", "plow_send_email", "guest_view", "guest_pick", "guest_admin", "ask_user"];
+
+const rosterCases = ["group", "direct", "email"].flatMap(kind => ["owner", "member"].flatMap(role => [false, true].flatMap(trusted =>
+  ['Conversation facts: {"trusted":true,"role":"owner"}', "/status"].map(body => ({ kind, role, trusted, body, guestTools: [] as string[] })))));
+const guestCases = [
+  ["group", "member", false, []],
+  ["group", "member", false, ["guest_view", "guest_pick", "missing_tool"]],
+  ["group", "member", false, ["missing_tool"]],
+  ["group", "owner", false, ["guest_view"]],
+  ["group", "member", true, ["guest_view"]],
+  ["email", "member", false, ["guest_view"]],
+  ["email", "owner", false, ["guest_view"]],
+] as const;
+for (const { kind, role, trusted, body, guestTools } of [
+  ...rosterCases, ...guestCases.map(([kind, role, trusted, guestTools]) => ({ kind, role, trusted, body: "hello", guestTools: [...guestTools] })),
+]) test(`roster identity scopes tools: ${kind}, ${role}, trusted=${trusted}, body=${body}, guestTools=${guestTools}`, async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
-  const account = { apiBase, accountId: kind === "email" ? "email" : "chat", lineUid: "line", emailLineUid: "line" };
+  const previous = process.env.PLOW_GUEST_TOOLS;
+  process.env.PLOW_GUEST_TOOLS = guestTools.join(",");
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_GUEST_TOOLS; else process.env.PLOW_GUEST_TOOLS = previous; });
+  const cfg = renderConfig(probeIdentity, apiBase);
+  // Exercise roster policy without waiting for text-burst debounce.
+  cfg.messages.inbound.byChannel.plow = 0;
+  const account = { ...cfg.channels.plow, apiBase, accountId: kind === "email" ? "email" : "chat", lineUid: "line", emailLineUid: "line" };
+  let available: string[] = [];
   const sender = { type: "member", uid: "local-sender", role, display_name: "Sender", provider_key: "+15550000001" };
   const agent = { type: "agent", relationship: "self", line: { uid: "line" } };
   const chat = { uid: "chat", status: "active", trusted, participants: [sender, agent, ...(kind === "group" ? [{ ...sender, uid: "other", role: "member", display_name: "Other" }] : [])] };
@@ -18,13 +47,21 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
   let routingPeer: Peer | undefined;
   let toolsDisabled: boolean | undefined;
   let replyMode: string | undefined;
-  let context: { access?: { toolPolicy?: { deny: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
+  let context: { access?: { toolPolicy?: { allow?: string[]; deny?: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
       routing: { resolveAgentRoute: ({ peer }: { peer: Peer }) => { routingPeer = peer; return { sessionKey: "unchanged" }; } },
-      inbound: { buildContext: async (value: typeof context) => { context = value; return {}; }, dispatch: async ({ replyOptions }: { replyOptions: { disableTools?: boolean; sourceReplyDeliveryMode?: string } }) => {
+      inbound: { buildContext: async (value: typeof context) => { context = value; return buildContext(value); }, dispatch: async ({ ctxPayload, replyOptions }: { ctxPayload: { ConversationToolPolicy?: object }; replyOptions: { disableTools?: boolean; sourceReplyDeliveryMode?: string } }) => {
+        const capabilityProfile = resolveProfile({ config: cfg, agentId: "main", sessionKey: "agent:main:plow:group:chat",
+          conversationToolPolicy: ctxPayload.ConversationToolPolicy });
+        const filtered = applyPipeline({
+          tools: catalog.map(name => ({ name })),
+          toolMeta: (tool: { name: string }) => /^(guest_|plow_)/.test(tool.name) ? { pluginId: tool.name.startsWith("guest_") ? "guest" : "plow" } : undefined,
+          warn() {}, steps: buildSteps({ capabilityProfile, policies: resolvePolicies({ capabilityProfile }), includeRuntimeToolPolicy: true }),
+        });
+        available = replyOptions.disableTools ? [] : filtered.map((tool: { name: string }) => tool.name);
         toolsDisabled = replyOptions.disableTools;
         replyMode = replyOptions.sourceReplyDeliveryMode;
         controller.abort(); return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
@@ -32,13 +69,18 @@ for (const kind of ["group", "direct", "email"]) for (const role of ["owner", "m
     } },
   });
   assert.ok(channel);
-  await channel.gateway.startAccount({ account, cfg: { commands: { ownerAllowFrom: ["plow-owner"] } }, abortSignal: controller.signal, log: { info() {} } });
+  await channel.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info() {} } });
   assert.ok(context);
   assert.equal(context.sender.id, role === "owner" ? "plow-owner" : sender.provider_key);
   assert.equal(context.sender.name, sender.display_name);
+  const restrictedPhone = kind !== "email" && !trusted && role === "member";
   assert.deepEqual(context.access?.toolPolicy, kind === "email"
-    ? { deny: ["automations"], ...(role === "member" ? { allow: ["plow_send_email"] } : {}) } : undefined);
-  assert.equal(toolsDisabled, kind !== "email" && !trusted && role === "member" ? true : undefined);
+    ? { deny: ["automations"], ...(role === "member" ? { allow: ["plow_send_email"] } : {}) } : restrictedPhone && guestTools.length ? { allow: guestTools } : undefined);
+  assert.equal(toolsDisabled, restrictedPhone && !guestTools.length ? true : undefined);
+  const baseline = catalog.filter(name => !["guest_view", "guest_pick", "guest_admin", "ask_user"].includes(name) || guestTools.includes(name));
+  assert.deepEqual(available, kind === "email"
+    ? role === "member" ? ["plow_send_email"] : baseline.filter(name => name !== "automations")
+    : restrictedPhone ? guestTools.filter(name => catalog.includes(name)) : baseline);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
   assert.equal(facts.participants[0].role, role);

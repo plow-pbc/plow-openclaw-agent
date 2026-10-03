@@ -23,7 +23,7 @@ export type Message = {
 export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; onAdopted: () => Promise<void> };
 export type TurnOutcome = "completed" | "incomplete" | "deferred";
 export type Page<T> = { data: T[]; has_more: boolean };
-export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; emailName?: string; threadTrust?: "ask" | "trusted" | "untrusted" };
+export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; emailName?: string; threadTrust?: "ask" | "trusted" | "untrusted"; guestTools?: string[] };
 
 export class HttpError extends Error {
   status: number;

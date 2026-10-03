@@ -16,6 +16,7 @@
           "lineUid": { "type": "string" },
           "emailLineUid": { "type": "string" },
           "emailName": { "type": "string" },
+          "guestTools": { "type": "array", "items": { "type": "string" } },
           "threadTrust": { "type": "string", "enum": ["ask", "trusted", "untrusted"] }
         }
       }

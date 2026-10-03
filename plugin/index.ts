@@ -127,6 +127,10 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
+  const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
+  const toolPolicy = email
+    ? { deny: ["automations"], ...(!senderIsOwner ? { allow: ["plow_send_email"] } : {}) }
+    : guestTools?.length ? { allow: guestTools } : undefined;
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
   const persona = (email && account.emailName) || selfName;
@@ -141,7 +145,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
-    access: { commands: { authorized: senderIsOwner }, ...(email ? { toolPolicy: { deny: ["automations"], ...(!senderIsOwner ? { allow: ["plow_send_email"] } : {}) } } : {}) },
+    access: { commands: { authorized: senderIsOwner }, ...(toolPolicy ? { toolPolicy } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
@@ -178,8 +182,8 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       turnAdoptionLifecycle: ingress,
       onModelSelected,
       onAgentRunStart: runId => log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`),
-      // Untrusted non-owners get no tools; on email a non-owner keeps only plow_send_email, for its own thread.
-      ...(!email && !chat.trusted && !senderIsOwner ? { disableTools: true } : {}),
+      // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
+      ...(guestTools?.length === 0 ? { disableTools: true } : {}),
       sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
       onObservedReplyDelivery: () => { observedReplyDelivery = true; },
       onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
@@ -381,7 +385,7 @@ export default defineChannelPluginEntry({
         type: "object", required: ["chat_uid", "trusted"], additionalProperties: false,
         properties: {
           chat_uid: { type: "string", pattern: "^cht_[A-Za-z0-9_-]+$", description: "The existing Plow group chat uid." },
-          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to replies only." },
+          trusted: { type: "boolean", description: "True grants all members full tools; false restricts non-owner members to configured guest tools, or replies only when that list is empty." },
         },
       },
       async execute(_id, args: { chat_uid: string; trusted: boolean }) {

@@ -198,6 +198,37 @@ In `ask` mode, `plow_start_thread` requires an explicit `trusted` choice. In
 the two preset modes, the configured choice is enforced even if a tool call
 supplies a different value.
 
+To give non-owners specific tools in untrusted phone chats, register ordinary
+OpenClaw plugin tools with `api.registerTool` in your variant's loaded plugin
+and list their names once in the image:
+
+```dockerfile
+ENV PLOW_GUEST_TOOLS=meetly_view_request,meetly_pick_time
+```
+
+`PLOW_GUEST_TOOLS` is a comma-separated list, empty by default. Boot renders it
+as `channels.plow.guestTools` and adds the names to `tools.alsoAllow`. Non-owner
+turns in untrusted phone chats receive that list through OpenClaw's per-turn
+tool policy; an empty list disables tools. Unregistered names grant no tools.
+Owner turns, trusted chats, and email policy are unchanged. Guest tools should
+use the runtime tool context for sender and chat identity, never model arguments.
+
+To ask the owner privately from a group, a variant plugin tool can use
+`sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound` with
+`channel: "plow"`, `accountId: "chat"`, `to: "plow-owner"` and
+`payloads: [{ text }]`. Resolve the owner's route with
+`api.runtime.channel.routing.resolveAgentRoute` using the tool's `config` and
+`peer: { kind: "direct", id: "plow-owner" }`; update that route with
+`api.runtime.channel.session.updateLastRoute` (`createIfMissing: true`). Pass
+`session: buildOutboundSessionContext({ cfg, ...route, conversationType: "direct" })`,
+`mirror: { agentId: route.agentId, sessionKey: route.sessionKey }` and
+`skipQueue: true`, as `plow_reply_to` does. Only `status: "sent"` confirms delivery.
+Keep the destination fixed in code, quote and cap member text, and keep routing
+in the variant's existing records, not in owner-visible text. This sends and
+mirrors an assistant message; it must not dispatch member text as an owner turn.
+When the owner answers in their DM, use `plow_reply_to` with the recorded group
+chat uid to send the answer back. No additional base tool is needed.
+
 Keep the inherited boot and reporter to use Plow's maintained reporting: it
 registers the listing, reads OpenClaw's transcripts and reports every five
 minutes. Rebuild on an updated base digest to pick up fixes.
@@ -230,10 +261,10 @@ loopback interface.
 
 Trust controls tool access per turn. In a trusted group, every sender can
 use the agent's tools, including the owner's Mac, mail and files. In any
-untrusted conversation, the owner still has full tools; other senders get replies
-only, with no tools. This includes direct chats, whose senders can be anyone;
-email threads follow the email rules above. If the owner is absent, tool-requiring requests cannot be approved
-there. When the owner is present, a new request needs their OK in the same thread;
+untrusted phone conversation, the owner still has full tools; other senders get only
+configured guest tools, or replies only when that list is empty. This includes direct chats, whose senders can be anyone;
+email threads follow the email rules above. If the owner is absent, requests beyond those guest tools cannot be approved
+there. When the owner is present, a request beyond those tools needs their OK in the same thread;
 the owner approves there and the agent acts there. An owner answering in their DM is
 pointed back to that thread. Email never uses in-thread approval: the owner decides
 privately in their chat, and the agent then sends. The owner can switch a group with

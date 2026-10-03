@@ -100,6 +100,18 @@ test("phone turns cannot block on ask_user", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools.deny, ["ask_user"]);
 });
 
+test("guest tools default to empty and are declared once for channel and messaging policy", t => {
+  const previous = process.env.PLOW_GUEST_TOOLS;
+  t.after(() => { if (previous === undefined) delete process.env.PLOW_GUEST_TOOLS; else process.env.PLOW_GUEST_TOOLS = previous; });
+  delete process.env.PLOW_GUEST_TOOLS;
+  const baseline = renderConfig(identity, "http://api:8000");
+  assert.deepEqual(baseline.channels.plow.guestTools, []);
+  process.env.PLOW_GUEST_TOOLS = " guest_view, guest_pick, ,guest_view ";
+  const config = renderConfig(identity, "http://api:8000");
+  assert.deepEqual(config.channels.plow.guestTools, ["guest_view", "guest_pick"]);
+  assert.deepEqual(config.tools.alsoAllow, [...baseline.tools.alsoAllow, "guest_view", "guest_pick"]);
+});
+
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
     message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
