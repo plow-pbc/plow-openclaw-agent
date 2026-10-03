@@ -34,12 +34,12 @@ export class DeliveryUnknownError extends Error {
   constructor() { super("Plow delivery is unknown; not replaying this send"); }
 }
 
-export async function request<T>(account: Pick<Account, "apiBase">, path: string, body?: unknown, signal?: AbortSignal, method: "POST" | "PUT" = "POST"): Promise<T> {
+export async function request<T>(account: Pick<Account, "apiBase">, path: string, body?: unknown, signal?: AbortSignal, method: "POST" | "PUT" = "POST", headers: Record<string, string> = {}): Promise<T> {
   const token = process.env.PLOW_AGENT_TOKEN;
   if (!token) throw new Error("PLOW_AGENT_TOKEN is required");
   const response = await fetch(`${account.apiBase}/v1${path}`, {
     method: body === undefined ? "GET" : method,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: { ...headers, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: signal ?? AbortSignal.timeout(40_000),
   });
@@ -394,4 +394,34 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
   if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
+}
+
+
+export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>): Promise<T> {
+  try { return await request<T>(account, path, body, undefined, method, headers); }
+  catch (error) {
+    if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
+      throw new DeliveryUnknownError();
+    }
+    throw error;
+  }
+}
+
+// OpenClaw drops a reply only when it is exactly NO_REPLY. A model that writes a status line and
+// then the token got both delivered: 129 internal heartbeat notes reached people's phones in a week
+// (2026-10-02), one of them after the person asked twice to stop. The token ending the text is the
+// model choosing silence, so nothing is posted. Heartbeat sends say so, which lets the server tell
+// them apart from any other message instead of guessing from the text.
+// The silence-marker grammar is DELIBERATELY COPIED from Hermes (hermes-plugin-plow,
+// plow-chat-platform/_transport.py `_ends_silent`), the component that sends these messages; Plow's
+// server-side guard copies it too. All three must stay identical, and each repo carries the same case
+// list (tests/transport.test.ts here), so a copy that drifts fails a test instead of a review.
+export const isSilent = (text: string) =>
+  text.split("\n").filter(line => line.trim()).at(-1)?.trim().replace(/^[.*_ `]+|[.*_ `]+$/g, "") === "NO_REPLY";
+
+export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
+  if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
+  const sent = await requestDelivery<{ uid: string }>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
+    "POST", kind ? { "Plow-Message-Kind": kind } : undefined);
+  return { channel: "plow" as const, messageId: sent.uid };
 }

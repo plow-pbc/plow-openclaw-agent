@@ -190,7 +190,7 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
   assert.deepEqual(results.map(result => Boolean(result.isError)), [true, true, true, false]);
   assert.ok(results.slice(0, 3).every(result => JSON.parse(result.content[0].text).success === false));
   assert.deepEqual(JSON.parse(results[3].content[0].text), { sent: true, chat_uid: "thread" });
-  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co" } }]);
+  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co", attachment_uids: [] } }]);
 });
 
 test("a thread started from a trusted group reports its finals to that group, recorded in the group's session", async t => {
@@ -298,6 +298,13 @@ test("sender-chosen subject and name stay on the header's one line", async t => 
   assert.equal(String(posts[0].body.body).split(/[\n\u2028\u2029]/).length, 2, "one header line, then the final");
 });
 
+test("a decorated NO_REPLY line beside an email final is dropped too, and the digest still reaches the owner", async t => {
+  const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
+    await final(dispatch, { text: "Morgan asked about Thursday.\n\n*NO_REPLY*" });
+  });
+  assert.deepEqual(posts.map(post => post.body.body), [`Email "Booking" from "sender@example.com":\nMorgan asked about Thursday.`]);
+});
+
 test("a NO_REPLY line beside an email final is dropped; the runtime's reminder note still reaches the owner", async t => {
   const note = "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }, { chat: "other", sender: outsider }], async dispatch => {
@@ -333,4 +340,16 @@ for (const [name, persona, ownerName, sent] of [
     await tool().execute("call", { to: "thread", body: "Thursday works.\n" });
   });
   assert.deepEqual(posts.map(post => [post.path, post.body.body]), [["/chats/thread/messages", sent]]);
+});
+
+test("a phone reply or an email body that ends in NO_REPLY posts nothing", async t => {
+  const note = "No active subagents, nothing pending.\n\nNO_REPLY";
+  let refused: { content: { text: string }[] } | undefined;
+  const { posts, logs } = await run(t, "chat", [{ chat: "home", sender: owner }], async (dispatch, tool) => {
+    await final(dispatch, { text: note });
+    refused = await tool().execute("call", { to: "thread", body: note });
+  });
+  assert.deepEqual(posts, [], "silence reaches no one, on either path");
+  assert.ok(logs.some(line => line.startsWith("silent chat=home")));
+  assert.match(refused!.content[0].text, /NO_REPLY silence marker/);
 });
