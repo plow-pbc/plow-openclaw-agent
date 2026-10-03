@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
+import { agentExtensions } from "./extensions.js";
 import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
 import { installBootLog } from "./log.js";
@@ -16,7 +17,7 @@ try {
   process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString("hex");
   process.env.PLOW_MCP_BRIDGE_TOKEN = randomBytes(32).toString("hex");
   const identity = await identityFromApi(base, process.env.PLOW_AGENT_TOKEN);
-  const config = renderConfig(identity, base);
+  const config = renderConfig(identity, base, undefined, await agentExtensions());
   await mkdir("/var/lib/plow/workspace", { recursive: true });
   await writeFile("/var/lib/plow/gateway-password", process.env.OPENCLAW_GATEWAY_PASSWORD + "\n", { mode: 0o600 });
   await chmod("/var/lib/plow/gateway-password", 0o600);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRequire } from "node:module";
 import { nativeSendPolicy } from "./native-message-policy.ts";
-import entry from "../plugin/index.ts";
+import entry, { acknowledgePluginHandoff } from "../plugin/index.ts";
 import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
@@ -13,7 +13,7 @@ type Dispatch = {
   delivery: { observeMessageSent?: boolean; preparePayload?: (payload: { text: string; isError?: boolean; isFallbackNotice?: boolean }, info: { kind: "final" }) => { text: string } | null; deliver: (payload: { text: string }) => Promise<unknown> };
 };
 
-for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "slash-final", "silent", "duplicate", "native-source", "native-source-final", "native-source-plus-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "reminder-note", "observed", "queued", "deferred"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
+for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "slash-final", "silent", "duplicate", "native-source", "native-source-final", "native-source-plus-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "reminder-note", "observed", "queued", "deferred", "plugin-handoff", "wrong-handoff"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -78,6 +78,8 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
           catch (error) { nativeOtherFailure = error; }
         }
         if (outcome === "observed") dispatch.replyOptions.onObservedReplyDelivery?.();
+        if (outcome === "plugin-handoff") assert.equal(acknowledgePluginHandoff("line", "chat", "inbound"), true);
+        if (outcome === "wrong-handoff") assert.equal(acknowledgePluginHandoff("another-line", "chat", "inbound"), false);
         if (outcome === "duplicate") emitDiagnosticEvent({ type: "message.processed", channel: "plow", messageId: "inbound", sessionKey: "main", outcome: "skipped", reason: "duplicate" });
         if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice" && outcome !== "plain-final" && outcome !== "slash-final") controller.abort();
         // The host withholds final text after a message-tool send.
@@ -101,7 +103,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
     assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
-  if (["observed", "queued"].includes(outcome)) {
+  if (["observed", "queued", "plugin-handoff"].includes(outcome)) {
     assert.ok(logs.some(text => text.startsWith("completed chat=chat message=inbound")));
     assert.ok(!logs.some(text => text.startsWith("turn incomplete")));
   }
@@ -120,6 +122,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   }
   if (outcome === "delivered") assert.equal(observation, true);
   if (outcome === "duplicate") assert.ok(logs.some(text => text.startsWith("turn incomplete")));
+  assert.equal(acknowledgePluginHandoff("line", "chat", "inbound"), false);
   assert.ok(context);
   assert.equal(context.sender.id, sender.provider_key);
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
@@ -139,5 +142,5 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     { name: "Missing", type: "member", role: "member" },
     { type: "agent", role: "self" },
   ]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), ["aborted", "failed", "empty", "native-other", "deferred", "duplicate", "error-notice", "terminal-notice"].includes(outcome) ? "first:inbound" : "inbound");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), ["aborted", "failed", "empty", "native-other", "deferred", "duplicate", "error-notice", "terminal-notice", "wrong-handoff"].includes(outcome) ? "first:inbound" : "inbound");
 });

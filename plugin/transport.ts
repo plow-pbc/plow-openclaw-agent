@@ -26,6 +26,24 @@ export type TurnOutcome = "completed" | "incomplete" | "deferred";
 export type Page<T> = { data: T[]; has_more: boolean };
 export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; emailName?: string; threadTrust?: "ask" | "trusted" | "untrusted"; guestTools?: string[] };
 
+// Image plugins can take durable ownership in before_dispatch without producing
+// a normal reply. Separate SDK registries still run in the same gateway process.
+const handoffKey = Symbol.for("plow.pluginHandoffs");
+const shared = globalThis as typeof globalThis & { [handoffKey]?: Map<string, { confirmed: boolean }> };
+const handoffs = shared[handoffKey] ??= new Map<string, { confirmed: boolean }>();
+const inboundKey = (line: string, chat: string, message: string) => JSON.stringify([line, chat, message]);
+export function acknowledgePluginHandoff(line: string, chat: string, message: string): boolean {
+  const active = handoffs.get(inboundKey(line, chat, message));
+  if (!active) return false;
+  active.confirmed = true;
+  return true;
+}
+export function pluginHandoff(line: string, chat: string, message: string) {
+  const key = inboundKey(line, chat, message), state = { confirmed: false };
+  handoffs.set(key, state);
+  return { get confirmed() { return state.confirmed; }, close() { if (handoffs.get(key) === state) handoffs.delete(key); } };
+}
+
 export class HttpError extends Error {
   status: number;
   constructor(status: number) { super(`Plow HTTP ${status}`); this.status = status; }
