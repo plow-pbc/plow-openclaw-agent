@@ -412,7 +412,10 @@ export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path
 // (2026-10-02), one of them after the person asked twice to stop. The token ending the text is the
 // model choosing silence, so nothing is posted. Heartbeat sends say so, which lets the server tell
 // them apart from any other message instead of guessing from the text.
-export const isSilent = (text: string) => /\bNO_REPLY\s*$/.test(text);
+// Only when the marker is the entire last line, decorated or not ("*NO_REPLY*", ".NO_REPLY"): a
+// marker inside a sentence or on another line of a transcript is a real message and still sends.
+export const isSilent = (text: string) =>
+  text.split("\n").filter(line => line.trim()).at(-1)?.replace(/^[\s.*_`]+|[\s.*_`!?,;:]+$/g, "") === "NO_REPLY";
 
 export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
   if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };

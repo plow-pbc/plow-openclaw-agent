@@ -867,12 +867,13 @@ test("a reply ending in NO_REPLY is never posted, and heartbeat sends say what t
     posts.push({ url, kind: new Headers(init.headers).get("Plow-Message-Kind"), body: JSON.parse(String(init.body)) });
     return Response.json({ uid: "msg_1" });
   });
-  for (const silent of ["No active subagents, nothing pending.\n\nNO_REPLY", "NO_REPLY", "Already handled. NO_REPLY\n"]) {
+  for (const silent of ["No active subagents, nothing pending.\n\nNO_REPLY", "NO_REPLY", "Done here.\n\n*NO_REPLY*", "All clear.\n.NO_REPLY\n"]) {
     assert.deepEqual(await postMessage(account, "chat", silent), { channel: "plow", messageId: "", outcome: "not_sent" });
   }
   assert.equal(posts.length, 0, "silence reaches no one");
   assert.deepEqual(await postMessage(account, "chat", "I'll reply with a bare NO_REPLY when there's nothing new."), { channel: "plow", messageId: "msg_1" });
+  assert.deepEqual(await postMessage(account, "chat", "1. You: hi\n2. Me: NO_REPLY\n3. You: test"), { channel: "plow", messageId: "msg_1" }, "a transcript quoting the marker still sends");
   await postMessage(account, "chat", "Your recap is ready.", [], "heartbeat");
-  assert.deepEqual(posts.map(p => p.kind), [null, "heartbeat"]);
-  assert.deepEqual(posts[1], { url: "http://fixture/v1/chats/chat/messages", kind: "heartbeat", body: { body: "Your recap is ready.", attachment_uids: [] } });
+  assert.deepEqual(posts.map(p => p.kind), [null, null, "heartbeat"]);
+  assert.deepEqual(posts[2], { url: "http://fixture/v1/chats/chat/messages", kind: "heartbeat", body: { body: "Your recap is ready.", attachment_uids: [] } });
 });

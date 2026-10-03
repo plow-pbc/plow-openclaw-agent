@@ -190,7 +190,7 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
   assert.deepEqual(results.map(result => Boolean(result.isError)), [true, true, true, false]);
   assert.ok(results.slice(0, 3).every(result => JSON.parse(result.content[0].text).success === false));
   assert.deepEqual(JSON.parse(results[3].content[0].text), { sent: true, chat_uid: "thread" });
-  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co" } }]);
+  assert.deepEqual(posts, [{ path: "/chats/thread/messages", body: { body: "Thanks, noted.\n\n--\nSent by Elm, Owner's AI assistant on Plow · plow.co", attachment_uids: [] } }]);
 });
 
 test("a thread started from a trusted group reports its finals to that group, recorded in the group's session", async t => {
