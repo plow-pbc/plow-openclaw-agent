@@ -143,6 +143,14 @@ export async function syncConfig(
       parent[key] = { $include: includePath };
     }
   }
+  // An existing config keeps whatever heartbeat route it was born with, so one still on OpenClaw's
+  // implicit owner route moves to the marked one; any other heartbeat setting stays. An explicit
+  // route is the owner's choice, "none" (OpenClaw's own advice for silencing them) included.
+  const defaults = isObject(owner.agents) && isObject(owner.agents.defaults) ? owner.agents.defaults : undefined;
+  const heartbeat = defaults?.heartbeat;
+  if (defaults && (heartbeat === undefined || (isObject(heartbeat) && (heartbeat.target ?? "owner") === "owner"))) {
+    defaults.heartbeat = { ...(isObject(heartbeat) ? heartbeat : {}), ...rendered.agents.defaults.heartbeat };
+  }
   const bindingPath = join(includeDir, "binding.json5");
   await writeFile(bindingPath, JSON.stringify(rendered.bindings[0], null, 2) + "\n");
   const ownerBindings = Array.isArray(owner.bindings) ? owner.bindings.filter(binding =>
