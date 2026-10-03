@@ -334,3 +334,15 @@ for (const [name, persona, ownerName, sent] of [
   });
   assert.deepEqual(posts.map(post => [post.path, post.body.body]), [["/chats/thread/messages", sent]]);
 });
+
+test("a phone reply or an email body that ends in NO_REPLY posts nothing", async t => {
+  const note = "No active subagents, nothing pending.\n\nNO_REPLY";
+  let refused: { content: { text: string }[] } | undefined;
+  const { posts, logs } = await run(t, "chat", [{ chat: "home", sender: owner }], async (dispatch, tool) => {
+    await final(dispatch, { text: note });
+    refused = await tool().execute("call", { to: "thread", body: note });
+  });
+  assert.deepEqual(posts, [], "silence reaches no one, on either path");
+  assert.ok(logs.some(line => line.startsWith("silent chat=home")));
+  assert.match(refused!.content[0].text, /NO_REPLY silence marker/);
+});

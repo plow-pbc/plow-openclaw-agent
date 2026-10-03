@@ -9,7 +9,7 @@ import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/sess
 import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, requestDelivery, postMessage, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
@@ -224,6 +224,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           return { messageIds: [sent] };
         }
         const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
+        if ("outcome" in sent && sent.outcome === "not_sent") {
+          log(`silent chat=${chat.uid} message=${message.uid}`);
+          silent = true;
+          return { messageIds: [] };
+        }
         log(`delivered chat=${chat.uid} message=${sent.messageId}`);
         return { messageIds: [sent.messageId] };
       },
@@ -353,6 +358,8 @@ export default defineChannelPluginEntry({
         }
         const trusted = account.threadTrust === "trusted" || (account.threadTrust === "ask" && args.trusted === true);
         const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");
+        // A thread's first message is a delivery like any other: the silence marker opens nothing.
+        if (isSilent(args.body)) throw new Error("Nothing was sent: the message is the NO_REPLY silence marker.");
         const chat = await requestDelivery<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
           body: args.body, trusted, idempotency_key: idempotencyKey,
@@ -396,6 +403,7 @@ export default defineChannelPluginEntry({
       async execute(_id, args: { chat_uid: string; text: string }) {
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
+        if (isSilent(args.text)) throw new Error("Nothing was sent: the text is the NO_REPLY silence marker.");
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         await ownerDmTurn(ownerAccount, context);
         const destination = ownerAccount;
@@ -456,13 +464,15 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
+        // Checked before the footer is added: after it, the marker no longer ends the text.
+        if (isSilent(args.body)) return refuse("Nothing was sent: the body is the NO_REPLY silence marker.");
         // Every mail carries a footer saying who wrote it, with the body trimmed for durable delivery.
         const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         const body = `${args.body.trim()}\n\n${emailFooter(persona, owner?.type === "member" ? owner.display_name : undefined)}`;
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);
-          if (args.to === turn.chat.uid) await requestDelivery(mailbox, `/chats/${args.to}/messages`, { body });
+          if (args.to === turn.chat.uid) await postMessage(mailbox, args.to, body);
           else {
             // From another conversation, a durable send also records the reply in the thread's session.
             const { kind, route, routeTo } = sessionRoute(cfg, mailbox, chat);

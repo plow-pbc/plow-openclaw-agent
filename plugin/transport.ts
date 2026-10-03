@@ -412,10 +412,10 @@ export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path
 // (2026-10-02), one of them after the person asked twice to stop. The token ending the text is the
 // model choosing silence, so nothing is posted. Heartbeat sends say so, which lets the server tell
 // them apart from any other message instead of guessing from the text.
-const SILENT = /\bNO_REPLY\s*$/;
+export const isSilent = (text: string) => /\bNO_REPLY\s*$/.test(text);
 
 export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
-  if (!attachmentUids.length && SILENT.test(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
+  if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const sent = await requestDelivery<{ uid: string }>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
     "POST", kind ? { "Plow-Message-Kind": kind } : undefined);
   return { channel: "plow" as const, messageId: sent.uid };
