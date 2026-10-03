@@ -1,5 +1,3 @@
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
@@ -8,7 +6,9 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, pluginHandoff, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { conversationUid, ownerDmTurn, startThread } from "./threads.ts";
+export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
@@ -23,20 +23,6 @@ const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply."
 function normalizedHandle(handle: string): string {
   const compact = handle.trim().replace(/[\s().-]/g, "");
   return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
-}
-
-type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
-function conversationUid(context: Requester): string | undefined {
-  // Collected follow-ups retain their delivery route without a native conversation id.
-  return (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
-}
-async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat: Chat }> {
-  const chatUid = conversationUid(context);
-  if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow" || !context.senderIsOwner
-    || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
-  const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
-  if (findOwnerChat(account, [chat]) !== chat) throw new Error("This action requires the owner's main Plow DM.");
-  return { chat };
 }
 
 async function requestDelivery<T>(account: Account, path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
@@ -76,21 +62,22 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
 
 
 // The session a conversation's turns run in, so a send into it from elsewhere is mirrored there.
-function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
+function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat, channelRuntime = runtime) {
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
   const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
   const peerId = account.accountId === "email" || kind === "group" ? chat.uid
     : findOwnerChat(account, [chat]) === chat ? "plow-owner"
     : peer?.type === "member" ? chat.uid : peer?.line.uid;
   if (!peerId) throw new Error("Plow conversation has no peer");
-  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer: { kind, id: peerId } });
+  const route = channelRuntime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer: { kind, id: peerId } });
   return { kind, route, routeTo: peerId === "plow-owner" ? peerId : chat.uid } as const;
 }
 
 // With sessionText, an existing session the send lands in records that text instead of what people saw.
-async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", sessionText?: string) {
-  await runtime.channel.session.updateLastRoute({
-    storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", options: { sessionText?: string; channelRuntime?: PluginRuntime } = {}) {
+  const { sessionText, channelRuntime = runtime } = options;
+  await channelRuntime.channel.session.updateLastRoute({
+    storePath: channelRuntime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
   const sessionId = sessionText ? getSessionEntry({ agentId: route.agentId, sessionKey: route.sessionKey })?.sessionId : undefined;
@@ -106,6 +93,18 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
   if (result.status !== "sent") throw new DeliveryUnknownError();
   if (sessionId) await appendAssistantMirrorMessageByIdentity({ ...route, sessionId, text: sessionText, config: cfg });
   return result.results[0].messageId;
+}
+
+// Image-installed plugins use the same channel, session mirror and durable
+// delivery path as native Plow tools. Authorization belongs to their workflow.
+export async function sendText(cfg: OpenClawConfig, to: string, text: string, channelRuntime: PluginRuntime): Promise<{ messageId: string }> {
+  const account = plugin.config.resolveAccount(cfg, "chat");
+  const chat = await request<Chat>(account, `/chats/${encodeURIComponent(to)}`);
+  if (!accepts(account, chat)) throw new Error("Plow account does not serve this conversation");
+  const { kind, route, routeTo } = sessionRoute(cfg, account, chat, channelRuntime);
+  const messageId = await durableSend(cfg, route, "chat", chat.uid, routeTo, text, kind, { channelRuntime });
+  if (!messageId) throw new DeliveryUnknownError();
+  return { messageId };
 }
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
@@ -186,98 +185,101 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     silentRuns.delete(activeRunId);
     activeRunId = undefined;
   };
-  const dispatched = runtime.channel.inbound.dispatch({
-    cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
-    dispatcherOptions: replyPipeline,
-    replyOptions: {
-      turnAdoptionLifecycle: ingress,
-      onModelSelected,
-      onAgentRunStart: runId => {
-        finishRun();
-        silent = suppressFinal = false;
-        activeRunId = runId;
-        silentRuns.set(runId, false);
-        log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
+  const handoff = pluginHandoff(account.lineUid, chat.uid, message.uid);
+  try {
+    const dispatched = runtime.channel.inbound.dispatch({
+      cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
+      dispatcherOptions: replyPipeline,
+      replyOptions: {
+        turnAdoptionLifecycle: ingress,
+        onModelSelected,
+        onAgentRunStart: runId => {
+          finishRun();
+          silent = suppressFinal = false;
+          activeRunId = runId;
+          silentRuns.set(runId, false);
+          log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
+        },
+        // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
+        ...(guestTools?.length === 0 ? { disableTools: true } : {}),
+        sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
+        onObservedReplyDelivery: () => { observedReplyDelivery = true; },
+        onAgentRunTerminalOutcome: outcome => {
+          finishRun();
+          if (outcome === "failed") failure = new Error("Agent turn failed");
+        },
       },
-      // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
-      ...(guestTools?.length === 0 ? { disableTools: true } : {}),
-      sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
-      onObservedReplyDelivery: () => { observedReplyDelivery = true; },
-      onAgentRunTerminalOutcome: outcome => {
-        finishRun();
-        if (outcome === "failed") failure = new Error("Agent turn failed");
-      },
-    },
-    delivery: {
-      durable: email ? false : { to: chat.uid, replyToId: null },
-      observeMessageSent: true,
-      preparePayload: (payload, info) => {
-        if (activeRunId !== undefined) suppressFinal = silentRuns.get(activeRunId) === true;
-        if (suppressFinal && info.kind === "final") return null;
-        if (payload.isFallbackNotice) { silent ||= email; return null; }
-        if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
-        if (!email && observedReplyDelivery && info.kind === "final") return null;
-        // Plow sends unquoted replies; implicit quote targets would bypass durable delivery.
-        return email ? payload : { ...payload, replyToId: undefined, replyToCurrent: false };
-      },
-      deliver: async payload => {
-        if (email) {
-          // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
-          const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").replace(/\n{3,}/g, "\n\n").trim();
-          // Only the no-reply fallback is silence; an error notice is a real failure and reaches the owner.
-          if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
-            log(`silent chat=${chat.uid} message=${message.uid}`);
-            silent = true;
-            return { messageIds: [] };
+      delivery: {
+        durable: email ? false : { to: chat.uid, replyToId: null },
+        observeMessageSent: true,
+        preparePayload: (payload, info) => {
+          if (activeRunId !== undefined) suppressFinal = silentRuns.get(activeRunId) === true;
+          if (suppressFinal && info.kind === "final") return null;
+          if (payload.isFallbackNotice) { silent ||= email; return null; }
+          if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
+          if (!email && observedReplyDelivery && info.kind === "final") return null;
+          // Plow sends unquoted replies; implicit quote targets would bypass durable delivery.
+          return email ? payload : { ...payload, replyToId: undefined, replyToCurrent: false };
+        },
+        deliver: async payload => {
+          if (email) {
+            // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
+            const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").replace(/\n{3,}/g, "\n\n").trim();
+            // Only the no-reply fallback is silence; an error notice is a real failure and reaches the owner.
+            if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
+              log(`silent chat=${chat.uid} message=${message.uid}`);
+              silent = true;
+              return { messageIds: [] };
+            }
+            // A recorded origin still gets the final only while it is the owner's DM or a trusted group.
+            // An origin this agent can no longer read is a lost origin: the 1:1 gets the final.
+            const resolveTarget = async () => {
+              const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`).catch(error => {
+                if (error instanceof HttpError && [403, 404].includes(error.status)) return undefined;
+                throw error;
+              }) : undefined;
+              return recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
+                // Read fresh: a cached roster can be stale, and a failed read is not proof there is no 1:1.
+                : findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
+            };
+            // Nothing has been sent yet, so a failed lookup is safe to retry; the email listener has no replay.
+            let target: Chat | undefined;
+            for (let attempt = 1; ; attempt++) {
+              try { target = await resolveTarget(); break; }
+              catch (error) { if (attempt === 3) throw error; await delay(500); }
+            }
+            deliveredToOwner = true;
+            if (!target) {
+              log(`dropped final chat=${chat.uid} message=${message.uid}: nowhere to deliver`);
+              return { messageIds: [] };
+            }
+            // Durable, so the final is also recorded in the session of the chat it lands in.
+            const { kind, route, routeTo } = sessionRoute(cfg, phone, target);
+            const label = emailLabel(chat, sender);
+            // People see no chat ids; that chat's session copy keeps the thread's, to reply there.
+            const sent = await durableSend(cfg, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind,
+              `${label} (thread ${chat.uid}):\n${text}`);
+            log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
+            return { messageIds: [sent] };
           }
-          // A recorded origin still gets the final only while it is the owner's DM or a trusted group.
-          // An origin this agent can no longer read is a lost origin: the 1:1 gets the final.
-          const resolveTarget = async () => {
-            const recorded = origin ? await request<Chat>(phone, `/chats/${origin}`).catch(error => {
-              if (error instanceof HttpError && [403, 404].includes(error.status)) return undefined;
-              throw error;
-            }) : undefined;
-            return recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
-              // Read fresh: a cached roster can be stale, and a failed read is not proof there is no 1:1.
-              : findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
-          };
-          // Nothing has been sent yet, so a failed lookup is safe to retry; the email listener has no replay.
-          let target: Chat | undefined;
-          for (let attempt = 1; ; attempt++) {
-            try { target = await resolveTarget(); break; }
-            catch (error) { if (attempt === 3) throw error; await delay(500); }
-          }
-          deliveredToOwner = true;
-          if (!target) {
-            log(`dropped final chat=${chat.uid} message=${message.uid}: nowhere to deliver`);
-            return { messageIds: [] };
-          }
-          // Durable, so the final is also recorded in the session of the chat it lands in.
-          const { kind, route, routeTo } = sessionRoute(cfg, phone, target);
-          const label = emailLabel(chat, sender);
-          // People see no chat ids; that chat's session copy keeps the thread's, to reply there.
-          const sent = await durableSend(cfg, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind,
-            `${label} (thread ${chat.uid}):\n${text}`);
-          log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
-          return { messageIds: [sent] };
-        }
-        const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
-        log(`delivered chat=${chat.uid} message=${sent.messageId}`);
-        return { messageIds: [sent.messageId] };
+          const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
+          log(`delivered chat=${chat.uid} message=${sent.messageId}`);
+          return { messageIds: [sent.messageId] };
+        },
+        onError: error => { failure = error; },
       },
-      onError: error => { failure = error; },
-    },
-  });
-  ingress.onSubmitted();
-  const result = await dispatched.finally(finishRun);
-  if (failure && !silent) throw failure;
-  if (!result.dispatched) throw new Error("Turn was not dispatched");
-  const dispatchResult = result.dispatchResult;
-  if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
-  const outcome = dispatchResult.deferredToActiveRun ? "deferred" : deliveredToOwner || silent || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
-    || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
-  log(`${outcome} chat=${chat.uid} message=${message.uid}`);
-  return outcome;
+    });
+    ingress.onSubmitted();
+    const result = await dispatched.finally(finishRun);
+    if (failure && !silent) throw failure;
+    if (!result.dispatched) throw new Error("Turn was not dispatched");
+    const dispatchResult = result.dispatchResult;
+    if (dispatchResult.deferredToActiveRun) log(`deferred chat=${chat.uid} message=${message.uid} mode=${dispatchResult.deferredToActiveRun}`);
+    const outcome = dispatchResult.deferredToActiveRun ? "deferred" : handoff.confirmed || deliveredToOwner || silent || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
+      || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
+    log(`${outcome} chat=${chat.uid} message=${message.uid}`);
+    return outcome;
+  } finally { handoff.close(); }
 }
 
 const plugin: ChannelPlugin<Account> = {
@@ -340,24 +342,8 @@ export default defineChannelPluginEntry({
           isError: true, content: [{ type: "text", text: "Plow configuration is unavailable." }], details: {},
         };
         const account = plugin.config.resolveAccount(context.config, "chat");
-        const turn = await ownerDmTurn(account, context);
-        const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
-        if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
-        const members = [...new Set([owner.provider_key, ...args.members].map(normalizedHandle))].sort();
-        if (account.threadTrust !== "ask" && account.threadTrust !== "trusted" && account.threadTrust !== "untrusted") {
-          throw new Error("Plow group trust mode is unavailable.");
-        }
-        if (account.threadTrust === "ask" && typeof args.trusted !== "boolean") {
-          throw new Error("Starting a group requires an explicit trust choice.");
-        }
-        const trusted = account.threadTrust === "trusted" || (account.threadTrust === "ask" && args.trusted === true);
-        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");
-        const chat = await requestDelivery<{ uid: string }>(account, "/chats", {
-          line_uid: account.lineUid, members,
-          body: args.body, trusted, idempotency_key: idempotencyKey,
-        });
-        api.logger.info(`plow started thread chat=${chat.uid}`);
-        const result = { chat_uid: chat.uid, message_sent: true };
+        const result = await startThread(account, context, _id, args);
+        api.logger.info(`plow started thread chat=${result.chat_uid}`);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
     }));

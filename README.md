@@ -299,3 +299,22 @@ When bumping the base image:
 - Live-check a tool returning `details: { silent: true }` on the local stack:
   its run must send no automatic final reply, explicit tool sends must still
   arrive, and the next ordinary turn must reply normally.
+
+## Image-installed extensions
+
+An agent image can add a root-owned `/opt/plow/agent.json` array containing
+`id`, absolute `/opt/` plugin `path`, `tools` and `conversationAccess`. Boot
+loads these native plugins and enables only the declared conversation hooks.
+Fresh installations seed their entries; restarts preserve owner disablement
+and model settings. Images without this file keep the existing boot behavior.
+
+Workflow plugins can import `startThread` from `plugin/dist/threads.js` and
+`sendText` from `plugin/dist/index.js`. These use the native owner-DM gate,
+configured group trust, stable thread idempotency and durable channel delivery.
+Supplied phone or iMessage email recipients need no Contacts lookup.
+
+A `before_dispatch` handler that journals an inbound message for its own
+recovery must call `acknowledgePluginHandoff(line, chat, message)` after the
+durable write. It acknowledges only that active native turn. Otherwise the
+message remains eligible for replay. This declaration acknowledges ownership
+of processing; it does not claim that a calendar action or send succeeded.
