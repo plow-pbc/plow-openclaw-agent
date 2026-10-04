@@ -289,3 +289,10 @@ group or peer sessions. Shared files and tools are not privacy boundaries.
 ## Development
 
 See [development checks and pinned source contracts](docs/development.md).
+
+When bumping the base image:
+
+- Run the in-image checks and offline gateway probe.
+- Live-check a tool returning `details: { silent: true }` on the local stack:
+  its run must send no automatic final reply, explicit tool sends must still
+  arrive, and the next ordinary turn must reply normally.

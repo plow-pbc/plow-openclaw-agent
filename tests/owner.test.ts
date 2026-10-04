@@ -50,7 +50,7 @@ for (const { kind, role, trusted, body, guestTools } of [
   let replyMode: string | undefined;
   let context: { access?: { toolPolicy?: { allow?: string[]; deny?: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
-  entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
+  entry.register({ registrationMode: "full", on() {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
       routing: { resolveAgentRoute: ({ peer }: { peer: Peer }) => { routingPeer = peer; return { sessionKey: "unchanged" }; } },
@@ -123,7 +123,7 @@ test("one member keeps their normalized handle across chat seats", async t => {
   });
   const contexts: { messageId: string; sender: { id: string; name: string }; conversation: { id: string } }[] = [];
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
-  entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
+  entry.register({ registrationMode: "full", on() {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
       routing: { resolveAgentRoute: ({ peer }: { peer: { id: string } }) => ({ sessionKey: peer.id }) },

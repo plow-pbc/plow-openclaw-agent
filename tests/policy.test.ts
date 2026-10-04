@@ -29,6 +29,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
   assert.ok(!hooks.includes("before_tool_call"));
+  assert.equal(hooks.filter(name => name === "after_tool_call").length, 1);
 });
 
 test("start-thread refuses outside an active main Plow DM without a request", async t => {
@@ -95,7 +96,7 @@ test("native targets preserve opaque UID case and reject names and non-chat IDs"
 
 test("heartbeat owner discovery identifies only the sentinel as a direct destination", () => {
   let channel: { messaging: { inferTargetChatType?: (params: { to: string }) => string | undefined } };
-  entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} },
+  entry.register({ registrationMode: "full", on() {}, runtime: {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
   assert.equal(channel!.messaging.inferTargetChatType?.({ to: "plow-owner" }), "direct");
   assert.equal(channel!.messaging.inferTargetChatType?.({ to: "cht_unknown" }), undefined);

@@ -6,9 +6,10 @@ import { websocketFixture } from "./ws-fixture.ts";
 const { t: createEmptyPluginRegistry } = await import("/app/dist/registry-empty--vb91VWS.mjs");
 const { w: setActivePluginRegistry, r: clearActivePluginRegistry } = await import("/app/dist/runtime-B0mfNCRA.mjs");
 const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-CJZlG1Ii.mjs");
-const { i: emitAgentEvent, f: onAgentEvent } = await import("/app/dist/agent-events-BOSJcayE.mjs");
+const { t: createHookRunner } = await import("/app/dist/hooks-CKanWLsK.mjs");
+const { default: discoveryEntry } = await import("../plugin/index.ts?discovery");
 
-test("a tool can silence its run's final without silencing explicit sends, overlapping runs, or the next turn", async t => {
+for (const runIdSource of ["event", "context"]) test(`a tool can silence its run's final via ${runIdSource} without silencing explicit sends, overlapping runs, or the next turn`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(20_000);
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -17,6 +18,7 @@ test("a tool can silence its run's final without silencing explicit sends, overl
     { ...sender, uid: "guest", role: "member", provider_key: "+15550000002" }, { type: "agent", relationship: "self", line: { uid: "line" } }] }]));
   const cfg = { channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const registry = createEmptyPluginRegistry();
+  const hooks = createHookRunner(registry, { catchErrors: false });
   t.after(() => clearActivePluginRegistry());
   const posts: { chat: string; text: string }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
@@ -34,17 +36,14 @@ test("a tool can silence its run's final without silencing explicit sends, overl
   server.on("connection", socket => socket.send(frame("one", "silent")));
   const otherFinished = Promise.withResolvers<void>();
   t.after(() => otherFinished.resolve());
-  let subscriptions = 0;
+  let immediateFinal: unknown;
   let channel: { outbound: { sendText: (ctx: object) => Promise<unknown> }; gateway: { startAccount: (ctx: object) => Promise<void> } };
   const logs: string[] = [];
-  entry.register({ registrationMode: "full", logger: { info() {} }, on() {}, registerTool() {},
+  const api = { registrationMode: "full", logger: { info() {} }, registerTool() {},
+    on(hookName: string, handler: (...args: any[]) => unknown) { registry.typedHooks.push({ pluginId: "plow", hookName, handler, source: "fixture" }); },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; registry.channels.push({ pluginId: "plow", plugin: channel, source: "fixture" }); setActivePluginRegistry(registry); },
     runtime: {
-      events: { onAgentEvent(listener: (event: unknown) => void) {
-        subscriptions++;
-        const unsubscribe = onAgentEvent(listener);
-        return () => { subscriptions--; unsubscribe(); };
-      } },
+      events: { onAgentEvent: () => () => {} },
       channel: {
         routing: { resolveAgentRoute: ({ peer }: { peer: { id: string } }) => ({ agentId: "main", sessionKey: `agent:main:plow:group:${peer.id}` }) },
         inbound: {
@@ -58,25 +57,29 @@ test("a tool can silence its run's final without silencing explicit sends, overl
             dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions, replyOptions }: any) => {
               const runId = dispatch.ctxPayload.MessageSid;
               replyOptions.onAgentRunStart(runId);
-              const result = (id: string, value: unknown, phase = "result", stream = "tool") => emitAgentEvent({
-                runId: id, stream, data: { phase, name: "variant_handoff", toolCallId: `call-${id}`, result: value },
-              });
+              const result = (id: string | undefined, value: unknown, contextRunId = id) => hooks.runAfterToolCall({
+                toolName: "variant_handoff", params: {}, toolCallId: `call-${id}`, result: value,
+                ...(runIdSource === "event" ? { runId: id } : {}),
+              }, { toolName: "variant_handoff", runId: contextRunId });
               if (runId === "silent") {
-                result(runId, { content: [{ type: "text", text: "handoff" }], details: { silent: true } });
+                const pending = result(runId, { content: [{ type: "text", text: "handoff" }], details: { silent: true } });
+                // The runner is fire-and-forget: final preparation can start before it is awaited.
+                if (runIdSource === "context") immediateFinal = dispatch.delivery.preparePayload({ text: "immediate final" }, { kind: "final" });
+                await pending;
                 // A later ordinary tool result must not revoke the run's silence.
-                result(runId, { details: { silent: false } });
+                await result(runId, { details: { silent: false } });
                 await channel.outbound.sendText({ cfg, accountId: "chat", to: "one", text: "explicit tool send" });
                 sendFrame("two", "overlapping");
                 await otherFinished.promise;
               } else {
-                result("silent", { details: { silent: true } });
+                await result("silent", { details: { silent: true } }, runIdSource === "event" ? runId : "silent");
+                await result(undefined, { details: { silent: true } });
                 for (const value of [undefined, { silent: true }, { details: { silent: "true" } },
-                  { content: [{ type: "text", text: '{"silent":true}' }] }, { details: { silent: false } }]) result(runId, value);
-                result(runId, { details: { silent: true } }, "update");
-                result(runId, { details: { silent: true } }, "result", "assistant");
+                  { content: [{ type: "text", text: '{"silent":true}' }] }, { details: { silent: false } }]) await result(runId, value);
               }
-              replyOptions.onAgentRunTerminalOutcome("completed");
+              if (runIdSource === "event") replyOptions.onAgentRunTerminalOutcome("completed");
               await dispatcherOptions.deliver({ text: `final ${runId}` }, { kind: "final" });
+              if (runIdSource === "context") replyOptions.onAgentRunTerminalOutcome("completed");
               if (runId === "overlapping") otherFinished.resolve();
               return { counts: { final: 1 }, queuedFinal: true };
             },
@@ -84,17 +87,24 @@ test("a tool can silence its run's final without silencing explicit sends, overl
         },
       },
     },
-  });
+  };
+  entry.register(api);
+  if (runIdSource === "context") {
+    // The live gateway can dispatch hooks through a separately loaded discovery registry.
+    registry.typedHooks.length = 0;
+    discoveryEntry.register({ ...api, registrationMode: "discovery", registerChannel() {} });
+  }
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(text: string) {
     logs.push(text);
     if (text === "completed chat=one message=silent") sendFrame("one", "next");
     if (text === "completed chat=one message=next") controller.abort();
   } } });
+  if (runIdSource === "context") assert.equal(immediateFinal, null, "the hook must suppress the final synchronously");
   assert.deepEqual(posts, [
     { chat: "one", text: "explicit tool send" },
     { chat: "two", text: "final overlapping" },
     { chat: "one", text: "final next" },
   ], logs.join("\n"));
   assert.ok(logs.includes("completed chat=one message=silent"), logs.join("\n"));
-  assert.equal(subscriptions, 0);
+  assert.equal(registry.typedHooks.filter((hook: any) => hook.hookName === "after_tool_call").length, 1);
 });

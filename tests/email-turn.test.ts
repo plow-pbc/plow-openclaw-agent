@@ -253,7 +253,7 @@ test("collected email tools use the host route and retain owner authority", asyn
   });
   for (const senderIsOwner of [true, false]) {
     let tool: Tool;
-    toolEntry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+    toolEntry.register({ registrationMode: "full", on() {}, logger: { info() {} }, runtime: {}, registerChannel() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
           requesterSenderId: senderIsOwner ? "plow-owner" : "+15550000002", senderIsOwner,

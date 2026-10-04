@@ -13,6 +13,10 @@ import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextua
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
+// Channel and discovery registries can load separate copies of this module.
+const silenceKey = Symbol.for("plow.run-tool-silence");
+const globalState = globalThis as typeof globalThis & { [silenceKey]?: Map<string, boolean> };
+const silentRuns = globalState[silenceKey] ??= new Map<string, boolean>();
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
@@ -177,8 +181,14 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   let deliveredToOwner = false;
   let silent = false;
   let suppressFinal = false;
-  let unsubscribe: (() => void) | undefined;
-  const stopObserving = () => { unsubscribe?.(); unsubscribe = undefined; };
+  let activeRunId: string | undefined;
+  const finishRun = () => {
+    if (activeRunId === undefined) return;
+    suppressFinal ||= silentRuns.get(activeRunId) === true;
+    silent ||= suppressFinal;
+    silentRuns.delete(activeRunId);
+    activeRunId = undefined;
+  };
   const dispatched = runtime.channel.inbound.dispatch({
     cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
     dispatcherOptions: replyPipeline,
@@ -186,13 +196,10 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       turnAdoptionLifecycle: ingress,
       onModelSelected,
       onAgentRunStart: runId => {
-        stopObserving();
+        finishRun();
         silent = suppressFinal = false;
-        unsubscribe = runtime.events.onAgentEvent(event => {
-          if (event.runId !== runId || event.stream !== "tool" || event.data.phase !== "result") return;
-          const result = event.data.result as { details?: { silent?: unknown } } | undefined;
-          if (result?.details?.silent === true) silent = suppressFinal = true;
-        });
+        activeRunId = runId;
+        silentRuns.set(runId, false);
         log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
       },
       // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
@@ -200,7 +207,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
       onObservedReplyDelivery: () => { observedReplyDelivery = true; },
       onAgentRunTerminalOutcome: outcome => {
-        stopObserving();
+        finishRun();
         if (outcome === "failed") failure = new Error("Agent turn failed");
       },
     },
@@ -208,6 +215,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       durable: email ? false : { to: chat.uid, replyToId: null },
       observeMessageSent: true,
       preparePayload: (payload, info) => {
+        if (activeRunId !== undefined && silentRuns.get(activeRunId)) silent = suppressFinal = true;
         if (suppressFinal && info.kind === "final") return null;
         if (payload.isFallbackNotice) { silent ||= email; return null; }
         if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
@@ -264,7 +272,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     },
   });
   ingress.onSubmitted();
-  const result = await dispatched.finally(stopObserving);
+  const result = await dispatched.finally(finishRun);
   if (failure && !silent) throw failure;
   if (!result.dispatched) throw new Error("Turn was not dispatched");
   const dispatchResult = result.dispatchResult;
@@ -358,6 +366,11 @@ export default defineChannelPluginEntry({
     if (api.registrationMode === "full") api.logger.info("plow channel registered");
   },
   registerCapabilities(api) {
+    api.on("after_tool_call", (event, ctx) => {
+      // Set this before any await: the hook runner does not wait before final delivery.
+      const runId = event.runId ?? ctx.runId;
+      if (runId !== undefined && silentRuns.has(runId) && (event.result as any)?.details?.silent === true) silentRuns.set(runId, true);
+    });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
       description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email.",
