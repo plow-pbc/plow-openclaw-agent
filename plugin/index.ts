@@ -176,23 +176,39 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   // An email turn completes by delivering its final to the owner, or by choosing silence.
   let deliveredToOwner = false;
   let silent = false;
+  let suppressFinal = false;
+  let unsubscribe: (() => void) | undefined;
+  const stopObserving = () => { unsubscribe?.(); unsubscribe = undefined; };
   const dispatched = runtime.channel.inbound.dispatch({
     cfg, channel: "plow", accountId: account.accountId, route, ctxPayload,
     dispatcherOptions: replyPipeline,
     replyOptions: {
       turnAdoptionLifecycle: ingress,
       onModelSelected,
-      onAgentRunStart: runId => log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`),
+      onAgentRunStart: runId => {
+        stopObserving();
+        silent = suppressFinal = false;
+        unsubscribe = runtime.events.onAgentEvent(event => {
+          if (event.runId !== runId || event.stream !== "tool" || event.data.phase !== "result") return;
+          const result = event.data.result as { details?: { silent?: unknown } } | undefined;
+          if (result?.details?.silent === true) silent = suppressFinal = true;
+        });
+        log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
+      },
       // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
       ...(guestTools?.length === 0 ? { disableTools: true } : {}),
       sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
       onObservedReplyDelivery: () => { observedReplyDelivery = true; },
-      onAgentRunTerminalOutcome: outcome => { if (outcome === "failed") failure = new Error("Agent turn failed"); },
+      onAgentRunTerminalOutcome: outcome => {
+        stopObserving();
+        if (outcome === "failed") failure = new Error("Agent turn failed");
+      },
     },
     delivery: {
       durable: email ? false : { to: chat.uid, replyToId: null },
       observeMessageSent: true,
       preparePayload: (payload, info) => {
+        if (suppressFinal && info.kind === "final") return null;
         if (payload.isFallbackNotice) { silent ||= email; return null; }
         if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
         if (!email && observedReplyDelivery && info.kind === "final") return null;
@@ -248,7 +264,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     },
   });
   ingress.onSubmitted();
-  const result = await dispatched;
+  const result = await dispatched.finally(stopObserving);
   if (failure && !silent) throw failure;
   if (!result.dispatched) throw new Error("Turn was not dispatched");
   const dispatchResult = result.dispatchResult;

@@ -213,6 +213,10 @@ tool policy; an empty list disables tools. Unregistered names grant no tools.
 Owner turns, trusted chats, and email policy are unchanged. Guest tools should
 use the runtime tool context for sender and chat identity, never model arguments.
 
+A variant tool can return `details: { silent: true }` to suppress that run's
+final Plow reply. Only boolean `true` in a tool result activates this signal;
+text content does not. Explicit tool sends and other runs are unaffected.
+
 To ask the owner privately from a group, a variant plugin tool can use
 `sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound` with
 `channel: "plow"`, `accountId: "chat"`, `to: "plow-owner"` and
