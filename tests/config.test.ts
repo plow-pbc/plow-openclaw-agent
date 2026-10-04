@@ -76,16 +76,21 @@ test("GLM falls back to Sonnet on the Plow provider with explicit capacity and p
   });
   assert.deepEqual(config.models.providers.plow.models, [{
     id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, maxTokens: 16384,
+    compat: { maxTokensField: "max_tokens" },
     cost: { input: 0.5544, output: 1.7424 },
   }, {
     id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", input: ["text", "image"], contextWindow: 1000000, maxTokens: 16384,
+    compat: { maxTokensField: "max_tokens" },
     cost: { input: 2.00, output: 10.00 },
   }]);
 });
 
-test("every Plow model caps its output and a run cannot hold its chat past ten minutes", () => {
+test("every Plow model caps its output in the field Plow forwards, and a run cannot hold its chat past ten minutes", () => {
   const config = renderConfig(identity, "http://api:8000");
-  for (const model of config.models.providers.plow.models) assert.ok(model.maxTokens > 0, `${model.id} has no maxTokens`);
+  for (const model of config.models.providers.plow.models) {
+    assert.ok(model.maxTokens > 0, `${model.id} has no maxTokens`);
+    assert.equal(model.compat.maxTokensField, "max_tokens", `${model.id} sends a cap Plow drops`);
+  }
   assert.equal(config.agents.defaults.timeoutSeconds, 600);
 });
 

@@ -35,10 +35,11 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       baseUrl: `${apiBase}/v1`, apiKey: "${PLOW_AGENT_TOKEN}", api: "openai-completions", authHeader: true,
       request: { allowPrivateNetwork: true },
       // OpenClaw's idle timeout resets on every streamed token, so only an
-      // output cap ends a model stuck in a loop.
+      // output cap ends a model stuck in a loop. Plow forwards max_tokens, not
+      // OpenClaw's default max_completion_tokens.
       models: [
-        { id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, maxTokens: 16384, cost: { input: 0.5544, output: 1.7424 } },
-        { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", input: ["text", "image"], contextWindow: 1000000, maxTokens: 16384, cost: { input: 2.00, output: 10.00 } },
+        { id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, maxTokens: 16384, compat: { maxTokensField: "max_tokens" }, cost: { input: 0.5544, output: 1.7424 } },
+        { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", input: ["text", "image"], contextWindow: 1000000, maxTokens: 16384, compat: { maxTokensField: "max_tokens" }, cost: { input: 2.00, output: 10.00 } },
       ],
     } } },
     agents: { entries: { main: { identity: { name } } }, defaults: {
