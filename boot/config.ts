@@ -47,6 +47,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
       // A phone turn, not OpenClaw's 48-hour default: a stuck run blocks its chat.
       timeoutSeconds: 600,
+      silentReply: { group: "allow" },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
       // Model params must not become a legacy model-selection allowlist.
       modelPolicy: {},
