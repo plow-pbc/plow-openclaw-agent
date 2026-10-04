@@ -102,3 +102,25 @@ for (const toolName of ["plow_start_thread", "message"]) {
     }
   });
 }
+
+test("an iMessage email can start a new untrusted group without a Contacts lookup", async t => {
+  const { startThread } = await import("../plugin/threads.ts");
+  process.env.PLOW_AGENT_TOKEN = "test-token";
+  const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "untrusted" as const };
+  const home = { uid: "home", status: "active", trusted: true, participants: [
+    { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" },
+    { type: "agent", relationship: "self", line: { uid: "line" } },
+  ] };
+  const posts: { members: string[]; trusted: boolean; idempotency_key: string }[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
+    if (options.method === "POST") { posts.push(JSON.parse(options.body as string)); return Response.json({ uid: "group" }); }
+    return Response.json(home);
+  });
+  const context = { sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home", requesterSenderId: "plow-owner", senderIsOwner: true };
+  await startThread(account, context, "stable-call", { members: ["Taylor@example.test"], body: "Meet Friday?", trusted: true });
+  await startThread(account, context, "stable-call", { members: ["taylor@example.test"], body: "Meet Friday?" });
+  assert.deepEqual(posts[0]?.members, ["+15550000001", "taylor@example.test"]);
+  assert.equal(posts[0]?.trusted, false);
+  assert.equal(posts[0]?.idempotency_key, posts[1]?.idempotency_key);
+  await assert.rejects(startThread(account, { ...context, senderIsOwner: false }, "guest", { members: ["taylor@example.test"], body: "Meet?" }), /owner/);
+});

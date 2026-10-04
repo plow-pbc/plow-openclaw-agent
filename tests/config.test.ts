@@ -21,6 +21,17 @@ async function configFixture(t: TestContext) {
   return { path: join(dir, "openclaw.json"), includes: join(dir, "includes") };
 }
 
+test("fresh groups allow intentional model silence while existing owner policy survives restart", async t => {
+  const fixture = await configFixture(t), rendered = renderConfig(identity, "http://fixture");
+  await syncConfig(rendered, fixture.path, fixture.includes);
+  const fresh = JSON5.parse(await readFile(fixture.path, "utf8"));
+  assert.deepEqual(fresh.agents.defaults.silentReply, { group: "allow" });
+  fresh.agents.defaults.silentReply = { group: "disallow" };
+  await writeFile(fixture.path, JSON.stringify(fresh));
+  await syncConfig(rendered, fixture.path, fixture.includes);
+  assert.deepEqual(JSON5.parse(await readFile(fixture.path, "utf8")).agents.defaults.silentReply, { group: "disallow" });
+});
+
 test("only the owner's phone DM becomes main; other peers and groups stay isolated", () => {
   const config = renderConfig(identity, "http://api:8000");
   assert.ok(!("ownerChatUid" in config.channels.plow));

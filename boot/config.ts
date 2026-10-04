@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import JSON5 from "json5";
+import type { AgentExtension } from "./extensions.js";
 
 export type Participant =
   | { type: "member"; uid: string; role: string }
@@ -13,7 +14,7 @@ export type Identity = {
   mcp_url?: string | null;
 };
 
-export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask") {
+export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask", extensions: AgentExtension[] = []) {
   if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
     throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
   }
@@ -41,13 +42,16 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     } } },
     agents: { entries: { main: { identity: { name } } }, defaults: {
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
+      silentReply: { group: "allow" },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
     } },
     mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
       url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
-    plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
+    plugins: { load: { paths: ["/opt/plow/plugin", ...extensions.map(value => value.path)] },
+      entries: { plow: { enabled: true }, ...Object.fromEntries(extensions.map(value => [value.id,
+        { enabled: true, hooks: { allowConversationAccess: value.conversationAccess } }])) } },
     messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
@@ -60,7 +64,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", ...guestTools], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
   };
 }
 
@@ -114,6 +118,14 @@ function isPlowOwnerBinding(value: unknown): boolean {
     && isObject(match.peer) && match.peer.kind === "direct" && match.peer.id === "plow-owner";
 }
 
+function seedExtensions(owner: ConfigObject, entries: ReturnType<typeof renderConfig>["plugins"]["entries"]): void {
+  const parent = parentAt(owner, ["plugins", "entries", "plow"], true);
+  if (!parent) return;
+  for (const [id, defaults] of Object.entries(entries)) {
+    if (id !== "plow" && parent[id] === undefined) parent[id] = defaults;
+  }
+}
+
 export async function syncConfig(
   rendered: ReturnType<typeof renderConfig>, configPath: string, includeDir: string,
 ): Promise<void> {
@@ -129,6 +141,7 @@ export async function syncConfig(
     owner = structuredClone(seed);
   }
 
+  seedExtensions(owner, rendered.plugins.entries);
   for (const [file, path] of ownedPaths) {
     const value = getPath(seed, path);
     const parent = parentAt(owner, path, value !== undefined);
