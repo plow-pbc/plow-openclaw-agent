@@ -214,6 +214,7 @@ test("a thread started from a trusted group reports its finals to that group, re
 for (const [name, response, expected] of [
   ["sent with no chat id", { status: "sent", chat_uid: null, chat_unrecorded_reason: "persistence_failed" }, { sent: true, chat_uid: null, chat_unrecorded_reason: "persistence_failed" }],
   ["delivery unknown", { status: "error", chat_uid: null, http: 503 }, { success: false, delivery_unknown: true }],
+  ["acceptance unknown", { status: "acceptance_unknown", chat_uid: null }, { success: false, delivery_unknown: true }],
 ] as const) test(`a new thread's receipt is never an invented chat id and is sent once: ${name}`, async t => {
   let receipt: Record<string, unknown> = {};
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {
