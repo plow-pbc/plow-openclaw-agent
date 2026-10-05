@@ -859,3 +859,81 @@ for (const listed of [false, true]) test(`empty and dot-segment chat IDs are rej
   assert.ok(!logs.some(text => text.startsWith("transport stopped")));
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
 });
+
+test("a guest's reply that arrived while disconnected, in a chat with no checkpoint yet, is delivered on reconnect", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  const guest = { type: "member", uid: "guest", role: "member", display_name: "Mary" };
+  const self = { type: "agent", relationship: "self", line: { uid: "line" } };
+  const owner = { type: "member", uid: "owner", role: "owner", display_name: "Sam" };
+  const started = { uid: "started", status: "active", participants: [owner, guest, self] };
+  const quiet = { uid: "quiet", status: "active", participants: [owner, guest, self] };
+  // Newest first, as the API returns them.
+  const history: Record<string, object[]> = {
+    started: [{ uid: "reply", body: "1", direction: "inbound", sender: guest, created_at: "2026-10-05T17:03:20Z" },
+      { uid: "vcard", body: "", direction: "outbound", sender: self, created_at: "2026-10-05T17:02:48Z" },
+      { uid: "intro", body: "Hi Mary", direction: "outbound", sender: self, created_at: "2026-10-05T17:02:08Z" }],
+    quiet: [{ uid: "old", body: "see you", direction: "inbound", sender: guest, created_at: "2026-09-01T10:00:00Z" }],
+  };
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("/chats")) return Response.json({ data: [started, quiet], has_more: false });
+    for (const chat of [started, quiet]) {
+      if (url.endsWith(`/chats/${chat.uid}`)) return Response.json(chat);
+      if (url.includes(`/chats/${chat.uid}/messages?`)) {
+        const rows = history[chat.uid]!;
+        const after = new URL(url).searchParams.get("starting_after");
+        const limit = Number(new URL(url).searchParams.get("limit"));
+        return Response.json({ data: (after ? rows.slice(rows.findIndex(m => (m as Message).uid === after) + 1) : rows).slice(0, limit), has_more: false });
+      }
+    }
+    return Response.json({ ticket: "ticket" });
+  });
+  // Listening since before the thread started; the outage came later.
+  await writeFile(`${root}/plow-listening-since`, "2026-10-05T16:27:31Z");
+  const turns: string[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (chat, message) => {
+    turns.push(`${chat.uid}/${message.uid}`);
+    controller.abort();
+    return "completed";
+  });
+  assert.deepEqual(turns, ["started/reply"]);
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/started`), "reply");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/quiet`), "old", "history from before the agent first listened stays unanswered");
+});
+
+test("a dropped socket reconnects while a turn is still running", { timeout: 55_000 }, async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter(50_000);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/chat`, JSON.stringify({ uid: "old", recent: [] }));
+  const chat = acceptedChat("chat");
+  let tickets = 0;
+  let running = false;
+  const release = Promise.withResolvers<void>();
+  controller.signal.addEventListener("abort", () => release.resolve());
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("/ws/ticket")) {
+      if (++tickets === 2) {
+        assert.equal(running, true, "reconnect must not wait for the turn");
+        controller.abort();
+      }
+      return Response.json({ ticket: "ticket" });
+    }
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
+      url.endsWith("/chats/chat") ? chat : { data: [], has_more: false });
+  });
+  server.once("connection", socket => socket.send(JSON.stringify({ event_type: "message_received", chat_id: chat.uid,
+    data: { message: inbound("slow") } })));
+  const turn = listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, _message, _first, _history, ingress) => {
+    running = true;
+    ingress.onSubmitted();
+    await ingress.onAdopted();
+    // The socket drops while the model is still retrying.
+    for (const socket of server.clients) socket.terminate();
+    await release.promise;
+    running = false;
+    return "completed";
+  });
+  await turn;
+  assert.equal(tickets, 2, "the socket reconnected before the turn finished");
+});

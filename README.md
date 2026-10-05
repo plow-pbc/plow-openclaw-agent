@@ -125,10 +125,13 @@ stop the chat account until the container restarts. A cached owner may be used
 from a truncated listing; uniqueness is checked only among discovered chats.
 Without a cached owner, the fallback lookup refuses truncated listings.
 The API currently returns complete listings.
-Socket drops reconnect with backoff; the plugin never re-reads identity.
+Socket drops reconnect with backoff, without waiting for running turns; the plugin never re-reads identity.
 
 Without a checkpoint, the earliest unanswered owner-DM message in the newest 50 is first contact,
-including texts sent before the plugin connects. Later unanswered texts are dispatched
+including texts sent before the plugin connects. In any other chat without a checkpoint,
+unanswered texts newer than the agent's first listen (`plow-listening-since`) are dispatched
+the same way, so a reply to a thread started during an outage is not lost; older history
+stays unanswered. Later unanswered texts are dispatched
 in history order; OpenClaw controls runs and collects pending messages.
 Chat checkpoints survive restarts. Chats omitted from a truncated listing
 recover on their first live frame. Optional history failures still dispatch the

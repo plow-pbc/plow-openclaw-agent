@@ -98,14 +98,15 @@ export async function recover(account: Account, chat: string, checkpoint: string
   return page.data.slice(0, boundary < 0 ? undefined : boundary + (checkpoint.startsWith("first:") ? 1 : 0)).reverse();
 }
 
-async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message, log: (text: string) => void): Promise<string> {
+// The oldest of the unanswered messages at the end of a chat that `unanswered` accepts.
+async function earliestUnanswered(account: Account, chat: string, newest: Message, unanswered: (message: Message) => boolean, log: (text: string) => void): Promise<string> {
   const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50`);
   let earliest = newest.uid;
   for (const message of page.data) {
-    if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
+    if (!unanswered(message)) return earliest;
     earliest = message.uid;
   }
-  if (page.has_more) log(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; owner backlog exceeds newest page`);
+  if (page.has_more) log(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; backlog exceeds newest page`);
   return earliest;
 }
 
@@ -114,6 +115,18 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
   const dir = `${root}/plow-checkpoints`;
   await mkdir(dir, { recursive: true });
+  // When this agent first listened. A chat with no checkpoint whose unanswered
+  // messages are newer than this was missed while disconnected (e.g. a thread the
+  // agent started during an outage); older ones predate the install.
+  const sincePath = `${root}/plow-listening-since`;
+  let since: number;
+  try { since = Date.parse(await readFile(sincePath, "utf8")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    since = Date.now();
+    await writeFile(sincePath, new Date(since).toISOString());
+  }
+  if (!Number.isFinite(since)) throw new Error(`${sincePath} is not a timestamp`);
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
   const unadopted = new Map<string, Set<string>>();
@@ -314,8 +327,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
             const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
             const newest = page.data[0];
-            checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
-              ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest, log)}` : newest?.uid ?? "";
+            const fromMember = (message: Message) => message.direction === "inbound" && message.sender.type === "member";
+            const missed = (message: Message) => message.direction === "inbound" && Date.parse(message.created_at) >= since &&
+              (message.sender.type === "member" || message.sender.relationship === "peer");
+            const unanswered = chat.uid === owner?.uid ? fromMember : missed;
+            checkpoint = newest && unanswered(newest)
+              ? `first:${await earliestUnanswered(account, chat.uid, newest, unanswered, log)}` : newest?.uid ?? "";
             const buffered = bufferedChats.get(chat.uid);
             const first = buffered?.values().next().value;
             // A buffered frame moves first contact back only when history proves it is older.
@@ -389,10 +406,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       clearInterval(heartbeat);
       signal.removeEventListener("abort", abort);
       abort();
-      await Promise.allSettled(dispatching);
+      // Running turns deliver over HTTP and replay skips them as pending, so a
+      // dropped socket reconnects without waiting for them.
       await Promise.all(queues.values());
     }
     if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
   }
+  await Promise.allSettled(dispatching);
   if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
 }
