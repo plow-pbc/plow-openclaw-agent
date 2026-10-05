@@ -22,6 +22,7 @@ for (const failure of ["exception", "result"] as const) test(`uncertain delivery
       assert.equal(hooks.before_tool_call({ toolName, runId: "two" }, {}), undefined);
     }
     assert.equal(hooks.before_tool_call({ toolName: "read", runId: "one" }, {}), undefined);
+    assert.equal(hooks.before_tool_call({ toolName: "plow_send_email", params: { action: "list" }, runId: "one" }, {}), undefined);
     hooks.before_tool_call({ ...event, toolCallId: "other" }, { runId: "two" });
     assert.notEqual(threadIdempotencyKey("other", payload), firstKey);
     finishDeliveryRun("one");

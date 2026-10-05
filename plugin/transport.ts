@@ -100,7 +100,7 @@ async function* messagePages(account: Account, chat: string) {
   }
 }
 
-export async function recover(account: Account, chat: string, checkpoint: string, _log?: (text: string) => void): Promise<Message[]> {
+export async function recover(account: Account, chat: string, checkpoint: string): Promise<Message[]> {
   const messages: Message[] = [];
   for await (const page of messagePages(account, chat)) {
     const boundary = page.data.findIndex(message => message.uid === checkpoint.replace(/^first:/, ""));
@@ -110,7 +110,7 @@ export async function recover(account: Account, chat: string, checkpoint: string
   return messages.reverse();
 }
 
-async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message, _log: (text: string) => void): Promise<string> {
+async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message): Promise<string> {
   let earliest = newest.uid;
   for await (const page of messagePages(account, chat)) for (const message of page.data) {
     if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
@@ -127,6 +127,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
   const unadopted = new Map<string, Set<string>>();
+  const recoveryEnds = new Map<string, string>();
   type Queued = { chat: Chat; message: Message };
   const pending = new Set<string>();
   const dispatching = new Set<Promise<void>>();
@@ -151,10 +152,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         handled.add(uid);
         unadopted.get(chat)?.delete(uid);
       }
-      while (handled.size > 512) handled.delete(handled.values().next().value!);
+      if (!unadopted.get(chat)?.size) while (handled.size > 512) handled.delete(handled.values().next().value!);
       recent.set(chat, handled);
       // Later handled rows must not move recovery past an unfinished source.
-      const cursor = unadopted.get(chat)?.size ? checkpoints.get(chat)! : uid;
+      const cursor = unadopted.get(chat)?.size ? checkpoints.get(chat)! : recoveryEnds.get(chat) ?? uid;
       await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
       await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
       checkpoints.set(chat, cursor);
@@ -219,12 +220,13 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     else if (outcome === "incomplete") pending.delete(message.uid);
   };
 
-  const consume = async (chatUid: string, message: Message) => {
+  const consume = async (chatUid: string, message: Message, recovering = false) => {
     if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;
     const chat = await request<Chat>(account, `/chats/${chatUid}`);
     if (!accepts(account, chat)) return;
     discovered.set(chat.uid, chat);
     findOwnerChat(account, [...discovered.values()]);
+    if (!recovering) recoveryEnds.set(chatUid, message.uid);
     const sender = message.sender;
     if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
       if (account.accountId === "chat") await ack(chatUid, message.uid);
@@ -325,12 +327,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
             const newest = page.data[0];
             checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
-              ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest, log)}` : newest?.uid ?? "";
+              ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest)}` : newest?.uid ?? "";
             const buffered = bufferedChats.get(chat.uid);
             const first = buffered?.values().next().value;
             // A buffered frame moves first contact back only when history proves it is older.
             if (first && (!checkpoint.startsWith("first:") || (first !== checkpoint.slice(6) &&
-              (await recover(account, chat.uid, `first:${first}`, log)).some(message => message.uid === checkpoint.slice(6))))) checkpoint = `first:${first}`;
+              (await recover(account, chat.uid, `first:${first}`)).some(message => message.uid === checkpoint.slice(6))))) checkpoint = `first:${first}`;
             await ack(chat.uid, checkpoint, false);
             // Late frames can include an exclusive baseline, but must not replace pending first contact.
             if (!checkpoint.startsWith("first:") && bufferedChats.has(chat.uid)) {
@@ -347,10 +349,16 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const recoveredChats = new Set<string>();
       const replay = async (chatUid: string) => {
         const checkpoint = checkpoints.get(chatUid)!;
-        const window = await recover(account, chatUid, checkpoint, log);
+        const window = await recover(account, chatUid, checkpoint);
+        if (window.length) recoveryEnds.set(chatUid, window.at(-1)!.uid);
+        // Pin the cursor before dispatch: later adoption must not skip any unread source.
+        const unfinished = unadopted.get(chatUid) ?? new Set<string>();
+        for (const message of window) if (!recent.get(chatUid)?.has(message.uid) && message.direction === "inbound" &&
+          (message.sender.type === "member" || message.sender.relationship === "peer")) unfinished.add(message.uid);
+        unadopted.set(chatUid, unfinished);
         for (const message of window) {
           if (!accepting || signal.aborted) break;
-          await consume(chatUid, message);
+          await consume(chatUid, message, true);
           replayed.add(message.uid);
         }
         recoveredChats.add(chatUid);

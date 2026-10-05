@@ -29,7 +29,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
   assert.ok(hooks.includes("before_tool_call"));
-  assert.equal(hooks.filter(name => name === "after_tool_call").length, 2);
+  assert.equal(hooks.filter(name => name === "after_tool_call").length, 1);
 });
 
 test("start-thread refuses outside an active main Plow DM without a request", async t => {
