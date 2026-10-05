@@ -98,13 +98,13 @@ commit and checksum in the `Dockerfile` and fetched at build; its key and ledger
 volume, so a rebuilt container keeps one install rather than registering a second.
 Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw.json` belongs to the owner. Changes made through the Control UI or
-`openclaw config set` to other channels, model providers, plugins, agent defaults,
-skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
+`openclaw config set` to other channels, model providers, plugins, agent defaults
+(except `agents.defaults.timeoutSeconds`), skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
-identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, and
-cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
+identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, the agent run timeout
+(`agents.defaults.timeoutSeconds`), and cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
 An existing volume with a fully rendered config is converted on its next boot.

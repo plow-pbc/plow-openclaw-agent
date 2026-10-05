@@ -83,14 +83,6 @@ test("GLM falls back to Sonnet on the Plow provider with explicit capacity and p
     compat: { maxTokensField: "max_tokens" },
     cost: { input: 2.00, output: 10.00 },
   }]);
-});
-
-test("every Plow model caps its output in the field Plow forwards, and a run cannot hold its chat past ten minutes", () => {
-  const config = renderConfig(identity, "http://api:8000");
-  for (const model of config.models.providers.plow.models) {
-    assert.ok(model.maxTokens > 0, `${model.id} has no maxTokens`);
-    assert.equal(model.compat.maxTokensField, "max_tokens", `${model.id} sends a cap Plow drops`);
-  }
   assert.equal(config.agents.defaults.timeoutSeconds, 600);
 });
 
