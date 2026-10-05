@@ -42,6 +42,9 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     agents: { entries: { main: { identity: { name } } }, defaults: {
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
+      // Model params must not become a legacy model-selection allowlist.
+      modelPolicy: {},
+      models: { "plow/z-ai/glm-5.2": { params: { extraBody: { reasoning: { enabled: false } } } } },
     } },
     mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
       url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",

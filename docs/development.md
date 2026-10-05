@@ -36,6 +36,18 @@ its release commit `eb377ac59e6c9fd6c7705028034812becf00271b`.
 
 ## Defaults we inherit
 
+GLM 5.2 requests explicitly send `reasoning: { enabled: false }` through
+`agents.defaults.models["plow/z-ai/glm-5.2"].params.extraBody`. The pinned runtime
+merges this into the OpenAI completions request body; the Plow proxy must preserve
+the caller's reasoning field. Sonnet receives no additional reasoning parameter.
+An explicit empty `modelPolicy` keeps this parameter map from becoming a legacy
+model-selection allowlist. The wire test exercises both models against a local
+HTTP server using the pinned runtime's request wrappers and transport.
+These settings seed new owner configs. `syncConfig` preserves existing
+`agents.defaults` settings, so rebuilding an existing install does not add this
+opt-out; add the per-model parameter to its owner config explicitly. Preserve
+any owner-authored model-selection policy when doing so.
+
 Plow prepares messages in arrival order within each chat, releasing the chat lane
 at the dispatch call rather than model completion, and sets the global queue mode
 to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/bot-core.ts#L257)
