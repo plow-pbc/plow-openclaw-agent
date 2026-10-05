@@ -1,0 +1,19 @@
+# Repos a reviewer of THIS repo may search and cite, materialized under
+# .siblings/<owner>/<repo>. Declared rather than left to the fallback so
+# the set is the one this repo actually depends on.
+#
+# One per line. The reviewer host must also carry a SOURCE_PATHS entry for
+# each, or the sibling reports as `missing` and is never searched.
+#
+# Each row is a real edge: `plow` owns the API boot and the plugin call
+# (PLOW_API_BASE: chats, agents, websocket, attachments) and publishes this
+# image; `latch` serves the MCP tools and instructions boot/prompt.ts and
+# boot/mcp-bridge.ts read through PLOW_MCP_URL; `agent-index-client` owns
+# the agent_index_client.py the Dockerfile pins and boot/agent-index.ts runs;
+# and `plow-agents` is the CLI the README tells owners to build, push and
+# deploy this image with.
+
+plow-pbc/plow
+plow-pbc/latch
+plow-pbc/agent-index-client
+plow-pbc/plow-agents
