@@ -954,3 +954,15 @@ test("a dropped socket reconnects while a turn is still running, and replays it 
   assert.deepEqual(dispatches, ["slow", "slow"], "the reconnect's replay waits for the running turn, then retries what it left unfinished");
 });
 
+
+test("only the phone listener records when the agent first listened", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  await fs.rm(`${root}/plow-listening-since`);
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(url.endsWith("/chats") ? { data: [], has_more: false } : { ticket: "ticket" }));
+  const email = abortAfter(200);
+  await listen({ ...account, apiBase, accountId: "email", lineUid: "line" } as Account, email.signal, () => {}, async () => "completed");
+  await assert.rejects(readFile(`${root}/plow-listening-since`, "utf8"), { code: "ENOENT" });
+  const phone = abortAfter(200);
+  await listen({ ...account, apiBase, lineUid: "line" }, phone.signal, () => {}, async () => "completed");
+  assert.ok(Number.isFinite(Date.parse(await readFile(`${root}/plow-listening-since`, "utf8"))));
+});

@@ -126,17 +126,20 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   await mkdir(dir, { recursive: true });
   // When this agent first listened. A chat with no checkpoint whose unanswered
   // messages are newer than this was missed while disconnected (e.g. a thread the
-  // agent started during an outage); older ones predate the install.
+  // agent started during an outage); older ones predate the install. Only the
+  // phone listener baselines chats, so only it owns this file.
   const sincePath = `${root}/plow-listening-since`;
-  let since: number;
-  try { since = Date.parse(await readFile(sincePath, "utf8")); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    since = Date.now();
-    await writeFile(`${sincePath}.tmp`, new Date(since).toISOString());
-    await rename(`${sincePath}.tmp`, sincePath);
+  let since = Number.NaN;
+  if (account.accountId === "chat") {
+    try { since = Date.parse(await readFile(sincePath, "utf8")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      since = Date.now();
+      await writeFile(`${sincePath}.tmp`, new Date(since).toISOString());
+      await rename(`${sincePath}.tmp`, sincePath);
+    }
+    if (!Number.isFinite(since)) throw new Error(`${sincePath} is not a timestamp`);
   }
-  if (!Number.isFinite(since)) throw new Error(`${sincePath} is not a timestamp`);
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
   const unadopted = new Map<string, Set<string>>();
