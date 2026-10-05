@@ -1,5 +1,5 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { createHash } from "node:crypto";
+import { startDeliveryRun, finishDeliveryRun, installDeliveryGuard, threadIdempotencyKey } from "./delivery-guard.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
@@ -187,6 +187,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     suppressFinal ||= silentRuns.get(activeRunId) === true;
     silent ||= suppressFinal;
     silentRuns.delete(activeRunId);
+    finishDeliveryRun(activeRunId);
     activeRunId = undefined;
   };
   const dispatched = runtime.channel.inbound.dispatch({
@@ -200,6 +201,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         silent = suppressFinal = false;
         activeRunId = runId;
         silentRuns.set(runId, false);
+        startDeliveryRun(runId, JSON.stringify([account.apiBase, account.lineUid, chat.uid, message.uid]));
         log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
       },
       // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
@@ -366,6 +368,7 @@ export default defineChannelPluginEntry({
     if (api.registrationMode === "full") api.logger.info("plow channel registered");
   },
   registerCapabilities(api) {
+    installDeliveryGuard(api);
     api.on("after_tool_call", (event, ctx) => {
       // Set this before any await: the hook runner does not wait before final delivery.
       const runId = event.runId ?? ctx.runId;
@@ -398,7 +401,7 @@ export default defineChannelPluginEntry({
           throw new Error("Starting a group requires an explicit trust choice.");
         }
         const trusted = account.threadTrust === "trusted" || (account.threadTrust === "ask" && args.trusted === true);
-        const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");
+        const idempotencyKey = threadIdempotencyKey(_id, [account.lineUid, members, args.body, trusted]);
         const chat = await requestDelivery<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
           body: args.body, trusted, idempotency_key: idempotencyKey,

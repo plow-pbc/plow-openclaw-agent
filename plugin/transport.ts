@@ -3,8 +3,8 @@
  * once OpenClaw adopts a turn. Sources interrupted before adoption
  * stay unacked; adopted sources and uncertain sends are not replayed.
  * first:<uid> requests inclusive replay from uid. Recovery and buffered frames
- * dispatch in history order within each chat. Catch-up reads only the newest
- * 50 messages; durable UID deduplication covers repeated frames.
+ * dispatch in history order within each chat. Catch-up pages to the checkpoint;
+ * durable UID deduplication covers repeated frames.
  * Commands without an agent run acknowledge at terminal completion.
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -88,24 +88,34 @@ export async function ownerChat(account: Account): Promise<Chat> {
 
 // Pages run newest-first; starting_after means older than the page cursor.
 // A first:<uid> checkpoint includes that message, but none of its older history.
-export async function recover(account: Account, chat: string, checkpoint: string, log?: (text: string) => void): Promise<Message[]> {
-  const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50`);
-  const boundary = page.data.findIndex(message => message.uid === checkpoint.replace(/^first:/, ""));
-  if (boundary < 0 && page.has_more) {
-    // The API exposes no total or checkpoint position beyond this page.
-    log?.(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; checkpoint absent from newest page`);
+async function* messagePages(account: Account, chat: string) {
+  let cursor = "";
+  while (true) {
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50${cursor ? `&starting_after=${encodeURIComponent(cursor)}` : ""}`);
+    yield page;
+    if (!page.has_more) return;
+    const next = page.data.at(-1)?.uid;
+    if (!next || next === cursor) throw new Error("Plow history pagination did not advance");
+    cursor = next;
   }
-  return page.data.slice(0, boundary < 0 ? undefined : boundary + (checkpoint.startsWith("first:") ? 1 : 0)).reverse();
 }
 
-async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message, log: (text: string) => void): Promise<string> {
-  const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50`);
+export async function recover(account: Account, chat: string, checkpoint: string, _log?: (text: string) => void): Promise<Message[]> {
+  const messages: Message[] = [];
+  for await (const page of messagePages(account, chat)) {
+    const boundary = page.data.findIndex(message => message.uid === checkpoint.replace(/^first:/, ""));
+    messages.push(...page.data.slice(0, boundary < 0 ? undefined : boundary + (checkpoint.startsWith("first:") ? 1 : 0)));
+    if (boundary >= 0) break;
+  }
+  return messages.reverse();
+}
+
+async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message, _log: (text: string) => void): Promise<string> {
   let earliest = newest.uid;
-  for (const message of page.data) {
+  for await (const page of messagePages(account, chat)) for (const message of page.data) {
     if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
     earliest = message.uid;
   }
-  if (page.has_more) log(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; owner backlog exceeds newest page`);
   return earliest;
 }
 

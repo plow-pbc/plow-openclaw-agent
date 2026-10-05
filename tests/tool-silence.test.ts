@@ -106,5 +106,5 @@ for (const runIdSource of ["event", "context"]) test(`a tool can silence its run
     { chat: "one", text: "final next" },
   ], logs.join("\n"));
   assert.ok(logs.includes("completed chat=one message=silent"), logs.join("\n"));
-  assert.equal(registry.typedHooks.filter((hook: any) => hook.hookName === "after_tool_call").length, 1);
+  assert.equal(registry.typedHooks.filter((hook: any) => hook.hookName === "after_tool_call").length, 2);
 });
