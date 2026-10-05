@@ -45,8 +45,10 @@ model-selection allowlist. The wire test exercises both models against a local
 HTTP server using the pinned runtime's request wrappers and transport.
 These settings seed new owner configs. `syncConfig` preserves existing
 `agents.defaults` settings, so rebuilding an existing install does not add this
-opt-out; add the per-model parameter to its owner config explicitly. Preserve
-any owner-authored model-selection policy when doing so.
+opt-out; add the per-model parameter to its owner config explicitly. If no
+owner-authored policy exists, also set `agents.defaults.modelPolicy: {}` so the
+parameter map does not restrict model selection. Preserve any existing
+owner-authored model-selection policy instead.
 
 Plow prepares messages in arrival order within each chat, releasing the chat lane
 at the dispatch call rather than model completion, and sets the global queue mode
