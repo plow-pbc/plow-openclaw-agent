@@ -73,5 +73,6 @@ profiles, sessions and memory); do not attempt an in-place database downgrade.
 Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`,
 `/var/lib/plow/plow-listening-since` and `/var/lib/plow/plow-email` (where email threads report).
 Restore those directories into the replacement volume before booting the agent.
-Without checkpoints, boot silently skips group messages from the outage window;
-trailing unanswered owner DMs dispatch in history order.
+Without checkpoints, boot dispatches unanswered group messages newer than
+`plow-listening-since` and trailing unanswered owner DMs, in history order;
+history older than `plow-listening-since` stays unanswered.

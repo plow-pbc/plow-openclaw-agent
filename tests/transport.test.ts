@@ -901,39 +901,56 @@ test("a guest's reply that arrived while disconnected, in a chat with no checkpo
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/quiet`), "old", "history from before the agent first listened stays unanswered");
 });
 
-test("a dropped socket reconnects while a turn is still running", { timeout: 55_000 }, async t => {
+test("a dropped socket reconnects while a turn is still running, and replays it if that turn ends incomplete", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
-  const controller = abortAfter(50_000);
+  const controller = abortAfter();
   await mkdir(`${root}/plow-checkpoints`);
   await writeFile(`${root}/plow-checkpoints/chat`, JSON.stringify({ uid: "old", recent: [] }));
   const chat = acceptedChat("chat");
   let tickets = 0;
   let running = false;
-  const release = Promise.withResolvers<void>();
-  controller.signal.addEventListener("abort", () => release.resolve());
+  const reconnected = Promise.withResolvers<void>();
+  const recovering = Promise.withResolvers<void>();
   t.mock.method(globalThis, "fetch", async (url: string) => {
     if (url.endsWith("/ws/ticket")) {
       if (++tickets === 2) {
         assert.equal(running, true, "reconnect must not wait for the turn");
-        controller.abort();
+        reconnected.resolve();
       }
       return Response.json({ ticket: "ticket" });
     }
     return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
-      url.endsWith("/chats/chat") ? chat : { data: [], has_more: false });
+      url.endsWith("/chats/chat") ? chat :
+      url.includes("limit=50") ? (tickets === 2 && recovering.resolve(), { data: [inbound("slow"), { uid: "old", direction: "outbound", sender: { type: "agent" } }], has_more: false }) :
+      { data: [], has_more: false });
   });
   server.once("connection", socket => socket.send(JSON.stringify({ event_type: "message_received", chat_id: chat.uid,
     data: { message: inbound("slow") } })));
-  const turn = listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, _message, _first, _history, ingress) => {
-    running = true;
+  const dispatches: string[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message, _first, _history, ingress) => {
+    dispatches.push(message.uid);
     ingress.onSubmitted();
-    await ingress.onAdopted();
-    // The socket drops while the model is still retrying.
+    if (dispatches.length > 1) {
+      controller.abort();
+      return "completed";
+    }
+    running = true;
+    // The socket drops while the model is still retrying; the retry backoff runs on mock time.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     for (const socket of server.clients) socket.terminate();
-    await release.promise;
+    while (tickets < 2 && !controller.signal.aborted) {
+      t.mock.timers.tick(1_000);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    t.mock.timers.reset();
+    await reconnected.promise;
+    // Finish only after the reconnect has read this message back for replay.
+    await recovering.promise;
+    await new Promise(resolve => setTimeout(resolve, 50));
     running = false;
-    return "completed";
+    return "incomplete";
   });
-  await turn;
-  assert.equal(tickets, 2, "the socket reconnected before the turn finished");
+  assert.equal(tickets, 2);
+  assert.deepEqual(dispatches, ["slow", "slow"], "the reconnect's replay waits for the running turn, then retries what it left unfinished");
 });
+

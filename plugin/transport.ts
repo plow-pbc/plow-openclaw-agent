@@ -9,7 +9,6 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { on, once } from "node:events";
-import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 
 export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
@@ -110,6 +109,16 @@ async function earliestUnanswered(account: Account, chat: string, newest: Messag
   return earliest;
 }
 
+// A wait that ends early on abort. It uses the global timer so node:test mock
+// timers can drive it; timers/promises' signal option is not mockable.
+function backoff(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
 export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress) => Promise<TurnOutcome>) {
   const root = process.env.OPENCLAW_STATE_DIR;
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
@@ -124,7 +133,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     since = Date.now();
-    await writeFile(sincePath, new Date(since).toISOString());
+    await writeFile(`${sincePath}.tmp`, new Date(since).toISOString());
+    await rename(`${sincePath}.tmp`, sincePath);
   }
   if (!Number.isFinite(since)) throw new Error(`${sincePath} is not a timestamp`);
   const checkpoints = new Map<string, string>();
@@ -133,6 +143,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   type Queued = { chat: Chat; message: Message };
   const pending = new Set<string>();
   const dispatching = new Set<Promise<void>>();
+  // Each pending message's turn, so a reconnect's replay can wait for its outcome.
+  const inFlight = new Map<string, Promise<void>>();
   let failDispatch: (error: unknown) => void;
   const checkpointWrites = new Map<string, Promise<void>>();
   const discovered = new Map<string, Chat>();
@@ -244,6 +256,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let onSubmitted!: () => void;
     const submitted = new Promise<void>(resolve => { onSubmitted = resolve; });
     const task = dispatchTurn(item, onSubmitted).finally(onSubmitted);
+    inFlight.set(message.uid, task);
+    void task.catch(() => {}).finally(() => { if (inFlight.get(message.uid) === task) inFlight.delete(message.uid); });
     dispatching.add(task);
     void task.catch(error => failDispatch(error)).finally(() => dispatching.delete(task));
     await submitted;
@@ -357,6 +371,9 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const window = await recover(account, chatUid, checkpoint, log);
         for (const message of window) {
           if (!accepting || signal.aborted) break;
+          // A turn still running from before the drop decides the message: an
+          // incomplete one leaves it unacked, and consume then dispatches it again.
+          await inFlight.get(message.uid)?.catch(() => {});
           await consume(chatUid, message);
           replayed.add(message.uid);
         }
@@ -410,7 +427,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       // dropped socket reconnects without waiting for them.
       await Promise.all(queues.values());
     }
-    if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
+    if (!signal.aborted) await backoff(Math.min(30_000 * 2 ** attempt++, 300_000), signal);
   }
   await Promise.allSettled(dispatching);
   if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
