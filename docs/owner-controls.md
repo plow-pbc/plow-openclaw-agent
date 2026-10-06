@@ -138,6 +138,9 @@ one-shot reminder can still deliver. The journal entry remains for reconciliatio
 retrying resume inspects the actual job without sending another confirmed enable.
 If the scheduler fails before enabling, some jobs remain disabled. An open gate
 therefore does not prove that every reminder has resumed. Report both facts.
+`suspendedJobs` lists recovery journal entries, not observed scheduler status.
+After a lost enable response, a listed job may already be enabled. Read its
+native scheduler state before saying it is disabled or running.
 
 Room and global pauses can overlap. The job stays disabled while its source room,
 destination room, or all-scope gate remains paused. Resume transfers its journal
