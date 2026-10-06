@@ -184,7 +184,11 @@ the model decides whether to participate.
 
 History recovery pages to the actual checkpoint, including backlogs beyond the
 512-UID retained window. Adoption acknowledges processing ownership, not action
-success. Phone finals use native durable delivery. Intentional `NO_REPLY` and
+success. Cache eviction waits for an atomic checkpoint commit. If the write or
+rename fails, retained adoption IDs protect reconnects in the current process;
+the transport retries after its backoff. Repair storage before restarting and
+inspect provider receipts for any uncertain effects. Phone finals use native
+durable delivery. Intentional `NO_REPLY` and
 successful tool receipts with `details.silent=true` suppress automatic finals;
 explicit authorized sends can still happen. Delivery timeout is an unknown outcome,
 not a failed send to retry. Later Plow mutations/finals in that run are fenced.

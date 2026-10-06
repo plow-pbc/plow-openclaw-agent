@@ -68,10 +68,28 @@ The rotated boot log also lives at `/var/lib/plow/boot.log`.
 | Paused, scheduler update failed | The durable gate remains active; retry control after inspecting the scheduler |
 | Dashboard 403 | Inspect owner proxy attribution and trusted origin; keep gateway authentication enabled |
 | State cannot be parsed | Preserve the file and restore a compatible backup; do not silently reset it |
+| Checkpoint progress stalls | Inspect filesystem capacity and ownership; a failed write or atomic rename retains adoption IDs for reconnects in the running process |
 
 Restrict diagnostics to install operators. Native gateway logs can contain sender
 identifiers. PR evidence should use synthetic content and omit credentials and
 private note bodies.
+
+For checkpoint storage failures, inspect the running agent's user, state paths
+and available space:
+
+```sh
+docker compose exec agent id
+docker compose exec agent ls -ld /var/lib/plow /var/lib/plow/plow-checkpoints
+docker compose exec agent df -h /var/lib/plow
+```
+
+Repair capacity or ownership while preserving complete state. The transport
+keeps adopted IDs in memory until its atomic checkpoint commit succeeds, so
+cache eviction during a failed write or rename cannot redispatch those sources
+on reconnect. After storage recovers, confirm that checkpoint progress resumes.
+Inspect provider receipts for uncertain effects before authorizing another
+attempt. Retained memory protects the current process; preserve the state and
+repair storage before an operator restart.
 
 ## SOP 3: Back up complete state
 
