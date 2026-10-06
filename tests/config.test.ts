@@ -133,6 +133,8 @@ test("native messaging retains local workspace and memory file tools", () => {
   for (const name of ["read", "write", "edit", "exec", "automations", "sessions_spawn", "subagents"]) assert.ok(tools.alsoAllow.includes(name));
   assert.deepEqual(tools.message.crossContext, { allowWithinProvider: false, allowAcrossProviders: false });
   assert.equal(tools.profile, "messaging"); assert.equal(tools.toolSearch, false);
+  assert.deepEqual(tools.media.image, { enabled: true, maxBytes: 8 * 1024 * 1024, timeoutSeconds: 45 });
+  assert.equal(tools.media.audio.enabled, false); assert.equal(tools.media.video.enabled, false);
 });
 
 test("private transcript recall is disabled across isolated conversations", () => {

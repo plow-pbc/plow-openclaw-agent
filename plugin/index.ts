@@ -13,6 +13,7 @@ export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { installExperienceTools, notificationPaused } from "./experience.ts";
 import { experienceContext, readExperience, updateExperience, quietNow } from "./experience-state.ts";
+import { inboundImage, IMAGE_TYPES } from "./media.ts";
 import { installPersonalityPage } from "./personality-page.ts";
 
 let runtime: PluginRuntime;
@@ -128,15 +129,19 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
+  const mediaIssues: string[] = [];
   if (account.accountId === "chat") {
-    for (const attachment of message.attachments) {
-      const response = await fetch(new URL(attachment.url, account.apiBase));
-      if (!response.ok) throw new Error(`Inbound attachment HTTP ${response.status}`);
-      const saved = await runtime.channel.media.saveMediaBuffer(Buffer.from(await response.arrayBuffer()), attachment.content_type, "inbound", undefined, attachment.filename);
-      media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
+    for (const attachment of message.attachments.slice(0, 4)) {
+      if (!IMAGE_TYPES.has(attachment.content_type)) { mediaIssues.push("This attachment type is unsupported. Ask for relevant text or a PNG/JPEG/GIF/WebP still image."); continue; }
+      try {
+        const buffer = await inboundImage(new URL(attachment.url, account.apiBase), attachment.content_type);
+        const saved = await runtime.channel.media.saveMediaBuffer(buffer, attachment.content_type, "inbound", undefined, attachment.filename);
+        media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
+      } catch { mediaIssues.push("An image could not be downloaded within the 8 MiB limit. Ask for a smaller image or relevant text; do not guess its contents."); }
     }
+    if (message.attachments.length > 4) mediaIssues.push("Only the first four images can be inspected in one message.");
   }
-  const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
+  const body = [message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]"), ...mediaIssues].join("\n");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;

@@ -13,6 +13,7 @@ import { composePrompt, renderPrompt } from "../boot/prompt.ts";
 import { renderConfig, syncConfig } from "../boot/config.ts";
 import { healthy } from "../boot/health.ts";
 import { personalityAxes, personalitySchema, personalityPatchSchema } from "../boot/personality.ts";
+import { inboundImage, MAX_IMAGE_BYTES } from "../plugin/media.ts";
 import { scheduler } from "../plugin/scheduler.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "ln_fixture", guestTools: ["plow_memory", "plow_tasks"] };
@@ -336,6 +337,15 @@ test("manifest persona composition retains base policy and existing explicit def
   assert.equal(JSON.parse(await readFile(path, "utf8")).agents.defaults.silentReply.group, "disallow");
   await writeFile(path, JSON.stringify({ agents: { defaults: {} } })); await syncConfig(config, path, includes);
   assert.equal(JSON.parse(await readFile(path, "utf8")).agents.defaults.silentReply.group, "allow");
+});
+
+test("readiness and bounded media reject false health, errors and oversized bodies", async t => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ready: false })); assert.equal(await healthy(), false);
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ready: true })); assert.equal(await healthy(), true);
+  t.mock.method(globalThis, "fetch", async () => new Response("failure", { status: 503 })); assert.equal(await healthy(), false);
+  t.mock.method(globalThis, "fetch", async () => new Response(new Uint8Array(MAX_IMAGE_BYTES + 1)));
+  await assert.rejects(inboundImage(new URL("http://fixture/image"), "image/png"), /exceeds/);
+  await assert.rejects(inboundImage(new URL("http://fixture/image"), "application/pdf"), /unsupported/);
 });
 
 test("native task flows persist commitments across runtime recreation, isolate rooms and record terminal evidence", async t => {
