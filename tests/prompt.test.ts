@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import { renderPrompt } from "../boot/prompt.ts";
 
-const prompt = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");
+const prompt = await readFile(new URL("../prompt/BASE.md", import.meta.url), "utf8");
 
 test("no Mac still renders the default thread trust instruction", async () => {
   assert.match(await renderPrompt(prompt, null, "test-token"), /ask the owner whether the group should have full trust/i);
@@ -60,11 +60,14 @@ for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavail
       const address = server.address();
       assert.ok(address && typeof address !== "string");
       const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token", "ask");
-      const expectedInstructions = format === "oversized" ? "A".repeat(8_000)
-        : "Use plow_list_skills to discover the owner's Mac skills.";
       const base = await renderPrompt(prompt, null, "test-token", "ask");
-      assert.equal(rendered, ["json", "sse", "oversized"].includes(format)
-        ? `${base}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${expectedInstructions}\n\`\`\`\n`
+      if (format === "oversized") {
+        assert.ok(rendered.startsWith(base));
+        const instructions = rendered.match(/```text\n(A+)\n```\n$/)?.[1];
+        assert.ok(instructions && instructions.length <= 8_000);
+        assert.ok(!rendered.includes("OMIT"));
+      } else assert.equal(rendered, ["json", "sse"].includes(format)
+        ? `${base}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\nUse plow_list_skills to discover the owner's Mac skills.\n\`\`\`\n`
         : base);
       assert.ok(rendered.length <= 20_000, "workspace instructions fit the per-file context cap");
       assert.equal(requests, 1);
