@@ -642,12 +642,17 @@ test("a buffered message preceding the HTTP baseline runs first without replay a
   const messages = ["X", "Y"].map(uid => ({
     uid, body: uid, direction: "inbound", sender, created_at: "2026-09-22T12:00:00Z",
   }));
+  const fresh = { ...messages[1], uid: "Z", body: "Z" };
   let boot = 0;
+  let controller: AbortController;
   t.mock.method(globalThis, "fetch", async (url: string) => {
     if ((!boot && url.endsWith("limit=1")) || (boot && url.endsWith("/chats"))) {
       for (const socket of server.clients) {
-        socket.send(JSON.stringify({ event_type: "message_received", event_id: `X-${boot}`,
-          chat_id: chat.uid, data: { message: messages[0] } }));
+        // On restart, a fresh frame follows the duplicate and proves both were consumed.
+        for (const message of boot ? [messages[0], fresh] : [messages[0]]) {
+          socket.send(JSON.stringify({ event_type: "message_received", event_id: `${message.uid}-${boot}`,
+            chat_id: chat.uid, data: { message } }));
+        }
         const pong = once(socket, "pong");
         socket.ping();
         await pong;
@@ -666,12 +671,16 @@ test("a buffered message preceding the HTTP baseline runs first without replay a
   });
   const turns: string[] = [];
   for (; boot < 2; boot++) {
-    await listen(fixture, abortAfter().signal, () => {}, async (_chat, message) => {
+    controller = abortAfter(30_000);
+    await listen(fixture, controller.signal, text => {
+      if (text.startsWith(`acked chat=home message=${boot ? "Z" : "Y"} `)) controller.abort();
+    }, async (_chat, message) => {
       turns.push(message.uid);
       return "completed";
     });
-    assert.deepEqual(turns, ["X", "Y"], "buffered input precedes the newer HTTP baseline and neither replays on restart");
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), "Y");
+    assert.notEqual(controller.signal.reason?.name, "TimeoutError", "wait for the final checkpoint, not a deadline");
+    assert.deepEqual(turns, boot ? ["X", "Y", "Z"] : ["X", "Y"], "buffered input precedes the newer HTTP baseline and neither replays on restart");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), boot ? "Z" : "Y");
   }
 });
 
