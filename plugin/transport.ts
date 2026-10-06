@@ -202,13 +202,16 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         handled.add(uid);
         unadopted.get(chat)?.delete(uid);
       }
-      if (!unadopted.get(chat)?.size) while (handled.size > 512) handled.delete(handled.values().next().value!);
       recent.set(chat, handled);
+      // Cache eviction is safe only after the checkpoint file advances.
+      const checkpointRecent = new Set(handled);
+      if (!unadopted.get(chat)?.size) while (checkpointRecent.size > 512) checkpointRecent.delete(checkpointRecent.values().next().value!);
       // Later handled rows must not move recovery past an unfinished source.
       const cursor = unadopted.get(chat)?.size ? checkpoints.get(chat)! : recoveryEnds.get(chat) ?? uid;
-      await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
+      await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...checkpointRecent] }));
       await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
       checkpoints.set(chat, cursor);
+      recent.set(chat, checkpointRecent);
     });
     checkpointWrites.set(chat, write.catch(() => {}));
     return write;
