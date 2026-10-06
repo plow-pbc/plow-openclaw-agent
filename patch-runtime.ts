@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 
 const patches = [
+  // Retain Plow's cron intent without claiming provider reconciliation.
+  {
+    path: "/app/dist/deliver-Bz2WIVCS.mjs",
+    checksum: "95fad7fe364eb3d1fd7917e63bbbb7108a381ebcae79224a5bda4132c7ba1d67",
+    before: "...exactReconciliationRequired && params.payloads.length === 1 ? { deliveryQueueId: platformQueueId } : { deliveryQueueId: void 0 },",
+    after: "...exactReconciliationRequired && params.payloads.length === 1 ? { deliveryQueueId: platformQueueId } : { deliveryQueueId: params.channel === \"plow\" ? platformQueueId : void 0 },",
+  },
   // The coordinator acknowledges worker cancellation. Native result handoff
   // is separate; suppress only the redundant automatic terminal notice.
   {

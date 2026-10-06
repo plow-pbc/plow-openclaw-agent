@@ -31,7 +31,7 @@ const stateSchema = z.object({
   lastHeartbeatAt: z.string().datetime().optional(),
   notes: z.array(note).max(100).default([]), paused: z.boolean().default(false),
   notesRevision: z.number().int().nonnegative().default(0),
-  suspendedJobs: z.array(z.object({ id: z.string(), revision: z.string() }).strict()).max(1000).default([]),
+  suspendedJobs: z.array(z.object({ id: z.string(), revision: z.string(), pendingDefinition: z.record(z.string(), z.unknown()).optional() }).strict()).max(1000).default([]),
 }).strict();
 export type ExperienceState = z.infer<typeof stateSchema>;
 export type Scope = { account: Account; conversation: string | "owner" };

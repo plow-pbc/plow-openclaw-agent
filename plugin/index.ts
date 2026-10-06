@@ -12,7 +12,7 @@ import { conversationUid, ownerDmTurn, startThread } from "./threads.ts";
 export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { installExperienceTools } from "./experience.ts";
-import { experienceContext } from "./experience-state.ts";
+import { experienceContext, readExperience, updateExperience, quietNow } from "./experience-state.ts";
 import { installPersonalityPage } from "./personality-page.ts";
 
 let runtime: PluginRuntime;
@@ -20,12 +20,25 @@ let runtime: PluginRuntime;
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], guard?: { assertInvocationCurrent?: () => void }) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], guard?: { signal?: AbortSignal; deliveryQueueId?: string; assertInvocationCurrent?: () => void; assertDirectAdapterHandoff?: () => void; onPlatformSendDispatch?: () => Promise<void> }) {
+  guard?.signal?.throwIfAborted();
   to = to.replace(/^plow:/i, "");
   if (account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
   // Heartbeats are routed to their own alias (boot/config.ts) so their sends can be marked.
   const heartbeat = to === "plow-heartbeat";
+  if (heartbeat) {
+    const preferences = await readExperience({ account, conversation: "owner" });
+    const interval = (preferences.preferences.notificationMinIntervalMinutes ?? 30) * 60_000;
+    if (preferences.paused || quietNow(preferences) || (preferences.lastHeartbeatAt && Date.now() - Date.parse(preferences.lastHeartbeatAt) < interval)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
+  }
   if (to === "plow-owner" || heartbeat) to = (await ownerChat(account)).uid;
+  if (heartbeat && (await readExperience({ account, conversation: to })).paused) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
+  // This versioned intent prefix is a pinned 2026.9.6 cron contract. The real
+  // gateway acceptance test covers it so an upstream change cannot remove the
+  // pause gate silently. Ordinary inbound replies have a different intent.
+  const scheduled = guard?.deliveryQueueId?.startsWith("cron-direct-delivery:v1:") === true;
+  const paused = async () => (await readExperience({ account, conversation: "owner" })).paused || (await readExperience({ account, conversation: to })).paused;
+  if (scheduled && await paused()) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const chat = await request<Chat>(account, `/chats/${to}`);
   if (chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
     throw new Error("Email is sent with plow_send_email, not message.");
@@ -35,6 +48,7 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   }
   const attachments: string[] = [];
   for (const url of mediaUrls) {
+    guard?.signal?.throwIfAborted();
     const media = await loadWebMedia(url);
     const upload = await request<{ uid: string; upload_url: string; upload_headers: Record<string, string> }>(account, `/chats/${to}/attachments`, {
       filename: media.fileName ?? "attachment", content_type: media.contentType, size_bytes: media.buffer.length,
@@ -43,8 +57,14 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
+  await guard?.onPlatformSendDispatch?.();
+  if ((scheduled || heartbeat) && await paused()) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
+  guard?.signal?.throwIfAborted();
+  guard?.assertDirectAdapterHandoff?.();
   guard?.assertInvocationCurrent?.();
-  return await postMessage(account, to, text, attachments, heartbeat ? "heartbeat" : undefined);
+  const receipt = await postMessage(account, to, text, attachments, heartbeat ? "heartbeat" : undefined, guard?.signal);
+  if (heartbeat && receipt.messageId) await updateExperience({ account, conversation: "owner" }, () => {}, state => { state.lastHeartbeatAt = new Date().toISOString(); }).catch(() => console.warn("plow: heartbeat rate state could not be saved"));
+  return receipt;
 }
 
 
@@ -310,8 +330,8 @@ const plugin: ChannelPlugin<Account> = {
   outbound: {
     deliveryMode: "direct",
     deliveryCapabilities: { durableFinal: { text: true, media: true, messageSendingHooks: true } },
-    sendText: ctx => (resolveOutboundSendDep<typeof send>(ctx.deps, "plow") ?? send)(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text),
-    sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : []),
+    sendText: ctx => (resolveOutboundSendDep<typeof send>(ctx.deps, "plow") ?? send)(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [], ctx),
+    sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : [], ctx),
   },
 };
 

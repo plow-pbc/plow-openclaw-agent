@@ -536,8 +536,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
 }
 
 
-export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>): Promise<T> {
-  try { return await request<T>(account, path, body, undefined, method, headers); }
+export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>, signal?: AbortSignal): Promise<T> {
+  try { return await request<T>(account, path, body, signal, method, headers); }
   catch (error) {
     if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
       throw new DeliveryUnknownError();
@@ -558,10 +558,10 @@ export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path
 export const isSilent = (text: string) =>
   text.split("\n").filter(line => line.trim()).at(-1)?.trim().replace(/^[.*_ `]+|[.*_ `]+$/g, "") === "NO_REPLY";
 
-export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
+export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat", signal?: AbortSignal) {
   if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const sent = await requestDelivery<{ uid?: unknown } | null>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
-    "POST", kind ? { "Plow-Message-Kind": kind } : undefined);
+    "POST", kind ? { "Plow-Message-Kind": kind } : undefined, signal);
   if (typeof sent?.uid !== "string" || !sent.uid.trim()) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.uid };
 }

@@ -62,7 +62,11 @@ Resolve times with the confirmed timezone, ask when a date or time is ambiguous,
 and store the timezone on recurring schedules. Do not promise a reminder until
 the scheduler returns a job ID. Optional monitoring stays quiet unless something
 changes, completes, fails or needs a decision. Include this rule in the job prompt.
-
+Use plow_notifications to persist pause or resume for the current room, or all
+phone jobs from the owner's main DM. Use automations to cancel a particular job.
+Pausing is effective only after the control tool confirms it. Do not create new
+automations while that scope is paused. Quiet hours suppress optional heartbeats;
+explicitly timed reminders follow the requested time.
 
 ## Judgement
 

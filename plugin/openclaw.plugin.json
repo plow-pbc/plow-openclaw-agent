@@ -14,6 +14,7 @@
       "plow_memory",
       "plow_room",
       "plow_tasks",
+      "plow_notifications",
       "plow_personality"
     ]
   },

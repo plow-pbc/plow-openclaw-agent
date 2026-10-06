@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 
-for (const name of ["boot/personality", "boot/health", "boot/agent-index", "boot/extensions", "boot/config", "boot/identity", "boot/log", "boot/prompt", "boot/main", "boot/process", "boot/probe", "boot/probe-fixture", "boot/mcp-bridge", "plugin/index", "plugin/delivery-guard", "plugin/threads", "plugin/transport", "plugin/email", "plugin/experience", "plugin/experience-state", "plugin/personality-page"]) {
+for (const name of ["boot/personality", "boot/health", "boot/agent-index", "boot/extensions", "boot/config", "boot/identity", "boot/log", "boot/prompt", "boot/main", "boot/process", "boot/probe", "boot/probe-fixture", "boot/mcp-bridge", "plugin/index", "plugin/delivery-guard", "plugin/threads", "plugin/transport", "plugin/email", "plugin/experience", "plugin/experience-state", "plugin/scheduler", "plugin/personality-page"]) {
   const source = await readFile(`/opt/plow/${name}.ts`, "utf8");
   const imports = source.replaceAll(/(from "\.\.\/boot\/[^"\n]+)\.ts"/g, '$1.js"');
   const compiledSource = name.startsWith("plugin/") ? imports.replaceAll('from "../boot/', 'from "../../boot/') : imports;
