@@ -52,6 +52,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       // Model params must not become a legacy model-selection allowlist.
       modelPolicy: {},
       models: { "plow/z-ai/glm-5.2": { params: { extraBody: { reasoning: { enabled: false } } } } },
+      heartbeat: { target: "plow", to: "plow-heartbeat", accountId: "chat" },
     } },
     mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
       url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
@@ -164,6 +165,14 @@ export async function syncConfig(
       await writeFile(includePath, JSON.stringify(value, null, 2) + "\n");
       parent[key] = { $include: includePath };
     }
+  }
+  // An existing config keeps whatever heartbeat route it was born with, so one still on OpenClaw's
+  // implicit owner route moves to the marked one; any other heartbeat setting stays. An explicit
+  // route is the owner's choice, "none" (OpenClaw's own advice for silencing them) included.
+  const defaults = isObject(owner.agents) && isObject(owner.agents.defaults) ? owner.agents.defaults : undefined;
+  const heartbeat = defaults?.heartbeat;
+  if (defaults && (heartbeat === undefined || (isObject(heartbeat) && (heartbeat.target ?? "owner") === "owner"))) {
+    defaults.heartbeat = { ...(isObject(heartbeat) ? heartbeat : {}), ...rendered.agents.defaults.heartbeat };
   }
   const bindingPath = join(includeDir, "binding.json5");
   await writeFile(bindingPath, JSON.stringify(rendered.bindings[0], null, 2) + "\n");
