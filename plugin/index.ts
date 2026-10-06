@@ -258,7 +258,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
             const label = emailLabel(chat, sender);
             // People see no chat ids; that chat's session copy keeps the thread's, to reply there.
             const sent = await durableSend(cfg, route, "chat", target.uid, routeTo, `${label}:\n${text}`, kind,
-              `${label} (thread ${chat.uid}):\n${text}`);
+              { sessionText: `${label} (thread ${chat.uid}):\n${text}` });
             log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
             return { messageIds: [sent] };
           }
