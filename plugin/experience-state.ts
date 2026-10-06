@@ -79,10 +79,11 @@ export async function experienceContext(account: Account, conversation: string, 
   const scope = { account, conversation: ownerDm ? "owner" : conversation };
   const state = await readExperience(scope);
   const room = ownerDm ? await readExperience({ account, conversation }) : state;
+  const globalPause = account.accountId === "chat" && (await readExperience({ account, conversation: "owner" })).paused;
   const persona = (await readExperience({ account, conversation: "agent" })).personality;
   return { ...(ownerDm ? { owner_preferences: state.preferences } : {}), room: { mode: account.groupMode ?? "helper", ...room.room },
     ...(persona ? { personality: { sliders: persona, guidance: personalityInstructions(persona) } } : {}),
-    memory: [...state.notes.map(note => ({ ...note, scope: ownerDm ? "owner" : "conversation" })), ...(ownerDm ? room.notes.map(note => ({ ...note, scope: "conversation" })) : [])].slice(-8), notifications_paused: state.paused || room.paused };
+    memory: [...state.notes.map(note => ({ ...note, scope: ownerDm ? "owner" : "conversation" })), ...(ownerDm ? room.notes.map(note => ({ ...note, scope: "conversation" })) : [])].slice(-8), notifications_paused: state.paused || room.paused || globalPause };
 }
 export function quietNow(state: ExperienceState, now = new Date()): boolean {
   const hours = state.preferences.quietHours;

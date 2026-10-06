@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { accepts, request, normalizedHandle, ownerChat, type Account, type Chat } from "./transport.ts";
 import { conversationUid, ownerDmTurn } from "./threads.ts";
-import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, scopePath, type Scope } from "./experience-state.ts";
+import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, scopePath, type Scope, type ExperienceState } from "./experience-state.ts";
 import { threadIdempotencyKey } from "./delivery-guard.ts";
 import { scheduler, type Scheduler } from "./scheduler.ts";
 import { personalitySchema, personalityPatchSchema, personalityInstructions } from "../boot/personality.ts";
@@ -50,6 +50,25 @@ const jobSchema = z.object({
   delivery: z.object({ channel: z.string().optional(), to: z.string().optional(), accountId: z.string().optional() }).passthrough().optional(),
 }).passthrough();
 
+function notificationTargets(job: z.infer<typeof jobSchema>) {
+  const session = job.owner?.sessionKey ?? job.sessionKey;
+  return [job.delivery?.to?.replace(/^plow:/i, ""), session === "agent:main:main" ? "plow-owner" : session?.includes(":plow:") ? session.split(":").at(-1) : undefined];
+}
+async function pausedScope(account: Account, targets: (string | undefined)[], except?: string): Promise<Scope | undefined> {
+  let ownerUid: Promise<string> | undefined;
+  for (const target of new Set(["owner", ...targets])) {
+    if (!target) continue;
+    const uid = ["plow-owner", "plow-heartbeat"].includes(target) ? await (ownerUid ??= ownerChat(account).then(chat => chat.uid)) : target;
+    if (uid !== except && (await readExperience({ account, conversation: uid })).paused) return { account, conversation: uid };
+  }
+}
+export async function notificationPaused(account: Account, destination?: string, jobId?: string): Promise<boolean> {
+  if (await pausedScope(account, [destination])) return true;
+  if (!jobId) return false;
+  const job = jobSchema.parse(await scheduler.request("cron.get", { id: jobId }));
+  return !!await pausedScope(account, notificationTargets(job));
+}
+
 // Pinned 2026.9.6 cron.get read-view fields that change without a config edit.
 // Preserve every other field, including extension fields, when reconciling a lost response.
 const jobRuntimeFields = new Set(["configRevision", "state", "updatedAtMs", "effectiveAgentId", "nextRunAtMs", "lastRunAtMs", "lastRunStatus", "lastRunError", "lastDelivered", "lastDeliveryStatus", "lastDeliveryError", "deliverySuppressionReason", "lastFailureNotificationDelivered", "lastFailureNotificationDeliveryStatus", "lastFailureNotificationDeliveryError"]);
@@ -88,22 +107,12 @@ async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: P
   if (action === "pause") await updateExperience(scope, ctx.assertInvocationCurrent, state => { state.paused = true; });
   const agentId = ctx.agentId ?? "main";
   const state = await readExperience(scope);
+  const recordSuspended = (target: Scope, entry: ExperienceState["suspendedJobs"][number]) => updateExperience(target, ctx.assertInvocationCurrent, value => {
+    value.suspendedJobs = [...value.suspendedJobs.filter(job => job.id !== entry.id), entry];
+  });
   const belongs = (job: z.infer<typeof jobSchema>) => (job.owner?.agentId ?? job.agentId ?? agentId) === agentId
     && (all ? job.delivery?.channel === "plow" : (job.owner?.sessionKey ?? job.sessionKey) === ctx.sessionKey || job.delivery?.to?.replace(/^plow:/i, "") === scope.conversation)
     && (job.delivery?.accountId ?? job.owner?.accountId ?? "chat") === "chat";
-  let ownerUid: Promise<string> | undefined;
-  const heldBy = async (job: z.infer<typeof jobSchema>): Promise<Scope | undefined> => {
-    const ownerScope = { ...scope, conversation: "owner" };
-    if (scope.conversation !== "owner" && (await readExperience(ownerScope)).paused) return ownerScope;
-    const session = job.owner?.sessionKey ?? job.sessionKey;
-    const source = session === "agent:main:main" ? "plow-owner" : session?.includes(":plow:") ? session.split(":").at(-1) : undefined;
-    for (const target of new Set([job.delivery?.to?.replace(/^plow:/i, ""), source])) {
-      if (!target) continue;
-      const uid = ["plow-owner", "plow-heartbeat"].includes(target) ? await (ownerUid ??= ownerChat(scope.account).then(chat => chat.uid)) : target;
-      const targetScope = { ...scope, conversation: uid };
-      if (uid !== scope.conversation && (await readExperience(targetScope)).paused) return targetScope;
-    }
-  };
   if (action === "pause") {
     for await (const job of cronJobs(gateway, agentId)) {
       if (!belongs(job)) continue;
@@ -113,25 +122,22 @@ async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: P
       const recorded = state.suspendedJobs.find(item => item.id === current.id);
       if (!current.enabled) {
         if (recorded?.pendingDefinition && isDeepStrictEqual(recorded.pendingDefinition, disabledDefinition(current))) {
-          await updateExperience(scope, ctx.assertInvocationCurrent, value => {
-            value.suspendedJobs = [...value.suspendedJobs.filter(item => item.id !== current.id), { id: current.id, revision: current.configRevision! }];
-          });
+          await recordSuspended(scope, { id: current.id, revision: current.configRevision });
         }
         if (recorded) await cancelRunning?.(current);
         continue;
       }
-      await updateExperience(scope, ctx.assertInvocationCurrent, value => {
-        value.suspendedJobs = [...value.suspendedJobs.filter(item => item.id !== current.id), { id: current.id, revision: current.configRevision!, pendingDefinition: disabledDefinition(current) }];
-      });
+      await recordSuspended(scope, { id: current.id, revision: current.configRevision, pendingDefinition: disabledDefinition(current) });
       ctx.assertInvocationCurrent();
       const updated = jobSchema.parse(await gateway.request("cron.update", { id: job.id, expectedConfigRevision: current.configRevision, patch: { enabled: false } }));
       if (!updated.configRevision) throw new Error("Scheduler did not confirm the disabled revision");
-      await updateExperience(scope, ctx.assertInvocationCurrent, value => {
-        value.suspendedJobs = [...value.suspendedJobs.filter(item => item.id !== job.id), { id: job.id, revision: updated.configRevision! }];
-      });
+      await recordSuspended(scope, { id: job.id, revision: updated.configRevision });
       await cancelRunning?.(current);
     }
   } else {
+    // An accepted enable may lose its response. Open the requested gate first
+    // so a one-shot job can deliver; keep the journal until effects reconcile.
+    await updateExperience(scope, ctx.assertInvocationCurrent, value => { value.paused = false; });
     const existing = new Set<string>();
     for await (const job of cronJobs(gateway, agentId)) existing.add(job.id);
     for (const suspended of state.suspendedJobs) {
@@ -139,13 +145,11 @@ async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: P
         const current = jobSchema.parse(await gateway.request("cron.get", { id: suspended.id }));
         const unchanged = suspended.pendingDefinition ? isDeepStrictEqual(suspended.pendingDefinition, disabledDefinition(current)) : current.configRevision === suspended.revision;
         if (!current.enabled && belongs(current) && unchanged) {
-          if (!current.configRevision) throw new Error("Scheduler did not supply a revision; pause remains active");
-          const remainingPause = await heldBy(current);
+          if (!current.configRevision) throw new Error("Scheduler did not supply a revision; resume is incomplete");
+          const remainingPause = await pausedScope(scope.account, notificationTargets(current), scope.conversation);
           if (remainingPause) {
             // Write the receiving journal first. A crash leaves two recoverable copies.
-            await updateExperience(remainingPause, ctx.assertInvocationCurrent, value => {
-              value.suspendedJobs = [...value.suspendedJobs.filter(job => job.id !== suspended.id), { id: suspended.id, revision: current.configRevision! }];
-            });
+            await recordSuspended(remainingPause, { id: suspended.id, revision: current.configRevision });
           } else {
             ctx.assertInvocationCurrent();
             await gateway.request("cron.update", { id: suspended.id, expectedConfigRevision: current.configRevision, patch: { enabled: true } });
@@ -154,7 +158,6 @@ async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: P
       }
       await updateExperience(scope, ctx.assertInvocationCurrent, value => { value.suspendedJobs = value.suspendedJobs.filter(job => job.id !== suspended.id); });
     }
-    await updateExperience(scope, ctx.assertInvocationCurrent, value => { value.paused = false; });
   }
   const final = await readExperience(scope);
   return { paused: final.paused, suspendedJobs: final.suspendedJobs.map(job => job.id) };
@@ -282,11 +285,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
         const configured = api.config?.channels?.plow as Account | undefined;
         if (!configured) throw new Error("Plow configuration unavailable");
         const account = { ...configured, accountId: "chat" };
-        if ((await readExperience({ account, conversation: "owner" })).paused) return { block: true, blockReason: "Scheduled notifications are paused" };
-        const job = jobSchema.parse(await scheduler.request("cron.get", { id: cronId }));
-        const target = job.delivery?.to?.replace(/^plow:/i, "");
-        const uid = target === "plow-owner" ? (await ownerChat(account)).uid : target;
-        if (uid && (await readExperience({ account, conversation: uid })).paused) return { block: true, blockReason: "This room's scheduled notifications are paused" };
+        if (await notificationPaused(account, undefined, cronId)) return { block: true, blockReason: "Scheduled notifications are paused in their source, destination or global scope" };
       } catch { return { block: true, blockReason: "Scheduled notification state cannot be verified; inspect the scheduler before retrying" }; }
     }
     if (event.toolName !== "automations" || event.params?.action !== "add") return;

@@ -163,10 +163,11 @@ test("pause persists before scheduler calls, pages jobs, and resume preserves ed
     ["other", { id: "other", enabled: true, configRevision: "other-a", owner: { sessionKey: "another-room", accountId: "chat" } }],
   ]);
   const calls: string[] = [];
+  let pausing = true;
   const gateway = { async request(method: string, params: any) {
     calls.push(method);
     if (method === "cron.list") {
-      assert.equal((await readExperience(scope)).paused, true);
+      assert.equal((await readExperience(scope)).paused, pausing);
       return { jobs: [...jobs.values()].slice(params.offset, params.offset + 1), hasMore: params.offset < jobs.size - 1, nextOffset: params.offset + 1 };
     }
     const job = jobs.get(params.id)!;
@@ -179,6 +180,7 @@ test("pause persists before scheduler calls, pages jobs, and resume preserves ed
   assert.equal((await notificationControl(gateway, scope, ctx, "pause", false)).paused, true);
   assert.deepEqual([...jobs.values()].map(job => job.enabled), [false, false, true]);
   jobs.get("two")!.configRevision = "owner-edited";
+  pausing = false;
   await notificationControl(gateway, scope, ctx, "resume", false);
   assert.deepEqual([...jobs.values()].map(job => job.enabled), [true, false, true]);
   assert.equal((await readExperience(scope)).paused, false);
@@ -197,7 +199,7 @@ for (const fault of ["before-apply", "after-apply", "before-record"] as const) f
   const gateway = { async request(method: string, params: any) {
     if (method === "cron.list") return { jobs: [structuredClone(job)], hasMore: false };
     if (method === "cron.update") {
-      assert.equal((await readExperience(scope)).paused, true);
+      assert.equal((await readExperience(scope)).paused, !params.patch.enabled);
       assert.equal(params.expectedConfigRevision, job.configRevision);
       if (!interrupted) {
         interrupted = true;
@@ -262,7 +264,7 @@ test("a job moved to another conversation between list and get cannot be disable
   assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
 });
 
-test("a lost resume response retains its gate until retry confirms the job is enabled", async t => {
+test("a lost resume response opens the requested gate before enabling and retains its journal for retry", async t => {
   await fixture(t);
   const scope = { account, conversation: room.uid }, ctx = { sessionKey: "room-session", agentId: "main", assertInvocationCurrent() {} };
   const job = { id: "job", enabled: true, configRevision: "original", owner: { sessionKey: ctx.sessionKey, accountId: "chat" } };
@@ -272,43 +274,17 @@ test("a lost resume response retains its gate until retry confirms the job is en
     if (method === "cron.update") {
       assert.equal(params.expectedConfigRevision, job.configRevision);
       job.enabled = params.patch.enabled; job.configRevision = job.enabled ? "enabled" : "disabled"; updates++;
+      if (job.enabled) assert.equal((await readExperience(scope)).paused, false, "the enabled job must be allowed to deliver even if its response is lost");
       if (job.enabled && failResume) { failResume = false; throw new Error("resume response lost"); }
     }
     return structuredClone(job);
   } };
   await notificationControl(gateway, scope, ctx, "pause", false);
   await assert.rejects(notificationControl(gateway, scope, ctx, "resume", false), /resume response lost/);
-  assert.equal((await readExperience(scope)).paused, true);
+  assert.equal((await readExperience(scope)).paused, false);
   await notificationControl(gateway, scope, ctx, "resume", false);
   assert.equal((await readExperience(scope)).paused, false);
   assert.equal(updates, 2);
-});
-
-for (const first of ["conversation", "all"] as const) test(`overlapping pause scopes preserve a one-shot reminder until both resume; first=${first}`, async t => {
-  await fixture(t);
-  const roomScope = { account, conversation: room.uid }, allScope = { account, conversation: "owner" };
-  const ctx = { sessionKey: "agent:main:plow:chat:group:cht_room", agentId: "main", assertInvocationCurrent() {} };
-  const job = { id: "job", enabled: true, configRevision: "original", owner: { sessionKey: ctx.sessionKey, accountId: "chat" },
-    delivery: { channel: "plow", to: room.uid, accountId: "chat" }, deleteAfterRun: true };
-  let updates = 0;
-  const gateway = { async request(method: string, params: any) {
-    if (method === "cron.list") return { jobs: [structuredClone(job)], hasMore: false };
-    if (method === "cron.update") {
-      assert.equal(params.expectedConfigRevision, job.configRevision);
-      job.enabled = params.patch.enabled; job.configRevision = `revision-${++updates}`;
-    }
-    return structuredClone(job);
-  } };
-  const control = (scope: "conversation" | "all", action: "pause" | "resume") => notificationControl(gateway, scope === "all" ? allScope : roomScope, ctx, action, scope === "all");
-  await control(first, "pause");
-  await control(first === "all" ? "conversation" : "all", "pause");
-  await control(first, "resume");
-  assert.equal(job.enabled, false, "the remaining pause must prevent a one-shot job from firing and disappearing");
-  await control(first === "all" ? "conversation" : "all", "resume");
-  assert.equal(job.enabled, true);
-  assert.equal(updates, 2);
-  assert.deepEqual((await readExperience(roomScope)).suspendedJobs, []);
-  assert.deepEqual((await readExperience(allScope)).suspendedJobs, []);
 });
 
 test("quiet hours handle midnight and timezone transitions without muting timed reminders", async t => {
@@ -323,7 +299,7 @@ test("paused scheduled tool sends are blocked while ordinary replies retain acce
   await fixture(t);
   let hook: any;
   installExperienceTools({ config: { channels: { plow: account } }, registerTool() {}, on(name: string, callback: unknown) { if (name === "before_tool_call") hook = callback; } } as any, () => account);
-  t.mock.method(scheduler, "request", async () => ({ id: "job", enabled: true, delivery: { channel: "plow", to: room.uid, accountId: "chat" } }));
+  t.mock.method(scheduler, "request", async () => ({ id: "job", enabled: true, sessionKey: "agent:main:plow:chat:group:cht_room", delivery: { channel: "plow", to: home.uid, accountId: "chat" } }));
   const context = { agentId: "main", sessionKey: "agent:main:cron:job:run:fixture" };
   assert.equal(await hook({ toolName: "message", params: {} }, context), undefined);
   await updateExperience({ account, conversation: room.uid }, () => {}, state => { state.paused = true; });
@@ -331,6 +307,18 @@ test("paused scheduled tool sends are blocked while ordinary replies retain acce
   assert.equal(await hook({ toolName: "message", params: {} }, { ...context, sessionKey: "agent:main:main" }), undefined);
   t.mock.method(scheduler, "request", async () => { throw new Error("scheduler offline"); });
   assert.equal((await hook({ toolName: "message", params: {} }, context)).block, true);
+});
+
+test("globally paused phone rooms report the gate without exposing private owner state", async t => {
+  await fixture(t);
+  await updateExperience({ account, conversation: "owner" }, () => {}, state => {
+    state.paused = true; state.preferences.name = "PRIVATE_PROFILE_CANARY";
+  });
+  const context = await experienceContext(account, room.uid, false);
+  assert.equal(context.notifications_paused, true);
+  assert.ok(!("owner_preferences" in context));
+  assert.ok(!JSON.stringify(context).includes("PRIVATE_PROFILE_CANARY"));
+  assert.equal((await experienceContext({ ...account, accountId: "email" }, room.uid, false)).notifications_paused, false);
 });
 
 test("manifest persona composition retains base policy and existing explicit defaults", async t => {

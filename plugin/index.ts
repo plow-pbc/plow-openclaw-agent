@@ -11,7 +11,7 @@ import { request, requestDelivery, normalizedHandle, postMessage, isSilent, list
 import { conversationUid, ownerDmTurn, startThread } from "./threads.ts";
 export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
-import { installExperienceTools } from "./experience.ts";
+import { installExperienceTools, notificationPaused } from "./experience.ts";
 import { experienceContext, readExperience, updateExperience, quietNow } from "./experience-state.ts";
 import { installPersonalityPage } from "./personality-page.ts";
 
@@ -37,7 +37,9 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   // gateway acceptance test covers it so an upstream change cannot remove the
   // pause gate silently. Ordinary inbound replies have a different intent.
   const scheduled = guard?.deliveryQueueId?.startsWith("cron-direct-delivery:v1:") === true;
-  const paused = async () => (await readExperience({ account, conversation: "owner" })).paused || (await readExperience({ account, conversation: to })).paused;
+  const cronId = scheduled ? guard?.deliveryQueueId?.match(/^cron-direct-delivery:v1:cron:([^:]+):\d+:/)?.[1] : undefined;
+  if (scheduled && !cronId) throw new Error("Scheduled delivery provenance cannot be verified");
+  const paused = async () => await notificationPaused(account, to, cronId);
   if (scheduled && await paused()) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const chat = await request<Chat>(account, `/chats/${to}`);
   if (chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
