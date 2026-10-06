@@ -68,6 +68,17 @@ export async function request<T>(account: Pick<Account, "apiBase">, path: string
   return await response.json() as T;
 }
 
+export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
+  try { return await request<T>(account, path, body, undefined, method); }
+  catch (error) {
+    if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
+      throw new DeliveryUnknownError();
+    }
+    throw error;
+  }
+}
+
+
 export function accepts(account: Account, chat: Chat): boolean {
   const line = account.accountId === "email" ? account.emailLineUid : account.lineUid;
   return chat.status === "active" && chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === line);

@@ -1,6 +1,6 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { createHash } from "node:crypto";
-import { request, findOwnerChat, HttpError, DeliveryUnknownError, type Account, type Chat } from "./transport.ts";
+import { request, requestDelivery, findOwnerChat, DeliveryUnknownError, type Account, type Chat } from "./transport.ts";
 
 export type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
 export function conversationUid(context: Requester): string | undefined {
@@ -37,12 +37,7 @@ export async function startThread(account: Account, context: Requester, callId: 
   const members = [...new Set([threadHandle(owner.provider_key), ...args.members.map(threadHandle)])].sort();
   const trusted = groupTrust(account, args.trusted);
   const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, callId, members, args.body, trusted])).digest("hex");
-  let chat: { uid: string };
-  try { chat = await request(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey }); }
-  catch (error) {
-    if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) throw new DeliveryUnknownError();
-    throw error;
-  }
+  const chat = await requestDelivery<{ uid: string }>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
   if (!chat.uid) throw new DeliveryUnknownError();
   return { chat_uid: chat.uid, message_sent: true };
 }

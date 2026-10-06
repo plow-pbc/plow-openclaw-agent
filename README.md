@@ -309,8 +309,10 @@ Fresh installations seed their entries; restarts preserve owner disablement
 and model settings. Images without this file keep the existing boot behavior.
 
 Workflow plugins can import `startThread` from `plugin/dist/threads.js` and
-`sendText` from `plugin/dist/index.js`. These use the native owner-DM gate,
-configured group trust, stable thread idempotency and durable channel delivery.
+`sendText` from `plugin/dist/index.js`. `startThread` enforces the owner-DM
+gate, configured group trust and stable thread idempotency. `sendText` checks
+that the account serves the destination and uses durable channel delivery;
+the calling workflow must authorize the send.
 Supplied phone or iMessage email recipients need no Contacts lookup.
 
 A `before_dispatch` handler that journals an inbound message for its own

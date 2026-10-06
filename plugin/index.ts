@@ -6,7 +6,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, pluginHandoff, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, pluginHandoff, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { conversationUid, ownerDmTurn, startThread } from "./threads.ts";
 export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
@@ -23,16 +23,6 @@ const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply."
 function normalizedHandle(handle: string): string {
   const compact = handle.trim().replace(/[\s().-]/g, "");
   return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
-}
-
-async function requestDelivery<T>(account: Account, path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
-  try { return await request<T>(account, path, body, undefined, method); }
-  catch (error) {
-    if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
-      throw new DeliveryUnknownError();
-    }
-    throw error;
-  }
 }
 
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
