@@ -70,8 +70,9 @@ and a `contracts.tools` array containing every tool offered here.
 
 Manifest-listed plugin and skill directories, all their contents, the manifest,
 and the parents of installed paths must be root-owned and not writable by the
-group or others. Symlink targets must remain under `/opt/`; their parents receive
-the same checks. These rules prevent replacement through a writable parent.
+group or others. Symlinks are rejected in the manifest, installation contents,
+and every parent component, including links that currently point inside `/opt/`.
+These rules prevent replacement through a writable parent or an intermediate link.
 The Dockerfile can copy these files as root and then return to `USER node`.
 
 ## Default fields
@@ -97,6 +98,12 @@ These rules apply to a fresh or restarted install:
 5. Saved room settings override the image's room mode for that room.
 6. Saved public personality adds style guidance across the agent's conversations.
 7. Saved private owner preferences enter only the owner's main phone DM.
+
+On every boot, `skills.load.extraDirs` merges the base skill directory, the
+manifest's directories, and the owner's existing array, removing duplicates.
+An upgraded image therefore makes its newly declared skills available on an
+existing volume without discarding owner-added directories. Keep this setting
+as an array of paths; another shape fails with an actionable configuration error.
 
 The base composes maintained `prompt/BASE.md`, builder guidance, current trust
 guidance, and connected Mac instructions. Base text has a 13,000-character cap;

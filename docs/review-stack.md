@@ -9,11 +9,15 @@ Review and merge from the bottom upward.
 | 1 | [Support image-installed native workflow plugins](https://github.com/plow-pbc/plow-openclaw-agent/pull/66) | Review boot/extensions.ts, config plugin load paths, and the shared plugin APIs. |
 | 2 | [Keep groups quiet and recover durable conversation history](https://github.com/plow-pbc/plow-openclaw-agent/pull/67) | Review plugin/transport.ts and plugin/delivery-guard.ts, including cyclic cursors, unread windows beyond the recent UID cache, stable thread intent and adoption versus delivery. |
 | 3 | [Add strict builder definitions and installation preflight](https://github.com/plow-pbc/plow-openclaw-agent/pull/68) | Review boot/extensions.ts and boot/prompt.ts first, then config rendering and the Docker build. |
-| 4 | [Add scoped owner controls and personality settings](https://github.com/plow-pbc/plow-openclaw-agent/pull/69) | Review plugin/experience-state.ts, then the four scoped tools in plugin/experience.ts and personality-page.ts. |
-| 5 | [Add native workers and durable notification pause](https://github.com/plow-pbc/plow-openclaw-agent/pull/70) | Review worker routing and tools in boot/config.ts, then task/notification tools and guards. |
-| 6 | [Bound phone images and route vision to Sonnet](https://github.com/plow-pbc/plow-openclaw-agent/pull/71) | Review plugin/media.ts, the inbound attachment path and image configuration. |
-| 7 | [Verify native gateway behavior and two-model dialogues](https://github.com/plow-pbc/plow-openclaw-agent/pull/72) | Review tests/gateway-acceptance.ts and the evaluation rubric before the fixtures. |
-| 8 | [Builder SOPs, starters, and prebuilt default](https://github.com/plow-pbc/plow-openclaw-agent/pull/64) | Teaching material, release procedures, starter personas, and shared/default prompt clarity |
+| 4 | [Fence native invocations and retain delivery state](https://github.com/plow-pbc/plow-openclaw-agent/pull/73) | Review SDK context version 2, current-invocation checks, and delivery finalization. |
+| 5 | [Add scoped preferences, memory and room controls](https://github.com/plow-pbc/plow-openclaw-agent/pull/69) | Review plugin/experience-state.ts, then the three scoped tools in plugin/experience.ts and current membership/provenance. |
+| 6 | [Add authenticated personality preview, save and reset](https://github.com/plow-pbc/plow-openclaw-agent/pull/74) | Review the axis registry, sparse updates, personality-page.ts, origin/revision guards and UI. |
+| 7 | [Add isolated workers and durable task commitments](https://github.com/plow-pbc/plow-openclaw-agent/pull/70) | Review worker routing and tool limits in boot/config.ts, then managed-flow commitments and cancellation notice suppression. |
+| 8 | [Add recoverable notification pause and resume](https://github.com/plow-pbc/plow-openclaw-agent/pull/75) | Review persist-before-effect journals, scheduler revisions, overlapping scopes, stable pagination and physical delivery guards. |
+| 9 | [Bound phone images and route vision to Sonnet](https://github.com/plow-pbc/plow-openclaw-agent/pull/71) | Review plugin/media.ts, the inbound attachment path and image configuration. |
+| 10 | [Verify native gateway effects and recovery](https://github.com/plow-pbc/plow-openclaw-agent/pull/72) | Review tests/gateway-acceptance.ts and the existing Caddy-based preview before running the fixtures. |
+| 11 | [Add opt-in model dialogue evaluation](https://github.com/plow-pbc/plow-openclaw-agent/pull/76) | Review the human rubric, synthetic cases, literal assertion limits and explicitly paid workflow. |
+| 12 | [Builder SOPs, starters, and prebuilt default](https://github.com/plow-pbc/plow-openclaw-agent/pull/64) | Teaching material, release procedures, starter personas, and shared/default prompt clarity |
 
 ## Review each layer
 
@@ -24,9 +28,9 @@ Review and merge from the bottom upward.
 5. Inspect the attached image and video with their stated evidence boundary.
 6. Leave feedback on the layer that owns the behavior.
 
-Layers 1–6 run the pinned-image runtime suite and offline gateway probe.
-Layer 7 adds real native gateway acceptance and an optional credentialed dialogue
-evaluation. Layer 8 preserves those checks and adds the builder-facing defaults
+Layers 1–9 run the pinned-image runtime suite and offline gateway probe.
+Layer 10 adds real native gateway acceptance; layer 11 adds optional credentialed
+dialogue evaluation. Layer 12 preserves those checks and adds the builder-facing defaults
 and documentation. The visual attachments show the integrated experience using
 fixture transport and synthetic live-model calls; they do not establish a live
 phone or email provider connection.
@@ -34,8 +38,9 @@ phone or email provider connection.
 ## Inspect the main boundaries
 
 - **Installation and ownership:** `boot/extensions.ts` validates image-owned
-  code, parents, symlink targets, and declared tool contracts. `boot/config.ts`
-  maintains Plow-owned includes and preserves explicit owner choices.
+  code, parents, absence of symlinks, and declared tool contracts. `boot/config.ts`
+  maintains Plow-owned includes, merges image skill directories on restart, and
+  preserves explicit owner choices.
 - **Conversation and effects:** `plugin/transport.ts` owns recovery and provider
   receipts. `plugin/threads.ts` refreshes the owner-DM gate. `plugin/index.ts`
   uses SDK context version 2 and separates source adoption from delivered effects.

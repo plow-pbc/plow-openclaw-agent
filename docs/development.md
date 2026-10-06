@@ -121,6 +121,10 @@ writes, real silence and group delivery, native Sonnet image routing, scheduler
 pause/resume through a full-state backup/restore, reminder execution/delivery and
 cancellation, a pause during in-flight generation, responsive background workers
 and their cancellation, and the pinned client's native SQLite usage reader.
+It also checks lost native disable responses, invocation revocation after a
+successful mutation, and both room/global pause orders. The stress suite covers
+all 36 source-room/destination-room/global pause/resume orderings and 205 jobs
+across pagination boundaries.
 
 ```sh
 docker run --rm --user root --network none \
@@ -128,6 +132,11 @@ docker run --rm --user root --network none \
   -v "$PWD/tests:/opt/plow/tests:ro" plow-openclaw:test sh -c \
   'mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node /opt/plow/tests/gateway-acceptance.ts'
 ```
+
+For an interactive personality preview, follow
+[the gateway fixture instructions](../tests/gateway-acceptance.md#inspect-the-personality-page).
+The preview uses the existing Caddy boundary with a loopback-only host port and
+synthetic identity; it never loads a live credentials file.
 
 Live dialogue evaluations require a dedicated agent credential. They call both
 configured models with synthetic context and never send phone or email messages:

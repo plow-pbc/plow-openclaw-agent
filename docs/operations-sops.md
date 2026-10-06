@@ -48,7 +48,8 @@ The rotated boot log also lives at `/var/lib/plow/boot.log`.
 1. Check health separately from container process status.
 2. Find the first boot error. Identity lookup, manifest preflight, config rendering,
    and gateway startup are distinct stages.
-3. If preflight fails, inspect the named path, ownership, modes, and symlink target.
+3. If preflight fails, inspect the named path, ownership, modes, and all parent
+   components. Symlinks are rejected, including links inside `/opt/`.
    Rebuild immutable installation content rather than making it writable.
 4. If identity fails, verify the selected line, API root, and credential injection.
    `PLOW_API_BASE` is the API root without `/v1`.
@@ -166,7 +167,11 @@ verify these boundaries.
 **Outcome:** work stops in its intended scope without claiming unrelated deletion.
 
 1. Inspect notification status and pause the intended room or all owner phone work.
-2. Inspect suspended-job IDs and any partial scheduler error.
+2. Inspect suspended-job IDs and any partial scheduler error. A lost disable
+   response leaves a pending journal entry; retry pause or resume with a fresh
+   authorized invocation. Resume preserves later job edits and pre-disabled jobs.
+   If another room or global pause remains active, the job's journal moves there
+   and it stays disabled until that scope resumes.
 3. Cancel active tasks through their native task records.
 4. Cancel associated automations separately.
 5. Export or forget scoped memory when requested. Historical transcripts and

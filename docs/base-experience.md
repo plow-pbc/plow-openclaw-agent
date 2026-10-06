@@ -27,7 +27,7 @@ with absolute `/opt/` directories; `plugins` with id, path, tool names and an
 explicit conversation-access boolean; `guestTools`; and defaults for `groupMode`
 and `threadTrust`. Unknown fields, versions, duplicate plugin IDs, invalid paths
 and writable plugin installations fail preflight. Manifest and installation
-parents must also be root-owned and immutable, including symlink-target parents,
+parents must also be root-owned, immutable and free of symlinks,
 so the agent cannot replace a read-only file or directory through its parent.
 Extra plugins must declare
 their tools in `openclaw.plugin.json`. Images should install immutable code as
@@ -115,10 +115,15 @@ scope with native scheduler revisions and cancels matching active native runs. A
 gate at physical cron delivery suppresses output already generating when pause
 was persisted. It uses the pinned runtime's versioned cron intent prefix, covered
 by the real gateway acceptance test.
-Partial failures keep the gate active and report the incomplete stop. New
-automations are blocked while paused. Resume re-enables only jobs that are still
-disabled at the exact revision this control recorded; edited/deleted jobs remain
-as the owner left them. An already confirmed external send cannot be withdrawn.
+Partial failures keep the gate active and report the incomplete stop. A disable
+intent is journaled before the scheduler mutation, so a lost response or revoked
+invocation cannot strand an unrecorded disabled job. Recovery compares the
+unchanged public job definition and uses the scheduler's current revision for
+the final update. Confirmed journal entries require their exact recorded revision;
+edited/deleted jobs remain as the owner left them. New automations are blocked
+while paused. Overlapping source-room, destination-room and global pauses transfer
+the journal to a remaining paused scope; only the last resume enables the job.
+An already confirmed external send cannot be withdrawn.
 Cancel tasks and their associated automations separately when ending a workflow.
 
 Quiet hours use IANA timezones including DST. Optional heartbeat delivery also

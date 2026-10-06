@@ -122,9 +122,22 @@ configuration revisions and cancels owned active runs. A scheduler failure can
 leave partial job changes while the delivery gate remains paused. Report that
 partial outcome accurately.
 
-Resume restores only jobs still at the suspended revision. It does not undo a
-user's later schedule edits. Direct replies remain available while paused.
-New automations in the paused scope are blocked.
+Before disabling each job, the control stores its intended disabled definition.
+If the response is lost, or the invocation is cancelled before recording the
+response, a fresh pause/resume can reconcile that unchanged definition against
+the native scheduler. This preserves recoverability without ignoring cancellation.
+
+Resume restores only unchanged jobs disabled by this control. Confirmed entries
+must match their recorded revision; pending entries must match the recorded public
+definition before updating with the current revision. It does not undo a user's
+later schedule edits or re-enable jobs that were already disabled.
+
+Room and global pauses can overlap. The job stays disabled while its source room,
+destination room, or all-scope gate remains paused. Resume transfers its journal
+to the remaining scope before removing the original entry; the last resume
+re-enables it. Direct replies remain available while paused. New automations in
+the paused scope are blocked. Paginated job listing uses stable names so disabling
+an earlier page cannot move unread jobs past the next page.
 
 Examples: "Pause scheduled notifications in this room" and "Resume all scheduled
 phone notifications." For one reminder, remove that automation directly.

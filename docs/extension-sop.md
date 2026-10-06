@@ -81,7 +81,10 @@ base scheduler or receipt registry.
    The base's `build.ts` compiles base sources, not arbitrary external plugins.
 2. Include native plugin package metadata and `openclaw.plugin.json`.
 3. Give the manifest a unique `id` and a `contracts.tools` list.
-4. Copy the package under a root-owned `/opt/` directory.
+4. Copy the package under a root-owned `/opt/` directory. Package real files:
+   symlinks anywhere in the installation or its parents fail preflight. Use your
+   plugin's build/package step to copy bundled dependencies rather than linking
+   to a mutable workspace. Keep directories and files non-writable by group/others.
 5. Add `id`, `path`, `tools`, and `conversationAccess` in `agent.json`.
 6. Add only the guest-safe subset to `guestTools`.
 7. Return to the inherited runtime user and run build and startup preflight.
