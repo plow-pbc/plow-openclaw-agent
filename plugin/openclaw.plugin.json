@@ -55,48 +55,6 @@
               "trusted",
               "untrusted"
             ]
-          },
-          "groupMode": {
-            "type": "string",
-            "enum": [
-              "helper",
-              "coordinator",
-              "facilitator"
-            ]
-          },
-          "dashboardUrl": {
-            "type": "string"
-          },
-          "personalityDefaults": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "companion-coworker": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-              },
-              "genz-boomer": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-              },
-              "execute-collaborate": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-              },
-              "playful-serious": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-              },
-              "polite-unfiltered": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-              }
-            }
           }
         }
       }
