@@ -364,7 +364,8 @@
         "suspendedJobs": [
           "synthetic-job-1"
         ]
-      }
+      },
+      "tools_available": []
     },
     "messages": [
       {
@@ -385,7 +386,10 @@
       "is still suspended",
       "is still showing as suspended",
       "is disabled",
-      "is still disabled"
+      "is still disabled",
+      "let me check the scheduler",
+      "I'm checking the scheduler",
+      "I am checking the scheduler"
     ],
     "maxChars": 500
   },
