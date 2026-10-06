@@ -29,7 +29,6 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
     if (scenario === "group-speakers") void delay(40).then(() => send(third));
   });
   const contexts: { messageId: string; message: { rawBody: string }; sender: { id: string } }[] = [];
-  const times: number[] = [];
   const toolsDisabled: (boolean | undefined)[] = [];
   const combined = scenario === "burst" || scenario === "revoked";
   const sourceIds = scenario === "group-speakers" ? ["first", "second", "third"] : ["first", "second"];
@@ -42,7 +41,6 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
       inbound: {
         buildContext: async (context: typeof contexts[number]) => { contexts.push(context); return context; },
         dispatch: async (dispatch: { replyOptions: { disableTools?: boolean; turnAdoptionLifecycle: { onAdopted: () => Promise<void> } } }) => {
-          times.push(Date.now());
           toolsDisabled.push(dispatch.replyOptions.disableTools);
           await dispatch.replyOptions.turnAdoptionLifecycle.onAdopted();
           const adopted = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
@@ -53,8 +51,8 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
       },
     } },
   });
-  const started = Date.now();
-  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: 300 } } } }, abortSignal: controller.signal, log: { info() {} } });
+  // Immediate inputs must flush the burst before the 6s guard, despite a 30s debounce.
+  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: scenario === "slash" || scenario === "media" ? 30_000 : 300 } } } }, abortSignal: controller.signal, log: { info() {} } });
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
   if (scenario === "abort") {
     assert.deepEqual(contexts, []);
@@ -67,7 +65,6 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
   assert.equal(contexts.at(-1)!.messageId, sourceIds.at(-1));
   if (scenario === "revoked") assert.deepEqual(toolsDisabled, [true]);
   if (scenario === "speaker") assert.deepEqual(contexts.map(c => c.sender.id), ["plow-owner", guest.provider_key]);
-  if (scenario === "slash" || scenario === "media") assert.ok(times[1] - started < 250, `immediate turn waited ${times[1] - started} ms`);
   const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
   assert.deepEqual(saved.recent, sourceIds);
   assert.equal(saved.uid, sourceIds.at(-1));
