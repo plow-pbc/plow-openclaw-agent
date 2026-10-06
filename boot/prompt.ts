@@ -1,3 +1,13 @@
+import type { AgentDefinition } from "./extensions.js";
+import { personalityInstructions } from "./personality.ts";
+
+export function composePrompt(base: string, personality: string, definition: AgentDefinition): string {
+  const persona = definition.persona;
+  const custom = persona ? `${persona.role}\nPurpose: ${persona.purpose}\nVoice: ${persona.voice}\n${persona.instructions ?? ""}\n${persona.sliders ? personalityInstructions(persona.sliders) : ""}\nExamples:\n${persona.examples.join("\n")}` : personality;
+  if (base.length > 13_000 || custom.length > 6_000) throw new Error("Base instructions or persona exceed the supported context budget");
+  return `${base}\n\nBuilder personality and domain guidance (subject to the base routing and permission rules):\n${custom}\n`;
+}
+
 export async function renderPrompt(prompt: string, mcpUrl: string | null | undefined, token: string, trustMode = process.env.PLOW_THREAD_TRUST ?? "ask", webUrl?: string | null): Promise<string> {
   const instruction = {
     ask: "Before starting a group, ask the owner whether the group should have full trust (access to your Mac, mail, files) or be a normal chat. Wait for their answer. Use trusted: true only for full trust; otherwise use trusted: false.",
@@ -30,7 +40,8 @@ export async function renderPrompt(prompt: string, mcpUrl: string | null | undef
       : raw;
     const instructions = JSON.parse(body).result?.instructions;
     if (typeof instructions !== "string" || !instructions.trim()) throw new Error("No Latch instructions");
-    return `${rendered}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\n${instructions.slice(0, 8_000)}\n\`\`\`\n`;
+    const heading = "\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n```text\n";
+    return `${rendered}${heading}${instructions.slice(0, Math.max(0, Math.min(8_000, 20_000 - rendered.length - heading.length - 5)))}\n\`\`\`\n`;
   } catch {
     // A disconnected Mac must not prevent texting or preserve stale instructions.
     console.warn("plow-boot: Latch instructions unavailable; continuing with the base prompt");

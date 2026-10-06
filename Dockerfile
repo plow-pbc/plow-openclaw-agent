@@ -1,11 +1,12 @@
 FROM ghcr.io/openclaw/openclaw:2026.9.6@sha256:0a5ff5e682e62afa19149df126aa50063bf65ef885b5c94713ce32dc0eb12e15
 ARG PLOW_REVISION
-LABEL org.opencontainers.image.revision=$PLOW_REVISION co.plow.probe=/opt/plow/probe
+LABEL org.opencontainers.image.revision=$PLOW_REVISION org.opencontainers.image.licenses=MIT co.plow.probe=/opt/plow/probe
 USER root
 RUN mkdir -p /opt/plow/skills /var/lib/plow /etc/plow/openclaw && chown node:node /var/lib/plow /etc/plow/openclaw
 COPY boot /opt/plow/boot
 COPY boot/gateway-password.sh /etc/profile.d/plow-openclaw.sh
 RUN printf '\n. /etc/profile.d/plow-openclaw.sh\n' >> /home/node/.bashrc
+COPY LICENSE /opt/plow/LICENSE
 COPY plugin /opt/plow/plugin
 COPY prompt /opt/plow/prompt
 COPY skills /opt/plow/skills
@@ -27,9 +28,8 @@ RUN curl -fsS --max-time 60 -o /opt/plow/agent-index-client.py \
  && echo "5be521644ade0f041e83370ac457edc8ad85410e14265f1b1243807772de9a5b  /opt/plow/agent-index-client.py" | sha256sum -c - \
  && chmod 0644 /opt/plow/agent-index-client.py
 
-# The collector the reporter reads. agentsview covers OpenClaw sessions, so with
-# it installed the usage half stops reading zero; without it the client still
-# registers and reports empty days. Pinned and checksummed for the same reason
+# The compatibility collector. The pinned client also reads current OpenClaw
+# SQLite transcripts directly and deduplicates against collector results. Pinned and checksummed for the same reason
 # as the client above: it runs inside an agent holding a live credential.
 ARG AGENTSVIEW_VERSION=0.44.0
 ARG TARGETARCH
@@ -49,7 +49,7 @@ RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scrip
 # back to its Hermes placeholder; a variant can override it.
 ENV AGENT_RUNTIME=OpenClaw
 ENV OPENCLAW_STATE_DIR=/var/lib/plow OPENCLAW_CONFIG_PATH=/var/lib/plow/openclaw.json OPENCLAW_INCLUDE_ROOTS=/etc/plow/openclaw OPENCLAW_NO_RESPAWN=1 NODE_DISABLE_COMPILE_CACHE=1
-# The inherited healthcheck loads config and can race the boot state lock.
-HEALTHCHECK NONE
+# HTTP readiness avoids taking the boot config lock and reports parked boots.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=150s --retries=3 CMD ["node", "/opt/plow/boot/health.js"]
 USER node
 CMD ["node", "/opt/plow/boot/main.js"]

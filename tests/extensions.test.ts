@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { agentExtensions } from "../boot/extensions.ts";
+import { agentDefinition, agentDefinitionSchema, agentExtensions, assertImageInstallation } from "../boot/extensions.ts";
 import { renderConfig, syncConfig } from "../boot/config.ts";
 
 const extension = { id: "example", path: "/opt/example", tools: ["example_schedule"], conversationAccess: true };
@@ -33,4 +33,44 @@ for (const bad of [null, {}, [extension, extension], [{ ...extension, id: "plow"
   const root = await mkdtemp(join(tmpdir(), "plow-extension-bad-")); t.after(() => rm(root, { recursive: true }));
   const file = join(root, "agent.json"); await writeFile(file, JSON.stringify(bad));
   await assert.rejects(agentExtensions(file));
+});
+
+test("image preflight rejects writable nested code and undeclared tools", async t => {
+  const root = await mkdtemp("/opt/plow-preflight-"); t.after(() => rm(root, { recursive: true }));
+  const plugin = { ...extension, path: root };
+  const definition = agentDefinitionSchema.parse({ version: 1, plugins: [plugin] });
+  await writeFile(join(root, "openclaw.plugin.json"), JSON.stringify({ id: plugin.id, contracts: { tools: plugin.tools } }));
+  await mkdir(join(root, "nested")); await writeFile(join(root, "nested", "code.js"), "export default {};");
+  await assertImageInstallation(definition);
+  await chmod(join(root, "nested", "code.js"), 0o666);
+  await assert.rejects(assertImageInstallation(definition), /immutable/);
+  await chmod(join(root, "nested", "code.js"), 0o644);
+  await writeFile(join(root, "openclaw.plugin.json"), JSON.stringify({ id: plugin.id, contracts: { tools: [] } }));
+  await assert.rejects(assertImageInstallation(definition), /does not declare/);
+});
+
+test("image preflight rejects writable parents of installed paths and symlink targets", async t => {
+  const root = await mkdtemp("/opt/plow-parent-preflight-"); t.after(() => rm(root, { recursive: true }));
+  const parent = join(root, "replaceable"), skills = join(parent, "skills"), safe = join(root, "safe");
+  await mkdir(skills, { recursive: true }); await mkdir(safe);
+  await writeFile(join(parent, "code.md"), "Image-owned skill");
+  await symlink(join(parent, "code.md"), join(safe, "linked.md"));
+  const direct = agentDefinitionSchema.parse({ version: 1, skills: [skills] });
+  const linked = agentDefinitionSchema.parse({ version: 1, skills: [safe] });
+  await assertImageInstallation(direct); await assertImageInstallation(linked);
+  await chmod(parent, 0o777);
+  await assert.rejects(assertImageInstallation(direct), /parent.*immutable/);
+  await assert.rejects(assertImageInstallation(linked), /parent.*immutable/);
+  await chmod(parent, 0o755);
+  await assertImageInstallation(direct); await assertImageInstallation(linked);
+});
+
+test("image manifests cannot be replaced through a writable parent", async t => {
+  const root = await mkdtemp("/opt/plow-manifest-preflight-"); t.after(() => rm(root, { recursive: true }));
+  const file = join(root, "agent.json"); await writeFile(file, JSON.stringify({ version: 1 }));
+  assert.equal((await agentDefinition(file)).version, 1);
+  await chmod(root, 0o777);
+  await assert.rejects(agentDefinition(file), /parent.*immutable/);
+  await chmod(root, 0o700);
+  assert.equal((await agentDefinition(file)).version, 1);
 });

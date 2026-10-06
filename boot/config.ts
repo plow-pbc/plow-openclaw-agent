@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import JSON5 from "json5";
-import type { AgentExtension } from "./extensions.js";
+import type { AgentDefinition, AgentExtension } from "./extensions.js";
 
 export type Participant =
   | { type: "member"; uid: string; role: string }
@@ -14,11 +14,11 @@ export type Identity = {
   mcp_url?: string | null;
 };
 
-export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask", extensions: AgentExtension[] = []) {
+export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask", extensions: AgentExtension[] = [], definition?: AgentDefinition) {
   if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
     throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
   }
-  const guestTools = [...new Set((process.env.PLOW_GUEST_TOOLS ?? "").split(",").map(name => name.trim()).filter(Boolean))];
+  const guestTools = [...new Set(process.env.PLOW_GUEST_TOOLS === undefined ? definition?.guestTools ?? [] : process.env.PLOW_GUEST_TOOLS.split(",").map(name => name.trim()).filter(Boolean))];
   const name = identity.agent?.name;
   if (typeof name !== "string" || !name.trim()) throw new Error(`Identity has no usable agent.name: ${JSON.stringify(name)}`);
   return {
@@ -63,7 +63,9 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
         { enabled: true, hooks: { allowConversationAccess: value.conversationAccess } }])) } },
     messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
-      apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
+      apiBase, lineUid: identity.line.uid, threadTrust, guestTools, groupMode: definition?.defaults.groupMode ?? "helper",
+      ...(identity.agent?.web_url ? { dashboardUrl: identity.agent.web_url } : {}),
+      ...(definition?.persona?.sliders ? { personalityDefaults: definition.persona.sliders } : {}),
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
@@ -71,7 +73,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     commands: { ownerAllowFrom: ["plow-owner"] },
     memory: { search: { rememberAcrossConversations: false } },
     // An empty allowlist means unrestricted in OpenClaw.
-    skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
+    skills: { load: { extraDirs: ["/opt/plow/skills", ...definition?.skills ?? []] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
     tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
   };
@@ -170,6 +172,11 @@ export async function syncConfig(
   // implicit owner route moves to the marked one; any other heartbeat setting stays. An explicit
   // route is the owner's choice, "none" (OpenClaw's own advice for silencing them) included.
   const defaults = isObject(owner.agents) && isObject(owner.agents.defaults) ? owner.agents.defaults : undefined;
+  if (defaults) {
+    const silence = defaults.silentReply;
+    if (silence === undefined) defaults.silentReply = rendered.agents.defaults.silentReply;
+    else if (isObject(silence) && silence.group === undefined) silence.group = "allow";
+  }
   const heartbeat = defaults?.heartbeat;
   if (defaults && (heartbeat === undefined || (isObject(heartbeat) && (heartbeat.target ?? "owner") === "owner"))) {
     defaults.heartbeat = { ...(isObject(heartbeat) ? heartbeat : {}), ...rendered.agents.defaults.heartbeat };

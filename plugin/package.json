@@ -17,5 +17,6 @@
     "openclaw": {
       "optional": true
     }
-  }
+  },
+  "license": "MIT"
 }

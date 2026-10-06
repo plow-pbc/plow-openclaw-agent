@@ -1,23 +1,103 @@
 {
   "id": "plow",
   "name": "Plow",
-  "channels": ["plow"],
-  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"] },
-  "activation": { "onStartup": true },
-  "configSchema": { "type": "object", "additionalProperties": false },
+  "channels": [
+    "plow"
+  ],
+  "contracts": {
+    "tools": [
+      "plow_start_thread",
+      "plow_set_thread_trust",
+      "plow_reply_to",
+      "plow_send_email"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  },
   "channelConfigs": {
     "plow": {
       "schema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["apiBase", "lineUid", "threadTrust"],
+        "required": [
+          "apiBase",
+          "lineUid",
+          "threadTrust"
+        ],
         "properties": {
-          "apiBase": { "type": "string" },
-          "lineUid": { "type": "string" },
-          "emailLineUid": { "type": "string" },
-          "emailName": { "type": "string" },
-          "guestTools": { "type": "array", "items": { "type": "string" } },
-          "threadTrust": { "type": "string", "enum": ["ask", "trusted", "untrusted"] }
+          "apiBase": {
+            "type": "string"
+          },
+          "lineUid": {
+            "type": "string"
+          },
+          "emailLineUid": {
+            "type": "string"
+          },
+          "emailName": {
+            "type": "string"
+          },
+          "guestTools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "threadTrust": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "trusted",
+              "untrusted"
+            ]
+          },
+          "groupMode": {
+            "type": "string",
+            "enum": [
+              "helper",
+              "coordinator",
+              "facilitator"
+            ]
+          },
+          "dashboardUrl": {
+            "type": "string"
+          },
+          "personalityDefaults": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "companion-coworker": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "genz-boomer": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "execute-collaborate": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "playful-serious": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "polite-unfiltered": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
         }
       }
     }

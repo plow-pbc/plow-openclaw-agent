@@ -12,6 +12,11 @@
     "plugin"
   ],
   "dependencies": {
-    "json5": "^2.2.3"
-  }
+    "json5": "^2.2.3",
+    "zod": "4.1.11"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "license": "MIT"
 }
