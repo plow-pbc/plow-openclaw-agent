@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 
 type Tool = { name: string; parameters?: object; execute: (id: string, args: object) => Promise<unknown> };
@@ -133,7 +132,7 @@ for (const phase of ["phone route", "phone final lookup", "email route"] as cons
   const root = await mkdtemp("/tmp/plow-invocation-send-");
   process.env.OPENCLAW_STATE_DIR = root;
   process.env.PLOW_AGENT_TOKEN = "fixture";
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   const account = { apiBase: "http://fixture", lineUid: "line", emailLineUid: "mail", emailName: "Cedar" };
   const config = { channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const owner = { type: "member", uid: "owner", role: "owner", display_name: "Pat", provider_key: "+15550000001" };
@@ -154,8 +153,8 @@ for (const phase of ["phone route", "phone final lookup", "email route"] as cons
   entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerChannel() {},
     runtime: { channel: {
       routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: `agent:main:plow:${email ? "email" : "chat"}:direct:cht_target` }) },
-      session: { resolveStorePath, async updateLastRoute(params: Parameters<typeof updateLastRoute>[0]) {
-        await updateLastRoute(params);
+      session: { resolveStorePath: () => `${root}/sessions.json`, async updateLastRoute() {
+        await Promise.resolve();
         if (phase.endsWith("route")) current = false;
       } },
     } },
