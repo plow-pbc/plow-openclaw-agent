@@ -443,7 +443,16 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const recoveredChats = new Set<string>();
       const replay = async (chatUid: string) => {
         const checkpoint = checkpoints.get(chatUid)!;
-        const window = await recover(account, chatUid, checkpoint);
+        let window = await recover(account, chatUid, checkpoint);
+        // Adoption can advance the cursor and evict cached UIDs during paging.
+        // Keep fetched IDs for buffered-frame deduplication even after trimming.
+        for (const message of window) replayed.add(message.uid);
+        await checkpointWrites.get(chatUid);
+        const current = checkpoints.get(chatUid)!;
+        if (current !== checkpoint && !current.startsWith("first:")) {
+          const boundary = window.findIndex(message => message.uid === current);
+          window = boundary < 0 ? await recover(account, chatUid, current) : window.slice(boundary + 1);
+        }
         const unread = window.filter(message => !recent.get(chatUid)?.has(message.uid));
         for (const message of window) replayed.add(message.uid);
         if (window.length) recoveryEnds.set(chatUid, window.at(-1)!.uid);

@@ -2,12 +2,58 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { listen, type Account, type Chat, type Message } from "../plugin/transport.ts";
-import { websocketFixture } from "./ws-fixture.ts";
+import { websocketFixture, checkpointUid } from "./ws-fixture.ts";
 
 const sender = { type: "member" as const, uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
 const chat: Chat = { uid: "home", status: "active", trusted: true, participants: [sender, { type: "agent", relationship: "self", line: { uid: "line" } }] };
 const inbound = (uid: string): Message => ({ uid, direction: "inbound", sender, body: uid, attachments: [], created_at: "2026-09-29T12:00:00Z" });
 const frame = (message: Message) => JSON.stringify({ event_type: "message_received", event_id: `event-${message.uid}`, chat_id: chat.uid, data: { message } });
+
+test("completion during reconnect pagination cannot replay adopted sources evicted from both caches", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/home`, JSON.stringify({ uid: "old", recent: [] }));
+  const controller = abortAfter(60_000), release = Promise.withResolvers<void>(), adopted = Promise.withResolvers<void>();
+  controller.signal.addEventListener("abort", () => release.resolve(), { once: true });
+  const timeout = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (fn, ms, ...args) => timeout(fn, ms === 30_000 ? 0 : ms, ...args));
+  const messages = Array.from({ length: 514 }, (_, i) => inbound(`source-${i}`));
+  const history = messages.toReversed().concat([inbound("old")]);
+  let connections = 0, completedDuringPagination = false;
+  server.on("connection", () => { connections++; });
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const cursor = new URL(url).searchParams.get("starting_after");
+    if (connections === 2 && url.includes("limit=50") && cursor && !completedDuringPagination) {
+      completedDuringPagination = true;
+      for (const socket of server.clients) socket.send(frame(messages[1]));
+      release.resolve();
+      await adopted.promise;
+      assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), "source-513");
+    }
+    const start = cursor ? history.findIndex(message => message.uid === cursor) + 1 : 0;
+    if (connections === 2 && url.includes("limit=50") && start + 50 >= history.length) {
+      for (const socket of server.clients) socket.send(frame(inbound("after-reconnect")));
+    }
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/home") ? chat :
+      url.includes("limit=50") ? { data: history.slice(start, start + 50), has_more: start + 50 < history.length } :
+      url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+  });
+  const calls: string[] = [];
+  await listen({ apiBase, accountId: "chat", lineUid: "line" }, controller.signal, text => {
+    if (connections === 1 && text.startsWith("acked chat=home message=source-513 ")) for (const socket of server.clients) socket.close();
+    if (connections === 2 && text.startsWith("acked chat=home message=source-0 ")) adopted.resolve();
+    if (text.startsWith("acked chat=home message=after-reconnect ")) controller.abort();
+  }, async (_chat, message, _first, _history, ingress) => {
+    calls.push(message.uid);
+    ingress.onSubmitted();
+    if (message.uid === "source-0") await release.promise;
+    return "completed";
+  });
+  assert.equal(completedDuringPagination, true);
+  assert.notEqual(controller.signal.reason?.name, "TimeoutError");
+  assert.equal(calls.length, 515, "cache eviction must not dispatch the two oldest adopted sources again");
+  assert.deepEqual(calls, [...messages.map(message => message.uid), "after-reconnect"], "each external action must occur once, including the buffered older frame");
+});
 
 for (const unfinished of ["pending", "incomplete"] as const) test(`a later outbound acknowledgement cannot skip ${unfinished} inbound work across restart`, async t => {
   const { root, apiBase, abortAfter } = await websocketFixture(t);
