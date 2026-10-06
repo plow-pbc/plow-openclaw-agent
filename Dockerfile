@@ -10,6 +10,7 @@ COPY LICENSE /opt/plow/LICENSE
 COPY plugin /opt/plow/plugin
 COPY prompt /opt/plow/prompt
 COPY skills /opt/plow/skills
+COPY eval /opt/plow/eval
 COPY build.ts /opt/plow/build.ts
 COPY patch-runtime.ts /opt/plow/patch-runtime.ts
 COPY package.json package-lock.json tsconfig.json /opt/plow/

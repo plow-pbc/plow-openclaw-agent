@@ -16,6 +16,7 @@
   "include": [
     "boot/**/*.ts",
     "plugin/*.ts",
+    "eval/**/*.ts",
     "build.ts",
     "patch-runtime.ts"
   ]

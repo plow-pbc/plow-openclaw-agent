@@ -16,7 +16,8 @@
     "zod": "4.1.11"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "eval": "node eval/run.ts"
   },
   "license": "MIT"
 }

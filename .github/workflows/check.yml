@@ -3,6 +3,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      live_eval:
+        description: Run paid model dialogues with dedicated PLOW_EVAL secrets
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -31,3 +36,22 @@ jobs:
             -v "$PWD/node_modules:/opt/plow/node_modules:ro" \
             -v "$PWD/tests:/opt/plow/tests:ro" plow-openclaw:test sh -c \
             'mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node /opt/plow/tests/gateway-acceptance.ts'
+      - name: Live model dialogues
+        if: github.event_name == 'workflow_dispatch' && inputs.live_eval
+        env:
+          PLOW_API_BASE: ${{ secrets.PLOW_EVAL_API_BASE }}
+          PLOW_AGENT_TOKEN: ${{ secrets.PLOW_EVAL_AGENT_TOKEN }}
+        run: |
+          test -n "$PLOW_API_BASE" && test -n "$PLOW_AGENT_TOKEN"
+          mkdir -p reports
+          chmod 777 reports
+          docker run --rm -e PLOW_API_BASE -e PLOW_AGENT_TOKEN \
+            -v "$PWD/reports:/reports" plow-openclaw:test \
+            node /opt/plow/eval/run.ts --output /reports/eval-results.json
+      - name: Preserve model evaluation results
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.live_eval
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-dialogues
+          path: reports/eval-results.json
+          if-no-files-found: error
