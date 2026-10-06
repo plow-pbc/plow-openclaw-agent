@@ -208,6 +208,24 @@ try {
     assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
     record(fault, "native disabled definition reconciles with the persisted intent; a fresh invocation resumes it once");
   }
+  await notificationControl(scheduler, scope, context, "pause", false);
+  let enableRequests = 0;
+  const lostResume: Scheduler = { async request(method, params) {
+    const result = await scheduler.request(method, params);
+    if (method === "cron.update" && (params.patch as { enabled?: boolean })?.enabled === true) {
+      enableRequests++;
+      if (enableRequests === 1) throw new Error("lost enable response");
+    }
+    return result;
+  } };
+  await assert.rejects(notificationControl(lostResume, scope, context, "resume", false), /lost enable response/);
+  assert.equal((await rpc("cron.get", { id: job.id }) as any).enabled, true);
+  assert.equal((await readExperience(scope)).paused, false, "an accepted enable must not leave its one-shot delivery gate closed");
+  assert.equal((await readExperience(scope)).suspendedJobs[0].id, job.id);
+  await notificationControl(lostResume, scope, context, "resume", false);
+  assert.equal(enableRequests, 1);
+  assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
+  record("lost resume response", "an accepted native enable leaves delivery open and its journal recoverable; retry reconciles without another enable");
   const allScope = { account, conversation: "owner" };
   for (const first of [scope, allScope]) {
     const second = first === scope ? allScope : scope;
@@ -257,6 +275,21 @@ try {
   await rpc("cron.remove", { id: queued.id });
   await notificationControl(scheduler, scope, context, "resume", false);
   record("in-flight pause gate", "persisted pause blocks physical delivery from an already generating reminder even without scheduler disable/cancellation");
+  releaseReminder = undefined;
+  const sourceSession = `agent:main:plow:chat:group:${group.uid}`;
+  const sourceJob: any = await rpc("cron.add", { name: "Source-room pause check", agentId: "main", sessionKey: sourceSession, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "IN_FLIGHT_ACCEPTANCE SOURCE_ROOM: remind Pat about dinner", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" } });
+  const sourceView: any = await rpc("cron.get", { id: sourceJob.id });
+  assert.equal(sourceView.owner?.sessionKey ?? sourceView.sessionKey, sourceSession);
+  await rpc("cron.run", { id: sourceJob.id, mode: "force" });
+  await until(() => !!releaseReminder, "source-room reminder model request");
+  const sentBeforeSourcePause = outbound.length;
+  await updateExperience({ account, conversation: group.uid }, context.assertInvocationCurrent, state => { state.paused = true; });
+  releaseReminder!();
+  await until(async () => ((await rpc("cron.runs", { id: sourceJob.id, limit: 10 })) as any).entries?.some((entry: any) => entry.action === "finished"), "source-room paused run completion");
+  assert.equal(outbound.length, sentBeforeSourcePause, "pausing the source room must also gate delivery to a different room");
+  await rpc("cron.remove", { id: sourceJob.id });
+  await updateExperience({ account, conversation: group.uid }, context.assertInvocationCurrent, state => { state.paused = false; });
+  record("source-room in-flight pause", "a persisted source-room pause blocks scheduled delivery to another room even after generation has begun");
   await message(home.uid, "WORKER_START: do a bounded background analysis of dinner options", owner);
   await until(() => !!releaseWorker, "native background worker start");
   await message(home.uid, "WORKER_PING: are you available while the analysis runs?", owner);
