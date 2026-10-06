@@ -181,7 +181,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   let activeRunId: string | undefined;
   const finishRun = () => {
     if (activeRunId === undefined) return;
-    suppressFinal ||= silentRuns.get(activeRunId) === true;
+    suppressFinal = silentRuns.get(activeRunId) === true;
     silent ||= suppressFinal;
     silentRuns.delete(activeRunId);
     activeRunId = undefined;
@@ -212,7 +212,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       durable: email ? false : { to: chat.uid, replyToId: null },
       observeMessageSent: true,
       preparePayload: (payload, info) => {
-        if (activeRunId !== undefined && silentRuns.get(activeRunId)) silent = suppressFinal = true;
+        if (activeRunId !== undefined) suppressFinal = silentRuns.get(activeRunId) === true;
         if (suppressFinal && info.kind === "final") return null;
         if (payload.isFallbackNotice) { silent ||= email; return null; }
         if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
@@ -321,7 +321,8 @@ export default defineChannelPluginEntry({
     api.on("after_tool_call", (event, ctx) => {
       // Set this before any await: the hook runner does not wait before final delivery.
       const runId = event.runId ?? ctx.runId;
-      if (runId !== undefined && silentRuns.has(runId) && (event.result as any)?.details?.silent === true) silentRuns.set(runId, true);
+      const silent = (event.result as any)?.details?.silent;
+      if (runId !== undefined && silentRuns.has(runId) && typeof silent === "boolean") silentRuns.set(runId, silent);
     });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",

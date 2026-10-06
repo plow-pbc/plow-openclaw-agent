@@ -9,7 +9,7 @@ const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-CJ
 const { t: createHookRunner } = await import("/app/dist/hooks-CKanWLsK.mjs");
 const { default: discoveryEntry } = await import("../plugin/index.ts?discovery");
 
-for (const runIdSource of ["event", "context"]) test(`a tool can silence its run's final via ${runIdSource} without silencing explicit sends, overlapping runs, or the next turn`, async t => {
+for (const runIdSource of ["event", "context"]) for (const outcome of ["silent", "cleared", "silenced-again"]) test(`tool silence via ${runIdSource}: ${outcome}, with explicit sends, overlapping runs, and the next turn`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(20_000);
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -37,6 +37,7 @@ for (const runIdSource of ["event", "context"]) test(`a tool can silence its run
   const otherFinished = Promise.withResolvers<void>();
   t.after(() => otherFinished.resolve());
   let immediateFinal: unknown;
+  let toggledFinal: unknown;
   let channel: { outbound: { sendText: (ctx: object) => Promise<unknown> }; gateway: { startAccount: (ctx: object) => Promise<void> } };
   const logs: string[] = [];
   const api = { registrationMode: "full", logger: { info() {} }, registerTool() {},
@@ -64,15 +65,23 @@ for (const runIdSource of ["event", "context"]) test(`a tool can silence its run
               if (runId === "silent") {
                 const pending = result(runId, { content: [{ type: "text", text: "handoff" }], details: { silent: true } });
                 // The runner is fire-and-forget: final preparation can start before it is awaited.
-                if (runIdSource === "context") immediateFinal = dispatch.delivery.preparePayload({ text: "immediate final" }, { kind: "final" });
+                immediateFinal = dispatch.delivery.preparePayload({ text: "immediate final" }, { kind: "final" });
                 await pending;
-                // A later ordinary tool result must not revoke the run's silence.
-                await result(runId, { details: { silent: false } });
+                if (outcome !== "silent") {
+                  const clearing = result(runId, { details: { silent: false } });
+                  toggledFinal = dispatch.delivery.preparePayload({ text: "cleared final" }, { kind: "final" });
+                  await clearing;
+                  if (outcome === "silenced-again") await result(runId, { details: { silent: true } });
+                }
+                // Results without an explicit boolean leave the current state alone.
+                for (const value of [undefined, {}, { details: {} }, { silent: false }, { details: { silent: "false" } },
+                  { details: { silent: 0 } }, { content: [{ type: "text", text: '{"silent":false}' }] }]) await result(runId, value);
                 await channel.outbound.sendText({ cfg, accountId: "chat", to: "one", text: "explicit tool send" });
                 sendFrame("two", "overlapping");
                 await otherFinished.promise;
               } else {
-                await result("silent", { details: { silent: true } }, runIdSource === "event" ? runId : "silent");
+                const staleRunId = runId === "next" ? "silent" : "unknown";
+                await result(staleRunId, { details: { silent: true } }, runIdSource === "event" ? runId : staleRunId);
                 await result(undefined, { details: { silent: true } });
                 for (const value of [undefined, { silent: true }, { details: { silent: "true" } },
                   { content: [{ type: "text", text: '{"silent":true}' }] }, { details: { silent: false } }]) await result(runId, value);
@@ -99,10 +108,12 @@ for (const runIdSource of ["event", "context"]) test(`a tool can silence its run
     if (text === "completed chat=one message=silent") sendFrame("one", "next");
     if (text === "completed chat=one message=next") controller.abort();
   } } });
-  if (runIdSource === "context") assert.equal(immediateFinal, null, "the hook must suppress the final synchronously");
+  assert.equal(immediateFinal, null, "the hook must suppress the final synchronously");
+  if (outcome !== "silent") assert.deepEqual(toggledFinal, { text: "cleared final", replyToId: undefined, replyToCurrent: false }, "the hook must clear suppression synchronously, even after a final was prepared");
   assert.deepEqual(posts, [
     { chat: "one", text: "explicit tool send" },
     { chat: "two", text: "final overlapping" },
+    ...(outcome === "cleared" ? [{ chat: "one", text: "final silent" }] : []),
     { chat: "one", text: "final next" },
   ], logs.join("\n"));
   assert.ok(logs.includes("completed chat=one message=silent"), logs.join("\n"));
