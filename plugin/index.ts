@@ -17,7 +17,7 @@ let runtime: PluginRuntime;
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], guard?: { assertInvocationCurrent?: () => void }) {
   to = to.replace(/^plow:/i, "");
   if (account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
   // Heartbeats are routed to their own alias (boot/config.ts) so their sends can be marked.
@@ -40,6 +40,7 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
+  guard?.assertInvocationCurrent?.();
   return await postMessage(account, to, text, attachments, heartbeat ? "heartbeat" : undefined);
 }
 
@@ -57,20 +58,26 @@ function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat, channel
 }
 
 // With sessionText, an existing session the send lands in records that text instead of what people saw.
-async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", options: { sessionText?: string; channelRuntime?: PluginRuntime } = {}) {
-  const { sessionText, channelRuntime = runtime } = options;
+async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessionKey: string }, accountId: string, to: string, routeTo: string, text: string, kind: "direct" | "group", options: { sessionText?: string; channelRuntime?: PluginRuntime; assertCurrent?: () => void } = {}) {
+  const { sessionText, channelRuntime = runtime, assertCurrent } = options;
   await channelRuntime.channel.session.updateLastRoute({
     storePath: channelRuntime.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     sessionKey: route.sessionKey, channel: "plow", accountId, to: routeTo, createIfMissing: true,
   });
+  assertCurrent?.();
   const sessionId = sessionText ? getSessionEntry({ agentId: route.agentId, sessionKey: route.sessionKey })?.sessionId : undefined;
+  const deliver: typeof send = async (account, to, text, mediaUrls, guard) => {
+    assertCurrent?.();
+    return account.accountId === "email" ? await postMessage(account, to, text)
+      : await send(account, to, text, mediaUrls, { ...guard, assertInvocationCurrent: assertCurrent });
+  };
   const result = await sendDurableMessageBatch({
     cfg, channel: "plow", accountId, to, payloads: [{ text }],
     session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
     mirror: sessionId ? undefined : route, skipQueue: true,
-    ...(accountId === "email" ? { deps: { plow: async (account: Account, to: string, text: string) => await postMessage(account, to, text) } } : {}),
+    deps: { plow: deliver },
   });
-  if (result.status !== "sent") throw new DeliveryUnknownError();
+  if (result.status !== "sent") { assertCurrent?.(); throw new DeliveryUnknownError(); }
   if (sessionId) await appendAssistantMirrorMessageByIdentity({ ...route, sessionId, text: sessionText, config: cfg });
   return result.results[0].messageId;
 }
@@ -378,7 +385,7 @@ export default defineChannelPluginEntry({
         context.assertInvocationCurrent();
         let messageUid: string;
         try {
-          messageUid = await durableSend(cfg, route, "chat", args.chat_uid, routeTo, args.text, kind);
+          messageUid = await durableSend(cfg, route, "chat", args.chat_uid, routeTo, args.text, kind, { assertCurrent: context.assertInvocationCurrent });
         } catch (error) {
           if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, args.chat_uid);
           throw error;
@@ -443,7 +450,7 @@ export default defineChannelPluginEntry({
           else {
             // From another conversation, a durable send also records the reply in the thread's session.
             const { kind, route, routeTo } = sessionRoute(cfg, mailbox, chat);
-            await durableSend(cfg, route, "email", args.to, routeTo, body, kind);
+            await durableSend(cfg, route, "email", args.to, routeTo, body, kind, { assertCurrent: context.assertInvocationCurrent });
           }
           api.logger.info(`plow sent email chat=${args.to}`);
           return receipt({ sent: true, chat_uid: args.to });

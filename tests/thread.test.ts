@@ -1,7 +1,9 @@
 import { toolFactory } from "./tool-factory.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
+import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import entry from "../plugin/index.ts";
 
 type Tool = { name: string; parameters?: object; execute: (id: string, args: object) => Promise<unknown> };
@@ -125,4 +127,45 @@ test("an iMessage email can start a new untrusted group without a Contacts looku
   assert.equal(posts[0]?.trusted, false);
   assert.equal(posts[0]?.idempotency_key, posts[1]?.idempotency_key);
   await assert.rejects(startThread(account, { ...context, senderIsOwner: false }, "guest", { members: ["taylor@example.test"], body: "Meet?" }), /owner/);
+});
+
+for (const phase of ["phone route", "phone final lookup", "email route"] as const) test(`cancelled invocation cannot send after ${phase}`, async t => {
+  const root = await mkdtemp("/tmp/plow-invocation-send-");
+  process.env.OPENCLAW_STATE_DIR = root;
+  process.env.PLOW_AGENT_TOKEN = "fixture";
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const account = { apiBase: "http://fixture", lineUid: "line", emailLineUid: "mail", emailName: "Cedar" };
+  const config = { channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
+  const owner = { type: "member", uid: "owner", role: "owner", display_name: "Pat", provider_key: "+15550000001" };
+  const home = { uid: "cht_home", status: "active", trusted: false, participants: [owner, { type: "agent", relationship: "self", line: { uid: "line" } }] };
+  const email = phase === "email route";
+  const destination = { ...home, uid: "cht_target", participants: [owner, { type: "agent", relationship: "self", line: { uid: email ? "mail" : "line" } }] };
+  let current = true, lookups = 0;
+  const posts: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    if (options.method === "POST") { posts.push(url); return Response.json({ uid: "sent" }); }
+    if (url.endsWith("/cht_target")) {
+      if (++lookups === 2 && phase === "phone final lookup") current = false;
+      return Response.json(destination);
+    }
+    return Response.json(home);
+  });
+  let selected: Tool | undefined;
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, registerChannel() {},
+    runtime: { channel: {
+      routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: `agent:main:plow:${email ? "email" : "chat"}:direct:cht_target` }) },
+      session: { resolveStorePath, async updateLastRoute(params: Parameters<typeof updateLastRoute>[0]) {
+        await updateLastRoute(params);
+        if (phase.endsWith("route")) current = false;
+      } },
+    } },
+    registerTool(factory: unknown) {
+      const candidate = toolFactory(factory)({ config, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: home.uid, requesterSenderId: "plow-owner", senderIsOwner: true,
+        assertInvocationCurrent() { if (!current) throw new Error("invocation revoked"); } });
+      if (candidate.name === (email ? "plow_send_email" : "plow_reply_to")) selected = candidate;
+    },
+  });
+  assert.ok(selected);
+  await assert.rejects(selected.execute("cancelled", email ? { to: destination.uid, body: "Ready" } : { chat_uid: destination.uid, text: "Ready" }), /invocation revoked/);
+  assert.deepEqual(posts, [], "cancellation must prevent the external effect after awaited preparation");
 });
