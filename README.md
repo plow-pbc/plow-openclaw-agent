@@ -98,13 +98,13 @@ commit and checksum in the `Dockerfile` and fetched at build; its key and ledger
 volume, so a rebuilt container keeps one install rather than registering a second.
 Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw.json` belongs to the owner. Changes made through the Control UI or
-`openclaw config set` to other channels, model providers, plugins, agent defaults,
-skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
+`openclaw config set` to other channels, model providers, plugins, agent defaults
+(except `agents.defaults.timeoutSeconds`), skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
-identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, and
-cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
+identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, the agent run timeout
+(`agents.defaults.timeoutSeconds`), and cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
 An existing volume with a fully rendered config is converted on its next boot.
@@ -125,10 +125,13 @@ stop the chat account until the container restarts. A cached owner may be used
 from a truncated listing; uniqueness is checked only among discovered chats.
 Without a cached owner, the fallback lookup refuses truncated listings.
 The API currently returns complete listings.
-Socket drops reconnect with backoff; the plugin never re-reads identity.
+Socket drops reconnect with backoff, without waiting for running turns; the plugin never re-reads identity.
 
 Without a checkpoint, the earliest unanswered owner-DM message in the newest 50 is first contact,
-including texts sent before the plugin connects. Later unanswered texts are dispatched
+including texts sent before the plugin connects. In any other chat without a checkpoint,
+unanswered texts newer than the agent's first listen (`plow-listening-since`) are dispatched
+the same way, so a reply to a thread started during an outage is not lost; older history
+stays unanswered. Later unanswered texts are dispatched
 in history order; OpenClaw controls runs and collects pending messages.
 Chat checkpoints survive restarts. Chats omitted from a truncated listing
 recover on their first live frame. Optional history failures still dispatch the
@@ -198,9 +201,9 @@ In `ask` mode, `plow_start_thread` requires an explicit `trusted` choice. In
 the two preset modes, the configured choice is enforced even if a tool call
 supplies a different value.
 
-To give non-owners specific tools in untrusted phone chats, register ordinary
-OpenClaw plugin tools with `api.registerTool` in your variant's loaded plugin
-and list their names once in the image:
+To give non-owners specific tools in untrusted phone chats and email threads,
+register ordinary OpenClaw plugin tools with `api.registerTool` in your variant's
+loaded plugin and list their names once in the image:
 
 ```dockerfile
 ENV PLOW_GUEST_TOOLS=meetly_view_request,meetly_pick_time
@@ -209,9 +212,15 @@ ENV PLOW_GUEST_TOOLS=meetly_view_request,meetly_pick_time
 `PLOW_GUEST_TOOLS` is a comma-separated list, empty by default. Boot renders it
 as `channels.plow.guestTools` and adds the names to `tools.alsoAllow`. Non-owner
 turns in untrusted phone chats receive that list through OpenClaw's per-turn
-tool policy; an empty list disables tools. Unregistered names grant no tools.
-Owner turns, trusted chats, and email policy are unchanged. Guest tools should
-use the runtime tool context for sender and chat identity, never model arguments.
+tool policy; an empty list disables tools. Non-owner email turns get
+`plow_send_email` plus that list, with `automations` still denied. Unregistered
+names grant no tools. Owner turns and trusted phone chats are unchanged. Guest
+tools should use the runtime tool context for sender and chat identity, never
+model arguments.
+
+A variant tool can return `details: { silent: true }` to suppress that run's
+final Plow reply. Only boolean `true` in a tool result activates this signal;
+text content does not. Explicit tool sends and other runs are unaffected.
 
 To ask the owner privately from a group, a variant plugin tool can use
 `sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound` with
@@ -283,3 +292,10 @@ group or peer sessions. Shared files and tools are not privacy boundaries.
 ## Development
 
 See [development checks and pinned source contracts](docs/development.md).
+
+When bumping the base image:
+
+- Run the in-image checks and offline gateway probe.
+- Live-check a tool returning `details: { silent: true }` on the local stack:
+  its run must send no automatic final reply, explicit tool sends must still
+  arrive, and the next ordinary turn must reply normally.

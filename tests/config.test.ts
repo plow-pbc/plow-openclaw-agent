@@ -75,12 +75,15 @@ test("GLM falls back to Sonnet on the Plow provider with explicit capacity and p
     primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"],
   });
   assert.deepEqual(config.models.providers.plow.models, [{
-    id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576,
+    id: "z-ai/glm-5.2", name: "GLM 5.2", input: ["text"], contextWindow: 1048576, maxTokens: 16384,
+    compat: { maxTokensField: "max_tokens" },
     cost: { input: 0.5544, output: 1.7424 },
   }, {
-    id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", input: ["text", "image"], contextWindow: 1000000,
+    id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", input: ["text", "image"], contextWindow: 1000000, maxTokens: 16384,
+    compat: { maxTokensField: "max_tokens" },
     cost: { input: 2.00, output: 10.00 },
   }]);
+  assert.equal(config.agents.defaults.timeoutSeconds, 600);
 });
 
 test("the configured Plow provider permits an operator-controlled private endpoint", () => {
@@ -200,6 +203,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(owner.messages.inbound.byChannel.signal, 500);
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
+  assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
   assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });

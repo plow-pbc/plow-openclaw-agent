@@ -72,9 +72,9 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
       },
     },
   } };
-  entry.register({ registrationMode: "full", runtime, logger: { info() {} }, registerTool() {},
+  entry.register({ registrationMode: "full", on() {}, runtime, logger: { info() {} }, registerTool() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
-  toolEntry.register({ registrationMode: "full", runtime, logger: { info() {} }, registerChannel() {},
+  toolEntry.register({ registrationMode: "full", on() {}, runtime, logger: { info() {} }, registerChannel() {},
     registerTool(factory: (context: object) => Tool) {
       const candidate = factory({ config: cfg, sessionKey, messageChannel: "plow", agentAccountId: accountId, nativeChannelId: chat.uid, requesterSenderId: scene.startsWith("member") ? member.provider_key : "plow-owner", senderIsOwner: !scene.startsWith("member") });
       if (candidate.name === toolName) tool = candidate;

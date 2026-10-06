@@ -9,7 +9,6 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { on, once } from "node:events";
-import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
@@ -100,15 +99,26 @@ export async function recover(account: Account, chat: string, checkpoint: string
   return page.data.slice(0, boundary < 0 ? undefined : boundary + (checkpoint.startsWith("first:") ? 1 : 0)).reverse();
 }
 
-async function earliestUnansweredOwnerMessage(account: Account, chat: string, newest: Message, log: (text: string) => void): Promise<string> {
+// The oldest of the unanswered messages at the end of a chat that `unanswered` accepts.
+async function earliestUnanswered(account: Account, chat: string, newest: Message, unanswered: (message: Message) => boolean, log: (text: string) => void): Promise<string> {
   const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50`);
   let earliest = newest.uid;
   for (const message of page.data) {
-    if (message.direction !== "inbound" || message.sender.type !== "member") return earliest;
+    if (!unanswered(message)) return earliest;
     earliest = message.uid;
   }
-  if (page.has_more) log(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; owner backlog exceeds newest page`);
+  if (page.has_more) log(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; backlog exceeds newest page`);
   return earliest;
+}
+
+// A wait that ends early on abort. It uses the global timer so node:test mock
+// timers can drive it; timers/promises' signal option is not mockable.
+function backoff(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
 }
 
 export async function listen(account: Account, signal: AbortSignal, log: (text: string) => void, turn: (chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress) => Promise<TurnOutcome>, cfg: OpenClawConfig = {}) {
@@ -116,12 +126,30 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   if (!root) throw new Error("OPENCLAW_STATE_DIR is required");
   const dir = `${root}/plow-checkpoints`;
   await mkdir(dir, { recursive: true });
+  // When this agent first listened. A chat with no checkpoint whose unanswered
+  // messages are newer than this was missed while disconnected (e.g. a thread the
+  // agent started during an outage); older ones predate the install. Only the
+  // phone listener baselines chats, so only it owns this file.
+  const sincePath = `${root}/plow-listening-since`;
+  let since = Number.NaN;
+  if (account.accountId === "chat") {
+    try { since = Date.parse(await readFile(sincePath, "utf8")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      since = Date.now();
+      await writeFile(`${sincePath}.tmp`, new Date(since).toISOString());
+      await rename(`${sincePath}.tmp`, sincePath);
+    }
+    if (!Number.isFinite(since)) throw new Error(`${sincePath} is not a timestamp`);
+  }
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
   const unadopted = new Map<string, Set<string>>();
   type Queued = { chatUid: string; message: Message; resolve: () => void; reject: (error: unknown) => void };
   const pending = new Map<string, Queued>();
   const dispatching = new Set<Promise<void>>();
+  // Each pending message's turn, so a reconnect's replay can wait for its outcome.
+  const inFlight = new Map<string, Promise<void>>();
   let failDispatch: (error: unknown) => void;
   const checkpointWrites = new Map<string, Promise<void>>();
   const discovered = new Map<string, Chat>();
@@ -269,6 +297,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       unadopted.get(chatUid)!.add(message.uid);
     }
     pending.set(message.uid, item);
+    inFlight.set(message.uid, outcome);
+    void outcome.catch(() => {}).finally(() => { if (inFlight.get(message.uid) === outcome) inFlight.delete(message.uid); });
     dispatching.add(outcome);
     void outcome.catch(error => failDispatch(error)).finally(() => dispatching.delete(outcome));
     if (debouncer.shouldBuffer(item)) log(`buffered chat=${chatUid} sender=${key(item)} message=${message.uid} timestamp=${Date.now()}`);
@@ -353,8 +383,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
             const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=1`);
             const newest = page.data[0];
-            checkpoint = chat.uid === owner?.uid && newest?.direction === "inbound" && newest.sender.type === "member"
-              ? `first:${await earliestUnansweredOwnerMessage(account, chat.uid, newest, log)}` : newest?.uid ?? "";
+            const fromMember = (message: Message) => message.direction === "inbound" && message.sender.type === "member";
+            const missed = (message: Message) => message.direction === "inbound" && Date.parse(message.created_at) >= since &&
+              (message.sender.type === "member" || message.sender.relationship === "peer");
+            const unanswered = chat.uid === owner?.uid ? fromMember : missed;
+            checkpoint = newest && unanswered(newest)
+              ? `first:${await earliestUnanswered(account, chat.uid, newest, unanswered, log)}` : newest?.uid ?? "";
             const buffered = bufferedChats.get(chat.uid);
             const first = buffered?.values().next().value;
             // A buffered frame moves first contact back only when history proves it is older.
@@ -379,6 +413,9 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         const window = await recover(account, chatUid, checkpoint, log);
         for (const message of window) {
           if (!accepting || signal.aborted) break;
+          // A turn still running from before the drop decides the message: an
+          // incomplete one leaves it unacked, and consume then dispatches it again.
+          await inFlight.get(message.uid)?.catch(() => {});
           await consume(chatUid, message);
           replayed.add(message.uid);
         }
@@ -428,12 +465,14 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       clearInterval(heartbeat);
       signal.removeEventListener("abort", abort);
       abort();
-      await Promise.allSettled(dispatching);
+      // Running turns deliver over HTTP and replay skips them as pending, so a
+      // dropped socket reconnects without waiting for them.
       await Promise.all(queues.values());
     }
-    if (!signal.aborted) await delay(Math.min(30_000 * 2 ** attempt++, 300_000), undefined, { signal }).catch(error => { if (!signal.aborted) throw error; });
+    if (!signal.aborted) await backoff(Math.min(30_000 * 2 ** attempt++, 300_000), signal);
   }
   signal.removeEventListener("abort", cancel);
   await debouncer.drain();
+  await Promise.allSettled(dispatching);
   if (historyStates.get(accountHistoryKey) === state) historyStates.delete(accountHistoryKey);
 }

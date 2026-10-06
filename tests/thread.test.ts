@@ -7,7 +7,7 @@ type Tool = { name: string; parameters?: object; execute: (id: string, args: obj
 
 test("plow_start_thread takes phone numbers and iMessage emails as members, as Plow does", () => {
   let tool: Tool | undefined;
-  entry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, runtime: {}, registerChannel() {},
     registerTool(factory: (context: object) => Tool) {
       const candidate = factory({});
       if (candidate.name === "plow_start_thread") tool = candidate;
@@ -36,7 +36,7 @@ test("collected owner tools resolve the host delivery route and still refuse oth
   });
   for (const scenario of ["owner", "non-owner", "other-conversation"] as const) {
     let tool: Tool;
-    entry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+    entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, runtime: {}, registerChannel() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
           requesterSenderId: scenario === "non-owner" ? "+15550000002" : "plow-owner", senderIsOwner: scenario !== "non-owner",
@@ -71,7 +71,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       return Response.json(chat);
     });
     let tool: Tool, outbound: { sendText: (context: object) => Promise<unknown> };
-    entry.register({ registrationMode: "full", logger: { info() {} }, runtime: {},
+    entry.register({ registrationMode: "full", on() {}, logger: { info() {} }, runtime: {},
       registerChannel(value: { plugin: { outbound: typeof outbound } }) { outbound = value.plugin.outbound; },
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config: cfg, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat", nativeChannelId: "home", requesterSenderId: "plow-owner", senderIsOwner: true });

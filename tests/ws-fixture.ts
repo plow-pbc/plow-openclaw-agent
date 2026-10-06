@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { TestContext } from "node:test";
 
@@ -8,6 +8,8 @@ const { WebSocketServer } = createRequire(new URL("../plugin/package.json", impo
 export async function websocketFixture(t: TestContext) {
   const root = await mkdtemp(`${tmpdir()}/plow-ws-`);
   process.env.OPENCLAW_STATE_DIR = root;
+  // Written here so tests that fail disk writes still start; first install writes it itself.
+  await writeFile(`${root}/plow-listening-since`, new Date().toISOString());
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const server = new WebSocketServer({ port: 0 });
   await new Promise<void>(resolve => server.on("listening", resolve));

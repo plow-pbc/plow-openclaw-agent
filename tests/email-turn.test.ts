@@ -127,6 +127,8 @@ test("a non-owner email turn's final goes to the owner's 1:1, labelled, and noth
   assert.match(prompt, /plow_send_email, to "thread"/);
   assert.match(prompt, /never sent to this thread/);
   assert.match(prompt, /never ask them to approve anything in this thread/);
+  assert.match(prompt, /Configured guest tools available on this turn are already authorized/);
+  assert.match(prompt, /For requests beyond those tools, the owner decides privately/);
 });
 
 test("NO_REPLY on an email turn is silence: no fallback notice anywhere, and the turn completes", async t => {
@@ -251,7 +253,7 @@ test("collected email tools use the host route and retain owner authority", asyn
   });
   for (const senderIsOwner of [true, false]) {
     let tool: Tool;
-    toolEntry.register({ registrationMode: "full", logger: { info() {} }, runtime: {}, registerChannel() {},
+    toolEntry.register({ registrationMode: "full", on() {}, logger: { info() {} }, runtime: {}, registerChannel() {},
       registerTool(factory: (context: object) => Tool) {
         const candidate = factory({ config, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
           requesterSenderId: senderIsOwner ? "plow-owner" : "+15550000002", senderIsOwner,

@@ -57,7 +57,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
   let channel: { gateway: { startAccount: (context: object) => Promise<void> }; outbound: { sendText: (context: object) => Promise<unknown> } };
   let tool: { execute: (id: string, args: object) => Promise<unknown> };
   let failure: unknown;
-  entry.register({ registrationMode: "full", logger: { info() {} },
+  entry.register({ registrationMode: "full", on() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     registerTool(factory: (context: object) => typeof tool & { name: string }) {
       const candidate = factory({ config: cfg, sessionKey: "group" });

@@ -21,6 +21,7 @@ const guestCases = [
   ["group", "owner", false, ["guest_view"]],
   ["group", "member", true, ["guest_view"]],
   ["email", "member", false, ["guest_view"]],
+  ["email", "member", false, ["plow_send_email", "guest_view", "automations", "ask_user", "missing_tool"]],
   ["email", "owner", false, ["guest_view"]],
 ] as const;
 for (const { kind, role, trusted, body, guestTools } of [
@@ -49,7 +50,7 @@ for (const { kind, role, trusted, body, guestTools } of [
   let replyMode: string | undefined;
   let context: { access?: { toolPolicy?: { allow?: string[]; deny?: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
-  entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
+  entry.register({ registrationMode: "full", on() {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
       routing: { resolveAgentRoute: ({ peer }: { peer: Peer }) => { routingPeer = peer; return { sessionKey: "unchanged" }; } },
@@ -75,11 +76,11 @@ for (const { kind, role, trusted, body, guestTools } of [
   assert.equal(context.sender.name, sender.display_name);
   const restrictedPhone = kind !== "email" && !trusted && role === "member";
   assert.deepEqual(context.access?.toolPolicy, kind === "email"
-    ? { deny: ["automations"], ...(role === "member" ? { allow: ["plow_send_email"] } : {}) } : restrictedPhone && guestTools.length ? { allow: guestTools } : undefined);
+    ? { deny: ["automations"], ...(role === "member" ? { allow: [...new Set(["plow_send_email", ...guestTools])] } : {}) } : restrictedPhone && guestTools.length ? { allow: guestTools } : undefined);
   assert.equal(toolsDisabled, restrictedPhone && !guestTools.length ? true : undefined);
   const baseline = catalog.filter(name => !["guest_view", "guest_pick", "guest_admin", "ask_user"].includes(name) || guestTools.includes(name));
   assert.deepEqual(available, kind === "email"
-    ? role === "member" ? ["plow_send_email"] : baseline.filter(name => name !== "automations")
+    ? role === "member" ? catalog.filter(name => (name === "plow_send_email" || guestTools.includes(name)) && !["automations", "ask_user"].includes(name)) : baseline.filter(name => name !== "automations")
     : restrictedPhone ? guestTools.filter(name => catalog.includes(name)) : baseline);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
@@ -122,7 +123,7 @@ test("one member keeps their normalized handle across chat seats", async t => {
   });
   const contexts: { messageId: string; sender: { id: string; name: string }; conversation: { id: string } }[] = [];
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
-  entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} },
+  entry.register({ registrationMode: "full", on() {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
       routing: { resolveAgentRoute: ({ peer }: { peer: { id: string } }) => ({ sessionKey: peer.id }) },

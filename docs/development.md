@@ -36,6 +36,20 @@ its release commit `eb377ac59e6c9fd6c7705028034812becf00271b`.
 
 ## Defaults we inherit
 
+GLM 5.2 requests explicitly send `reasoning: { enabled: false }` through
+`agents.defaults.models["plow/z-ai/glm-5.2"].params.extraBody`. The pinned runtime
+merges this into the OpenAI completions request body; the Plow proxy must preserve
+the caller's reasoning field. Sonnet receives no additional reasoning parameter.
+An explicit empty `modelPolicy` keeps this parameter map from becoming a legacy
+model-selection allowlist. The wire test exercises both models against a local
+HTTP server using the pinned runtime's request wrappers and transport.
+These settings seed new owner configs. `syncConfig` preserves existing
+`agents.defaults` settings, so rebuilding an existing install does not add this
+opt-out; add the per-model parameter to its owner config explicitly. If no
+owner-authored policy exists, also set `agents.defaults.modelPolicy: {}` so the
+parameter map does not restrict model selection. Preserve any existing
+owner-authored model-selection policy instead.
+
 Plow prepares messages in arrival order within each chat, releasing the chat lane
 at the dispatch call rather than model completion, and sets the global queue mode
 to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/bot-core.ts#L257)
@@ -70,8 +84,9 @@ replayed, but later explicit model sends are allowed. There is no run-wide latch
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local
 profiles, sessions and memory); do not attempt an in-place database downgrade.
-Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`
-and `/var/lib/plow/plow-email` (where email threads report).
+Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`,
+`/var/lib/plow/plow-listening-since` and `/var/lib/plow/plow-email` (where email threads report).
 Restore those directories into the replacement volume before booting the agent.
-Without checkpoints, boot silently skips group messages from the outage window;
-trailing unanswered owner DMs dispatch in history order.
+Without checkpoints, boot dispatches unanswered group messages newer than
+`plow-listening-since` and trailing unanswered owner DMs, in history order;
+history older than `plow-listening-since` stays unanswered.

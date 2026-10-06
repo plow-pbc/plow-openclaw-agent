@@ -859,3 +859,110 @@ for (const listed of [false, true]) test(`empty and dot-segment chat IDs are rej
   assert.ok(!logs.some(text => text.startsWith("transport stopped")));
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
 });
+
+test("a guest's reply that arrived while disconnected, in a chat with no checkpoint yet, is delivered on reconnect", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  const guest = { type: "member", uid: "guest", role: "member", display_name: "Mary" };
+  const self = { type: "agent", relationship: "self", line: { uid: "line" } };
+  const owner = { type: "member", uid: "owner", role: "owner", display_name: "Sam" };
+  const started = { uid: "started", status: "active", participants: [owner, guest, self] };
+  const quiet = { uid: "quiet", status: "active", participants: [owner, guest, self] };
+  // Newest first, as the API returns them.
+  const history: Record<string, object[]> = {
+    started: [{ uid: "reply", body: "1", direction: "inbound", sender: guest, created_at: "2026-10-05T17:03:20Z" },
+      { uid: "vcard", body: "", direction: "outbound", sender: self, created_at: "2026-10-05T17:02:48Z" },
+      { uid: "intro", body: "Hi Mary", direction: "outbound", sender: self, created_at: "2026-10-05T17:02:08Z" }],
+    quiet: [{ uid: "old", body: "see you", direction: "inbound", sender: guest, created_at: "2026-09-01T10:00:00Z" }],
+  };
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("/chats")) return Response.json({ data: [started, quiet], has_more: false });
+    for (const chat of [started, quiet]) {
+      if (url.endsWith(`/chats/${chat.uid}`)) return Response.json(chat);
+      if (url.includes(`/chats/${chat.uid}/messages?`)) {
+        const rows = history[chat.uid]!;
+        const after = new URL(url).searchParams.get("starting_after");
+        const limit = Number(new URL(url).searchParams.get("limit"));
+        return Response.json({ data: (after ? rows.slice(rows.findIndex(m => (m as Message).uid === after) + 1) : rows).slice(0, limit), has_more: false });
+      }
+    }
+    return Response.json({ ticket: "ticket" });
+  });
+  // Listening since before the thread started; the outage came later.
+  await writeFile(`${root}/plow-listening-since`, "2026-10-05T16:27:31Z");
+  const turns: string[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (chat, message) => {
+    turns.push(`${chat.uid}/${message.uid}`);
+    controller.abort();
+    return "completed";
+  });
+  assert.deepEqual(turns, ["started/reply"]);
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/started`), "reply");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/quiet`), "old", "history from before the agent first listened stays unanswered");
+});
+
+test("a dropped socket reconnects while a turn is still running, and replays it if that turn ends incomplete", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/chat`, JSON.stringify({ uid: "old", recent: [] }));
+  const chat = acceptedChat("chat");
+  let tickets = 0;
+  let running = false;
+  const reconnected = Promise.withResolvers<void>();
+  const recovering = Promise.withResolvers<void>();
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url.endsWith("/ws/ticket")) {
+      if (++tickets === 2) {
+        assert.equal(running, true, "reconnect must not wait for the turn");
+        reconnected.resolve();
+      }
+      return Response.json({ ticket: "ticket" });
+    }
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
+      url.endsWith("/chats/chat") ? chat :
+      url.includes("limit=50") ? (tickets === 2 && recovering.resolve(), { data: [inbound("slow"), { uid: "old", direction: "outbound", sender: { type: "agent" } }], has_more: false }) :
+      { data: [], has_more: false });
+  });
+  server.once("connection", socket => socket.send(JSON.stringify({ event_type: "message_received", chat_id: chat.uid,
+    data: { message: inbound("slow") } })));
+  const dispatches: string[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message, _first, _history, ingress) => {
+    dispatches.push(message.uid);
+    ingress.onSubmitted();
+    if (dispatches.length > 1) {
+      controller.abort();
+      return "completed";
+    }
+    running = true;
+    // The socket drops while the model is still retrying; the retry backoff runs on mock time.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    for (const socket of server.clients) socket.terminate();
+    while (tickets < 2 && !controller.signal.aborted) {
+      t.mock.timers.tick(1_000);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    t.mock.timers.reset();
+    await reconnected.promise;
+    // Finish only after the reconnect has read this message back for replay.
+    await recovering.promise;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    running = false;
+    return "incomplete";
+  });
+  assert.equal(tickets, 2);
+  assert.deepEqual(dispatches, ["slow", "slow"], "the reconnect's replay waits for the running turn, then retries what it left unfinished");
+});
+
+
+test("only the phone listener records when the agent first listened", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  await fs.rm(`${root}/plow-listening-since`);
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(url.endsWith("/chats") ? { data: [], has_more: false } : { ticket: "ticket" }));
+  const email = abortAfter(200);
+  await listen({ ...account, apiBase, accountId: "email", lineUid: "line" } as Account, email.signal, () => {}, async () => "completed");
+  await assert.rejects(readFile(`${root}/plow-listening-since`, "utf8"), { code: "ENOENT" });
+  const phone = abortAfter(200);
+  await listen({ ...account, apiBase, lineUid: "line" }, phone.signal, () => {}, async () => "completed");
+  assert.ok(Number.isFinite(Date.parse(await readFile(`${root}/plow-listening-since`, "utf8"))));
+});
