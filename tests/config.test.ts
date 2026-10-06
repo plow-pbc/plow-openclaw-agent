@@ -26,6 +26,7 @@ test("only the owner's phone DM becomes main; other peers and groups stay isolat
   assert.ok(!("ownerChatUid" in config.channels.plow));
   assert.ok(!("ownerMemberUid" in config.channels.plow));
   assert.deepEqual(config.commands.ownerAllowFrom, ["plow-owner"]);
+  assert.deepEqual(config.agents.defaults.heartbeat, { target: "plow", to: "plow-heartbeat", accountId: "chat" }, "heartbeats reach the owner through an alias their sends are marked by");
   assert.equal(config.session.dmScope, "per-account-channel-peer");
   assert.equal(config.session.groupScope, "per-group");
   assert.deepEqual(config.bindings[0], {
@@ -191,6 +192,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.messages.inbound = { debounceMs: 800, byChannel: { plow: 1, signal: 500 } };
   old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
+  old.agents.defaults.heartbeat = { every: "1h" }; // a config from before the marked route
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
@@ -204,6 +206,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
+  assert.deepEqual(owner.agents.defaults.heartbeat, { every: "1h", target: "plow", to: "plow-heartbeat", accountId: "chat" }, "rebuilt agents get the marked route and keep their cadence");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
   assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });
@@ -219,6 +222,17 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(again.channels.telegram, { enabled: true });
   assert.deepEqual(again.messages.groupChat, { visibleReplies: "message_tool" });
   assert.equal(again.agents.defaults.model.primary, "extra/model");
+});
+
+test("an owner who routed heartbeats elsewhere, or silenced them, keeps that choice on restart", async t => {
+  const { path, includes } = await configFixture(t);
+  for (const choice of [{ target: "none" }, { target: "last", every: "2h" }]) {
+    const old = renderConfig(identity, "http://api:8000") as Record<string, any>;
+    old.agents.defaults.heartbeat = choice;
+    await writeFile(path, JSON.stringify(old));
+    await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
+    assert.deepEqual(JSON5.parse(await readFile(path, "utf8")).agents.defaults.heartbeat, choice);
+  }
 });
 
 test("MCP Plow server include disappears without a relay while owner MCP settings remain", async t => {

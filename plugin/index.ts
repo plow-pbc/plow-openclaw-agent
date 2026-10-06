@@ -8,7 +8,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
@@ -39,20 +39,12 @@ async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat
   return { chat };
 }
 
-async function requestDelivery<T>(account: Account, path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
-  try { return await request<T>(account, path, body, undefined, method); }
-  catch (error) {
-    if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
-      throw new DeliveryUnknownError();
-    }
-    throw error;
-  }
-}
-
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
   to = to.replace(/^plow:/i, "");
   if (account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
-  if (to === "plow-owner") to = (await ownerChat(account)).uid;
+  // Heartbeats are routed to their own alias (boot/config.ts) so their sends can be marked.
+  const heartbeat = to === "plow-heartbeat";
+  if (to === "plow-owner" || heartbeat) to = (await ownerChat(account)).uid;
   const chat = await request<Chat>(account, `/chats/${to}`);
   if (chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
     throw new Error("Email is sent with plow_send_email, not message.");
@@ -70,8 +62,7 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
     if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
     attachments.push(upload.uid);
   }
-  const sent = await requestDelivery<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: attachments });
-  return { channel: "plow" as const, messageId: sent.uid };
+  return await postMessage(account, to, text, attachments, heartbeat ? "heartbeat" : undefined);
 }
 
 
@@ -98,10 +89,7 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
     cfg, channel: "plow", accountId, to, payloads: [{ text }],
     session: buildOutboundSessionContext({ cfg, ...route, conversationType: kind }),
     mirror: sessionId ? undefined : route, skipQueue: true,
-    ...(accountId === "email" ? { deps: { plow: async (account: Account, to: string, text: string) => {
-      const sent = await requestDelivery<{ uid: string }>(account, `/chats/${to}/messages`, { body: text, attachment_uids: [] });
-      return { channel: "plow" as const, messageId: sent.uid };
-    } } } : {}),
+    ...(accountId === "email" ? { deps: { plow: async (account: Account, to: string, text: string) => await postMessage(account, to, text) } } : {}),
   });
   if (result.status !== "sent") throw new DeliveryUnknownError();
   if (sessionId) await appendAssistantMirrorMessageByIdentity({ ...route, sessionId, text: sessionText, config: cfg });
@@ -222,8 +210,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       },
       deliver: async payload => {
         if (email) {
-          // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
-          const text = (payload.text ?? "").split("\n").filter(line => line.trim() !== "NO_REPLY").join("\n").replace(/\n{3,}/g, "\n\n").trim();
+          // A NO_REPLY line the model left beside its text, decorated or not, is the silence marker, not words
+          // for the owner. Same predicate as delivery, so a marker kept here can't later drop the whole digest.
+          const text = (payload.text ?? "").split("\n").filter(line => !isSilent(line)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
           // Only the no-reply fallback is silence; an error notice is a real failure and reaches the owner.
           if (!text || (!payload.isError && text.startsWith(NO_REPLY_FALLBACK))) {
             log(`silent chat=${chat.uid} message=${message.uid}`);
@@ -262,6 +251,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           return { messageIds: [sent] };
         }
         const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
+        if ("outcome" in sent && sent.outcome === "not_sent") {
+          log(`silent chat=${chat.uid} message=${message.uid}`);
+          silent = true;
+          return { messageIds: [] };
+        }
         log(`delivered chat=${chat.uid} message=${sent.messageId}`);
         return { messageIds: [sent.messageId] };
       },
@@ -292,9 +286,9 @@ const plugin: ChannelPlugin<Account> = {
   },
   agentPrompt: { messageToolHints: () => ["Reply normally in the current conversation; use message(action=send) only in the current conversation and omit target there. Use plow_reply_to with the chat uid for a follow-up to another conversation; email goes only through plow_send_email."] },
   messaging: {
-    inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
+    inferTargetChatType: ({ to }) => to === "plow-owner" || to === "plow-heartbeat" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
-    targetResolver: { looksLikeId: (raw, normalized) => (normalized ?? raw.trim().replace(/^plow:/i, "")) === "plow-owner" || /^cht_[A-Za-z0-9_-]+$/.test(normalized ?? raw.trim().replace(/^plow:/i, "")), hint: "Use a Plow chat uid (cht_…)." },
+    targetResolver: { looksLikeId: (raw, normalized) => ["plow-owner", "plow-heartbeat"].includes(normalized ?? raw.trim().replace(/^plow:/i, "")) || /^cht_[A-Za-z0-9_-]+$/.test(normalized ?? raw.trim().replace(/^plow:/i, "")), hint: "Use a Plow chat uid (cht_…)." },
   },
   gateway: {
     startAccount: async ctx => {
@@ -352,6 +346,8 @@ export default defineChannelPluginEntry({
         }
         const trusted = account.threadTrust === "trusted" || (account.threadTrust === "ask" && args.trusted === true);
         const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, _id, members, args.body, trusted])).digest("hex");
+        // A thread's first message is a delivery like any other: the silence marker opens nothing.
+        if (isSilent(args.body)) throw new Error("Nothing was sent: the message is the NO_REPLY silence marker.");
         const chat = await requestDelivery<{ uid: string }>(account, "/chats", {
           line_uid: account.lineUid, members,
           body: args.body, trusted, idempotency_key: idempotencyKey,
@@ -395,6 +391,7 @@ export default defineChannelPluginEntry({
       async execute(_id, args: { chat_uid: string; text: string }) {
         const cfg = context.config;
         if (!cfg) throw new Error("Plow configuration is unavailable.");
+        if (isSilent(args.text)) throw new Error("Nothing was sent: the text is the NO_REPLY silence marker.");
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         await ownerDmTurn(ownerAccount, context);
         const destination = ownerAccount;
@@ -455,13 +452,15 @@ export default defineChannelPluginEntry({
           return receipt({ threads, has_more: listing.has_more });
         }
         if (!args.body) return refuse("body is required.");
+        // Checked before the footer is added: after it, the marker no longer ends the text.
+        if (isSilent(args.body)) return refuse("Nothing was sent: the body is the NO_REPLY silence marker.");
         // Every mail carries a footer saying who wrote it, with the body trimmed for durable delivery.
         const owner = turn.chat.participants.find(p => p.type === "member" && p.role === "owner");
         const body = `${args.body.trim()}\n\n${emailFooter(persona, owner?.type === "member" ? owner.display_name : undefined)}`;
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);
-          if (args.to === turn.chat.uid) await requestDelivery(mailbox, `/chats/${args.to}/messages`, { body });
+          if (args.to === turn.chat.uid) await postMessage(mailbox, args.to, body);
           else {
             // From another conversation, a durable send also records the reply in the thread's session.
             const { kind, route, routeTo } = sessionRoute(cfg, mailbox, chat);
