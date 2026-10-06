@@ -124,8 +124,9 @@ image; they are separate from durable state.
 
 **Outcome:** a complete archive starts with the matching runtime and preserves behavior.
 
-1. Select the backup and its matching image digest.
-2. Stop the destination install.
+1. For a rehearsal, select a backup from an isolated test install and its matching
+   image digest. Keep the same API root, line UID and chat identities.
+2. Stop the source and destination installs so only the restored copy can listen.
 3. Create an empty destination state volume:
 
    ```sh
@@ -142,7 +143,8 @@ image; they are separate from durable state.
      'tar -xzf /backups/plow-state.tar.gz -C /var/lib/plow && chown -R node:node /var/lib/plow'
    ```
 
-5. Configure the test deployment to use that volume and an isolated line credential.
+5. Configure the restored test deployment to use that volume and credentials for
+   the same isolated test line that produced the backup.
 6. Start the matching image and verify health.
 7. Inspect saved personality, private preferences, room notes, task records,
    paused notifications, and scheduler jobs.
@@ -150,8 +152,11 @@ image; they are separate from durable state.
    sources do not create duplicate effects.
 9. Confirm the Agent Index key and ledger retain the install identity.
 
-An isolated test line may have different chat IDs. Check persistence and transport
-recovery separately rather than sending restored jobs to old destinations.
+Scoped state is keyed by API root, line UID and conversation identity. A different
+line or different chat IDs select fresh scopes; that cannot validate restoration
+of the saved personality, private preferences, notes or pause journals. A separate
+line can exercise a fresh install, but scoped-state continuity requires the original
+identities. Never attach a production backup to another live line as a rehearsal.
 Keep copied schedules paused during a rehearsal until destinations are reviewed.
 Use `scope=all` pause on the source before backup if the rehearsal would otherwise
 resume live work.
