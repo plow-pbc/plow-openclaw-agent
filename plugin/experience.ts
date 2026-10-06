@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { accepts, request, normalizedHandle, ownerChat, type Account, type Chat } from "./transport.ts";
+import { accepts, request, normalizedHandle, type Account, type Chat } from "./transport.ts";
 import { conversationUid, ownerDmTurn } from "./threads.ts";
-import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, scopePath, type Scope } from "./experience-state.ts";
+import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, type Scope } from "./experience-state.ts";
 import { personalitySchema, personalityPatchSchema, personalityInstructions } from "../boot/personality.ts";
 
 type Context = OpenClawPluginToolContext<2>;
