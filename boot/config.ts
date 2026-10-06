@@ -66,6 +66,8 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
     messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust, guestTools, groupMode: definition.defaults.groupMode,
+      ...(identity.agent?.web_url ? { dashboardUrl: identity.agent.web_url } : {}),
+      ...(definition.persona?.sliders ? { personalityDefaults: definition.persona.sliders } : {}),
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
