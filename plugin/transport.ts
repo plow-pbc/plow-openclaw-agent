@@ -20,7 +20,8 @@ export type Chat = { uid: string; status: string; trusted: boolean; display_name
 export type Message = {
   uid: string; direction: string; body: string; sender: Member | Agent; created_at: string;
   attachments: { url: string; content_type: string; filename: string }[];
-  reply_to?: Message;
+  // Plow wraps the replied-to message with the part being answered.
+  reply_to?: { part_index: number | null; message: Message };
 };
 export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; onAdopted: () => Promise<void> };
 export type TurnOutcome = "completed" | "incomplete" | "deferred";

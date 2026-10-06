@@ -63,3 +63,41 @@ test("a checkpointed outbound opener seeds ordered submissions despite slow prep
   const facts = contexts[0].supplemental.channelStructuredContext[0].payload;
   assert.deepEqual(facts.participants[0], { name: "Juniper", type: "agent", role: "self" });
 });
+
+test("a threaded reply quotes the message it answers, in the shape Plow sends it", async t => {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  const self = { type: "agent", relationship: "self", line: { uid: "line", display_name: "Willow" } };
+  const owner = { type: "member", uid: "owner", role: "owner", display_name: "Sam", provider_key: "+15550000001" };
+  const chat = { uid: "dm", status: "active", trusted: true, participants: [self, owner] };
+  const nudge = { uid: "nudge", body: "Ana wants to meet. Offer times?", sender: self, direction: "outbound", attachments: [], created_at: "2026-10-06T01:30:00Z" };
+  // Plow wraps the replied-to message with the part it answers (`MessageReplyResource`).
+  const reply = { uid: "reply", body: "Yes, next week", sender: owner, direction: "inbound", attachments: [], created_at: "2026-10-06T01:34:00Z", reply_to: { part_index: 0, message: nudge } };
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/dm") ? chat :
+    url.includes("/messages?") ? { data: [nudge], has_more: false } : { ticket: "ticket" }));
+  server.on("connection", (socket: { send: (text: string) => void }) =>
+    socket.send(JSON.stringify({ event_type: "message_received", event_id: "reply", chat_id: chat.uid, data: { message: reply } })));
+  const logs: string[] = [];
+  let context: { reply: { replyToId?: string }; supplemental: { quote?: unknown } } | undefined;
+  let channel: { gateway: { startAccount: (context: object) => Promise<void> } };
+  entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
+    registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
+    runtime: { channel: {
+      routing: { resolveAgentRoute: () => ({ agentId: "main", sessionKey: "main" }) },
+      inbound: {
+        buildContext: async (value: typeof context) => { context = value; return {}; },
+        dispatch: async ({ replyOptions }: { replyOptions: { onAgentRunTerminalOutcome: (outcome: string) => void } }) => {
+          replyOptions.onAgentRunTerminalOutcome("completed");
+          controller.abort();
+          return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: true } };
+        },
+      },
+    } },
+  });
+  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: {}, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
+  assert.deepEqual(logs.filter(text => text.startsWith("turn failed")), []);
+  assert.ok(context);
+  assert.equal(context.reply.replyToId, "nudge");
+  assert.deepEqual(context.supplemental.quote, { id: "nudge", body: nudge.body, sender: "line" });
+});

@@ -109,7 +109,7 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
 }
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
-  const sender = message.sender;
+  const sender = message.sender, quoted = message.reply_to?.message;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
   const senderName = (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? senderId;
@@ -146,7 +146,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
-    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: message.reply_to?.uid },
+    route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: quoted?.uid },
     access: { commands: { authorized: senderIsOwner }, ...(toolPolicy ? { toolPolicy } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
@@ -154,7 +154,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
     })), rawBody: body },
     supplemental: {
-      ...(message.reply_to ? { quote: { id: message.reply_to.uid, body: message.reply_to.body, sender: message.reply_to.sender.type === "member" ? message.reply_to.sender.display_name : message.reply_to.sender.line.uid } } : {}),
+      ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
         payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
