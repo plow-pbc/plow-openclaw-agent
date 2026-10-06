@@ -1,0 +1,25 @@
+# Synthetic visual acceptance only: no credentials file or live Plow line.
+# Like compose.yml, anyone who can reach localhost:3001 administers this fixture.
+services:
+  agent:
+    image: plow-openclaw:test
+    user: root
+    environment:
+      PLOW_ACCEPTANCE_SERVE: "1"
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ../node_modules:/opt/plow/node_modules:ro
+      - .:/opt/plow/tests:ro
+    command:
+      - sh
+      - -c
+      - mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node /opt/plow/tests/gateway-acceptance.ts
+    stop_grace_period: 40s
+  dev-dashboard:
+    image: caddy:2@sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f
+    network_mode: service:agent
+    depends_on:
+      - agent
+    volumes:
+      - ../dev/Caddyfile:/etc/caddy/Caddyfile:ro

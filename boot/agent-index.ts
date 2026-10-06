@@ -24,10 +24,9 @@ export function linkSessions(state = "/var/lib/plow") {
 // five minutes, the contract the Hermes base runs as an s6 service. This image
 // has no supervision tree of its own, so the boot process owns the schedule.
 //
-// Usage comes from agentsview, which this image installs and which reads
-// OpenClaw's own sessions -- at ~/.openclaw/agents, the path OpenClaw uses
-// when OPENCLAW_STATE_DIR is unset. This image does set it, so the link below
-// is what puts the sessions back where the collector looks.
+// The pinned client reads native SQLite transcripts using OPENCLAW_STATE_DIR.
+// The legacy agentsview collector is also refreshed, with its session link
+// preserved for compatible runtimes. The client deduplicates these sources.
 //
 // No switch. The reporter is here because this image carries it; an owner who
 // does not want their usage on the Index builds without AGENT_ID, and then
