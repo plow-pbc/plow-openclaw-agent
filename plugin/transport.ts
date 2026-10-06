@@ -26,7 +26,7 @@ export type Message = {
 export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; onAdopted: () => Promise<void> };
 export type TurnOutcome = "completed" | "incomplete" | "deferred";
 export type Page<T> = { data: T[]; has_more: boolean };
-export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; emailName?: string; threadTrust?: "ask" | "trusted" | "untrusted"; guestTools?: string[] };
+export type Account = { accountId: string; apiBase: string; lineUid: string; emailLineUid?: string; emailName?: string; threadTrust?: "ask" | "trusted" | "untrusted"; guestTools?: string[]; groupMode?: "helper" | "coordinator" | "facilitator" };
 
 // Image plugins can take durable ownership in before_dispatch without producing
 // a normal reply. Separate SDK registries still run in the same gateway process.

@@ -58,6 +58,14 @@
               "trusted",
               "untrusted"
             ]
+          },
+          "groupMode": {
+            "type": "string",
+            "enum": [
+              "helper",
+              "coordinator",
+              "facilitator"
+            ]
           }
         }
       }

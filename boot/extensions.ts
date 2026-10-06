@@ -21,8 +21,9 @@ export const agentDefinitionSchema = z.object({
   plugins: extensions.default([]), skills: z.array(imagePath).max(20).default([]),
   guestTools: z.array(toolName).max(100).default([]),
   defaults: z.object({
+    groupMode: z.enum(["helper", "coordinator", "facilitator"]).default("helper"),
     threadTrust: z.enum(["ask", "trusted", "untrusted"]).default("ask"),
-  }).strict().default({ threadTrust: "ask" }),
+  }).strict().default({ groupMode: "helper", threadTrust: "ask" }),
 }).strict();
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 export type AgentExtension = z.infer<typeof extension>;
