@@ -1,5 +1,9 @@
 # Development
 
+Builders can start with [the tutorial](first-agent.md) and
+[the workflow and release SOPs](builder-sops.md). This document contains the
+base's executable checks and pinned upstream contracts.
+
 The image pins the runtime and SDK. CI type-checks boot, plugin and build sources,
 runs all Node tests against that image, and boots the real offline gateway probe.
 Tests use local fixtures and need no Plow credentials. Type checking uses the
@@ -14,7 +18,7 @@ docker build -t plow-openclaw:test .
 docker run --rm --user root --network none \
   -v "$PWD/node_modules:/opt/plow/node_modules:ro" \
   -v "$PWD/tests:/opt/plow/tests:ro" plow-openclaw:test sh -c \
-  '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test /opt/plow/tests/*.test.ts'
+  '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-concurrency=2 /opt/plow/tests/*.test.ts'
 docker run --rm --network none plow-openclaw:test /opt/plow/probe
 ```
 
@@ -93,3 +97,52 @@ Restore those directories into the replacement volume before booting the agent.
 Without checkpoints, boot dispatches unanswered group messages newer than
 `plow-listening-since` and trailing unanswered owner DMs, in history order;
 history older than `plow-listening-since` stays unanswered.
+
+
+## Experience acceptance
+
+The build applies `patch-runtime.ts` to two checksum-verified 2026.9.6 modules.
+The outbound patch retains the durable intent ID in Plow adapter context even when exact
+provider reconciliation is not required. This lets the adapter distinguish cron
+delivery from inbound replies for pause enforcement. It does not enable provider
+reconciliation or change other channels. Runtime upgrades must review this patch;
+a changed source checksum fails the build. Gateway acceptance tests the partial
+pause case without scheduler cancellation and confirms direct replies still work.
+
+The task notification patch suppresses the redundant automatic terminal notice
+for native subagents in the reserved `plow-worker` session namespace. The
+coordinator acknowledges cancellation; native result handoff still runs. Other
+workers and task runtimes retain their notification policy. Runtime and gateway
+tests verify the boundary and reject duplicate cancellation notices.
+
+After the suite and probe, run the real gateway acceptance harness. It uses local
+Plow and model fixtures under `--network none`, tests authenticated personality
+writes, real silence and group delivery, native Sonnet image routing, scheduler
+pause/resume through a full-state backup/restore, reminder execution/delivery and
+cancellation, a pause during in-flight generation, responsive background workers
+and their cancellation, and the pinned client's native SQLite usage reader.
+
+```sh
+docker run --rm --user root --network none \
+  -v "$PWD/node_modules:/opt/plow/node_modules:ro" \
+  -v "$PWD/tests:/opt/plow/tests:ro" plow-openclaw:test sh -c \
+  'mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node /opt/plow/tests/gateway-acceptance.ts'
+```
+
+Live dialogue evaluations require a dedicated agent credential. They call both
+configured models with synthetic context and never send phone or email messages:
+
+```sh
+npm run eval -- --credentials /PRIVATE/test-credentials --output /TMP/eval-results.json
+```
+
+The report contains assertions, outputs, token usage, latency and estimated cost.
+Review outputs using the rubric in [base-experience.md](base-experience.md#operations-and-release-evidence).
+Provider failures fail the run and remain visible; deterministic CI needs no
+credential. The manual workflow uses repository secrets for a live evaluation.
+
+Experience controls use SDK context version 2 and check current authority at the
+mutation boundary. Native task flows hold commitments; native cron holds schedules;
+scoped experience JSON holds voice/preferences/notes/notification gates. Back up
+all of `/var/lib/plow` while stopped. The real gateway harness restores the complete
+state tree at its original path, then verifies scheduler and personality continuity.

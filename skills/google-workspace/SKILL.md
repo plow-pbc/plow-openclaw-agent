@@ -21,6 +21,6 @@ Check calendar conflicts. Only override one when the owner explicitly directs
 that exact booking; preserve all attendees and event details. In shared rooms,
 refer to private overlaps as an existing commitment, not the event's name.
 
-If the Mac cannot be reached, ask the owner to open Latch on their Mac. If the
+On an explicit disconnected/authentication error, ask the owner to open Latch on their Mac immediately. On a transient timeout/server error, retry one read once, then explain how to reconnect. Never automatically repeat an uncertain mutation. If the
 Mac's skill list has no Google Workspace capability, say Google access is not
 available. Neither case permits falling back to local OAuth or invented tools.

@@ -5,6 +5,18 @@ it on a Plow phone line. It can reply in group threads and its own email threads
 start groups and send follow-ups for the owner, and use the owner's Mac through
 Latch, Plow’s Mac app that the owner installs. It uses `z-ai/glm-5.2` through Plow, with `anthropic/claude-sonnet-5` as fallback.
 
+## Build a useful agent
+
+The base includes a prebuilt everyday assistant, quiet group participation,
+scoped owner controls, durable task and notification state, and a personality
+dashboard. Builders specialize that experience through a manifest and domain
+skills while retaining the shared routing and permission boundaries.
+
+Start with [the guided first-agent tutorial](docs/first-agent.md). Use
+[the builder SOPs](docs/builder-sops.md) to design, verify, and release a variant.
+[The documentation guide](docs/README.md) links the default behavior, complete
+manifest reference, extension procedure, and deployment and recovery SOPs.
+
 ## Run it
 
 Install [plow-agents](https://github.com/plow-pbc/plow-agents), sign in, and choose
@@ -89,10 +101,10 @@ Boot diagnostics also appear in `/var/lib/plow/boot.log`, rotated at 256 KiB.
 Set `AGENT_ID` to the Agent Index id to put this agent on
 [the index](https://aiworthusing.com/agent-index): boot then registers the listing,
 with `AGENT_NAME`, `AGENT_BLURB` and `AGENT_RUNTIME` (default `OpenClaw`) sent along when they are set, and reports its
-token usage every five minutes. The counts come from agentsview, which this
-image installs and which reads OpenClaw's own sessions; boot links them where
-it looks, since this image moves OpenClaw's state off `~/.openclaw`, and each
-pass refreshes the collector before reporting. The client is
+token usage every five minutes. The pinned client reads current OpenClaw
+SQLite transcripts directly and deduplicates collector results. The image also
+installs agentsview and refreshes it before reporting. Boot supplies the native
+state path and a legacy session link. The client is
 [agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned by
 commit and checksum in the `Dockerfile` and fetched at build; its key and ledger live in the state
 volume, so a rebuilt container keeps one install rather than registering a second.
@@ -120,7 +132,8 @@ Do not store durable agent state in these workspace files.
 The gateway starts after one bounded identity lookup, even before the owner has a
 chat. Identity lookup tolerates 401/403 for 120 seconds and retries network/429/5xx
 failures ten times. Invalid identity or exhausted boot retries leave the
-container running with a diagnostic error. The plugin subscribes before listing
+container running with a diagnostic error and an unhealthy Docker health status.
+Health checks use the gateway readiness endpoint without locking configuration. The plugin subscribes before listing
 chats, discovers the active owner DM from its roster, and buffers messages during
 baseline recovery. Multiple owner DMs among the received listing and live chats
 stop the chat account until the container restarts. A cached owner may be used
@@ -177,9 +190,36 @@ texting. Long-running MCP responses stream without a fixed bridge timeout;
 client disconnects cancel the upstream request. A bridge crash restarts the
 bridge while the gateway continues.
 
+## Personality, memory and groups
+
+Owners can tune five public personality sliders at `/plugins/plow/personality`
+on their authenticated dashboard, or ask in their main phone DM. Preview, save
+and reset preserve the builder defaults and never change permissions. Private
+language/timezone/voice preferences, scoped memory, room purpose and modes,
+durable task records and pause/resume controls are available through the Plow
+experience tools. See [the controls and their scopes](docs/base-experience.md#owner-and-room-controls).
+
+A conversational coordinator can delegate long read-only analysis or public
+research to a native background worker while remaining available for corrections
+and cancellation. Workers cannot message people or mutate accounts.
+
+Groups answer direct requests and relevant active-work replies and stay quiet
+during unrelated human conversation. Helper, coordinator and facilitator modes
+make participation explicit. Normal groups can use narrowly declared guest tools;
+full trust still grants every member access to owner resources.
+
+Phone still images up to 8 MiB use Sonnet image understanding. Audio/video and
+inbound email attachments need relevant text or a still image. Optional heartbeats
+honor persisted pause, quiet hours and notification frequency. Timed reminders
+use native automations. Memory deletion and task cancellation are separate from
+cancelling a scheduled job.
+
 ## Building a variant image
 
-For a persona, prompt and skills, build a separate image on this base:
+For a persona and skills, start with the [coordinator or tutor examples](docs/base-experience.md#build-a-variant).
+Use a versioned `/opt/plow/agent.json` to declare them. Legacy images can continue
+to supply a custom AGENTS.md; boot composes it after maintained BASE.md.
+For example:
 
 ```dockerfile
 FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>
@@ -304,8 +344,10 @@ When bumping the base image:
 
 ## Image-installed extensions
 
-An agent image can add a root-owned `/opt/plow/agent.json` array containing
-`id`, absolute `/opt/` plugin `path`, `tools` and `conversationAccess`. Boot
+An agent image can add a root-owned version 1 `/opt/plow/agent.json` object. It
+declares persona, skills, plugins, guest tools and room/trust defaults. Legacy
+plugin arrays containing `id`, absolute `/opt/` plugin `path`, `tools` and
+`conversationAccess` remain supported. See the [builder and state contract](docs/base-experience.md). Boot
 loads these native plugins and enables only the declared conversation hooks.
 Fresh installations seed their entries; restarts preserve owner disablement
 and model settings. Images without this file keep the existing boot behavior.
