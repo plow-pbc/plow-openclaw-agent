@@ -117,7 +117,7 @@ test("guest tools default to empty and are declared once for channel and messagi
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
+    loopDetection: { enabled: true }, message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
   });
 });
 
@@ -185,6 +185,8 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.channels.telegram = { enabled: true };
   old.models.providers.extra = { baseUrl: "https://example.com" };
   old.plugins.entries.extra = { enabled: true };
+  old.plugins.entries.plow = { enabled: true };
+  old.tools.loopDetection = { enabled: false };
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
   old.messages.queue = { mode: "steer", cap: 99 };
@@ -197,6 +199,8 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.channels.telegram, { enabled: true });
   assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
+  assert.deepEqual(JSON5.parse(await readFile(join(includes, "plow-plugin.json5"), "utf8")), { enabled: true, hooks: { allowConversationAccess: true } });
+  assert.deepEqual(JSON5.parse(await readFile(join(includes, "tools.json5"), "utf8")).loopDetection, { enabled: true });
   assert.deepEqual(JSON5.parse(await readFile(join(includes, "message-queue.json5"), "utf8")), { mode: "collect" });
   assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
   assert.equal(owner.messages.inbound.debounceMs, 800);

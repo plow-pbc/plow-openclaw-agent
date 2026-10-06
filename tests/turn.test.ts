@@ -49,7 +49,8 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
         }
         if (outcome === "error-notice" || outcome === "fallback-notice") {
           const raw = { text: "runtime diagnostic", ...(outcome === "error-notice" ? { isError: true } : { isFallbackNotice: true }) };
-          if (!dispatch.delivery.preparePayload || dispatch.delivery.preparePayload(raw, { kind: "final" }) !== null) await dispatch.delivery.deliver(raw);
+          const prepared = dispatch.delivery.preparePayload ? dispatch.delivery.preparePayload(raw, { kind: "final" }) : raw;
+          if (prepared !== null) await dispatch.delivery.deliver(prepared);
           if (outcome === "error-notice") dispatch.replyOptions.onAgentRunTerminalOutcome("failed");
           else await dispatch.delivery.deliver({ text: "fallback answer" });
         }
@@ -112,7 +113,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   }
   if (outcome === "error-notice" || outcome === "fallback-notice" || outcome === "terminal-notice") {
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
-    assert.deepEqual(texts, outcome === "fallback-notice" ? ["fallback answer"] : [outcome === "error-notice" ? "runtime diagnostic" : "runtime terminal fallback"]);
+    assert.deepEqual(texts, outcome === "fallback-notice" ? ["fallback answer"] : [outcome === "error-notice" ? "Sorry, I couldn't finish that just now. Some actions may have completed; check before retrying." : "runtime terminal fallback"]);
   }
   if (outcome === "reminder-note") {
     const texts = fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/messages")).map(call => JSON.parse((call.arguments[1] as RequestInit).body as string).body);
