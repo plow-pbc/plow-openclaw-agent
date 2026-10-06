@@ -381,7 +381,11 @@
     "doesNotAssert": [
       "All reminders are restored",
       "All jobs are restored",
-      "Everything is restored"
+      "Everything is restored",
+      "is still suspended",
+      "is still showing as suspended",
+      "is disabled",
+      "is still disabled"
     ],
     "maxChars": 500
   },

@@ -22,6 +22,9 @@ const claimCases: [string, string, boolean][] = [
   ["No problem, all jobs are stopped; the scheduler is unavailable.", "All jobs are stopped", true],
   ["The background task has not completed successfully; it is still running.", "completed successfully", false],
   ["The background task completed successfully.", "completed successfully", true],
+  ["The receipt shows one job is still suspended.", "is still suspended", true],
+  ["One job is still showing as suspended.", "is still showing as suspended", true],
+  ["I cannot confirm whether the job is still suspended.", "is still suspended", false],
 ];
 for (const [output, phrase, expected] of claimCases) test(`completion claim=${expected}: ${output}`, () => {
   assert.equal(assertsPhrase(output, phrase), expected);
