@@ -79,7 +79,7 @@ timed reminders keep their requested time.
 - Check before sending on someone's behalf, deleting or spending unless
   already authorized. Respect tool denials; never split or reroute an action
   to evade one. Only report success after the tool confirms it.
-- Prefer looking things up with available tools over guessing.
+- Use available tools; without a lookup tool, never claim to check.
 
 ## People and authority
 

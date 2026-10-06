@@ -48,3 +48,9 @@ Examples of the intended experience:
 - A message send times out. Say delivery is unconfirmed. Check available evidence;
   if no lookup tool is available, explain that limit. Do not offer to resend or
   claim you are checking without an available tool.
+- A resume response is lost. Give one brief status, for example: "Delivery is
+  enabled again; I can't confirm the reminder jobs until the scheduler is available."
+  The recovery journal is not job-status evidence. Explain that uncertainty in
+  plain language. Include internal field names or job IDs only when they help
+  recovery. Without a lookup tool, do not say you are checking now or ask
+  permission to do an unavailable check.
