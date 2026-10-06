@@ -3,8 +3,8 @@
  * once OpenClaw adopts a turn. Sources interrupted before adoption
  * stay unacked; adopted sources and uncertain sends are not replayed.
  * first:<uid> requests inclusive replay from uid. Recovery and buffered frames
- * dispatch in history order within each chat. Catch-up reads only the newest
- * 50 messages; durable UID deduplication covers repeated frames.
+ * dispatch in history order within each chat. Catch-up reads pages to the
+ * checkpoint; durable UID deduplication covers repeated frames.
  * Commands without an agent run acknowledge at terminal completion.
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -110,12 +110,14 @@ export async function ownerChat(account: Account): Promise<Chat> {
 // A first:<uid> checkpoint includes that message, but none of its older history.
 async function* messagePages(account: Account, chat: string) {
   let cursor = "";
+  const seen = new Set<string>();
   while (true) {
     const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50${cursor ? `&starting_after=${encodeURIComponent(cursor)}` : ""}`);
     yield page;
     if (!page.has_more) return;
     const next = page.data.at(-1)?.uid;
-    if (!next || next === cursor) throw new Error("Plow history pagination did not advance");
+    if (!next || seen.has(next)) throw new Error("Plow history pagination did not advance");
+    seen.add(next);
     cursor = next;
   }
 }
@@ -441,12 +443,14 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const replay = async (chatUid: string) => {
         const checkpoint = checkpoints.get(chatUid)!;
         const window = await recover(account, chatUid, checkpoint);
+        const unread = window.filter(message => !recent.get(chatUid)?.has(message.uid));
+        for (const message of window) replayed.add(message.uid);
         if (window.length) recoveryEnds.set(chatUid, window.at(-1)!.uid);
         const unfinished = unadopted.get(chatUid) ?? new Set<string>();
         for (const message of window) if (!recent.get(chatUid)?.has(message.uid) && message.direction === "inbound" &&
           (message.sender.type === "member" || message.sender.relationship === "peer")) unfinished.add(message.uid);
         unadopted.set(chatUid, unfinished);
-        for (const message of window) {
+        for (const message of unread) {
           if (!accepting || signal.aborted) break;
           // A turn still running from before the drop decides the message: an
           // incomplete one leaves it unacked, and consume then dispatches it again.
@@ -513,8 +517,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
 }
 
 
-export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>): Promise<T> {
-  try { return await request<T>(account, path, body, undefined, method, headers); }
+export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>, signal?: AbortSignal): Promise<T> {
+  try { return await request<T>(account, path, body, signal, method, headers); }
   catch (error) {
     if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
       throw new DeliveryUnknownError();
@@ -535,9 +539,9 @@ export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path
 export const isSilent = (text: string) =>
   text.split("\n").filter(line => line.trim()).at(-1)?.trim().replace(/^[.*_ `]+|[.*_ `]+$/g, "") === "NO_REPLY";
 
-export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
+export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat", signal?: AbortSignal) {
   if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const sent = await requestDelivery<{ uid: string }>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
-    "POST", kind ? { "Plow-Message-Kind": kind } : undefined);
+    "POST", kind ? { "Plow-Message-Kind": kind } : undefined, signal);
   return { channel: "plow" as const, messageId: sent.uid };
 }
