@@ -1,27 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
-import { pathToFileURL } from "node:url";
 import { renderConfig, type Identity } from "../boot/config.ts";
+import { runtimeFunction } from "./runtime-function.ts";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
-const runtimeDist = dirname(require.resolve("openclaw"));
 const { resolveAgentRoute } = await import(require.resolve("openclaw/plugin-sdk/routing"));
 const { listSessionEntries, resolveStorePath } = await import(require.resolve("openclaw/plugin-sdk/session-store-runtime"));
 const { readVisibleSessionTranscriptMessageEntries } = await import(require.resolve("openclaw/plugin-sdk/session-transcript-runtime"));
-
-// The message runner and plugin loader are internal to the pinned runtime.
-async function runtimeFunction(prefix: string, name: string) {
-  for (const file of (await readdir(runtimeDist)).filter(file => file.startsWith(prefix) && file.endsWith(".mjs"))) {
-    const module = await import(pathToFileURL(join(runtimeDist, file)).href);
-    const fn = Object.values(module).find(value => typeof value === "function" && value.name === name);
-    if (typeof fn === "function") return fn;
-  }
-  throw new Error(`Pinned OpenClaw runtime is missing ${name}`);
-}
 
 test("message sends mirror owner notices into the inbound owner session and preserve group routing", async t => {
   const root = await mkdtemp("/tmp/plow-outbound-session-");
