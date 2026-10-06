@@ -353,6 +353,6 @@ test("a phone reply or an email body that ends in NO_REPLY posts nothing", async
     refused = await tool().execute("call", { to: "thread", body: note });
   });
   assert.deepEqual(posts, [], "silence reaches no one, on either path");
-  assert.ok(logs.some(line => line.startsWith("silent chat=home")));
+  assert.ok(logs.some(line => line.startsWith("completed chat=home")), "the silent turn is acknowledged");
   assert.match(refused!.content[0].text, /NO_REPLY silence marker/);
 });
