@@ -1,4 +1,4 @@
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, lstat, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { personalitySchema } from "./personality.ts";
@@ -29,16 +29,14 @@ export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 export type AgentExtension = z.infer<typeof extension>;
 
 async function immutableParents(path: string, checked = new Set<string>()): Promise<string> {
-  const resolved = await realpath(path);
+  const resolved = resolve(path);
   if (!resolved.startsWith("/opt/")) throw new Error(`Image installation leaves /opt: ${path}`);
-  // Check both the spelling used by the manifest and any symlink target.
-  for (const file of [resolve(path), resolved]) {
-    for (let parent = dirname(file); parent !== "/"; parent = dirname(parent)) {
-      if (checked.has(parent)) break;
-      const installed = await stat(parent);
-      if (installed.uid !== 0 || (installed.mode & 0o022)) throw new Error(`Image installation parent must be root-owned and immutable: ${parent}`);
-      checked.add(parent);
-    }
+  for (let entry = resolved; entry !== "/"; entry = dirname(entry)) {
+    if (checked.has(entry)) break;
+    const installed = await lstat(entry);
+    if (installed.isSymbolicLink()) throw new Error(`Image installation cannot contain symlinks: ${entry}`);
+    if (installed.uid !== 0 || (installed.mode & 0o022)) throw new Error(`Image installation and parents must be root-owned and immutable: ${entry}`);
+    checked.add(entry);
   }
   return resolved;
 }
@@ -56,10 +54,6 @@ export async function agentDefinition(path = "/opt/plow/agent.json"): Promise<Ag
     if (installed.uid !== 0 || (installed.mode & 0o022)) throw new Error("agent.json must be root-owned and immutable");
   }
   return agentDefinitionSchema.parse(Array.isArray(value) ? { version: 1, plugins: value } : value);
-}
-
-export async function agentExtensions(path = "/opt/plow/agent.json"): Promise<AgentExtension[]> {
-  return (await agentDefinition(path)).plugins;
 }
 
 export async function assertImageInstallation(definition: AgentDefinition): Promise<void> {

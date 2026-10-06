@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import JSON5 from "json5";
+import { agentDefinitionSchema } from "../boot/extensions.ts";
 import { renderConfig, syncConfig, type Identity } from "../boot/config.ts";
 
 const identity: Identity = {
@@ -155,11 +156,22 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   assert.deepEqual(config.meta, {});
 });
 
-test("boot renders the group trust mode into the owned channel config", () => {
-  for (const mode of ["ask", "trusted", "untrusted"]) {
-    assert.equal(renderConfig(identity, "http://api:8000", mode).channels.plow.threadTrust, mode);
+test("boot renders manifest trust defaults and validates environment overrides", () => {
+  const previous = process.env.PLOW_THREAD_TRUST;
+  try {
+    delete process.env.PLOW_THREAD_TRUST;
+    for (const mode of ["ask", "trusted", "untrusted"] as const) {
+      const definition = agentDefinitionSchema.parse({ version: 1, defaults: { threadTrust: mode } });
+      assert.equal(renderConfig(identity, "http://api:8000", definition).channels.plow.threadTrust, mode);
+    }
+    process.env.PLOW_THREAD_TRUST = "invalid";
+    assert.throws(() => renderConfig(identity, "http://api:8000"), /PLOW_THREAD_TRUST/);
+    process.env.PLOW_THREAD_TRUST = "trusted";
+    assert.equal(renderConfig(identity, "http://api:8000").channels.plow.threadTrust, "trusted");
+  } finally {
+    if (previous === undefined) delete process.env.PLOW_THREAD_TRUST;
+    else process.env.PLOW_THREAD_TRUST = previous;
   }
-  assert.throws(() => renderConfig(identity, "http://api:8000", "invalid"), /PLOW_THREAD_TRUST/);
 });
 
 test("the dashboard uses the proxy's port and accepts origins checked by the proxy", () => {

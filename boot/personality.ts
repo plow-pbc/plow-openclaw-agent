@@ -8,15 +8,8 @@ export const personalityAxes = [
   { id: "polite-unfiltered", left: "Polite", right: "Unfiltered", low: "Use tactful, considerate language.", high: "Be candid and direct about evidence, uncertainty and disagreement; stay civil and avoid gratuitous harshness." },
 ] as const;
 const value = z.number().int().min(0).max(100);
-export const personalityPatchSchema = z.object({
-  "companion-coworker": value, "genz-boomer": value, "execute-collaborate": value,
-  "playful-serious": value, "polite-unfiltered": value,
-}).partial().strict();
-const axis = value.default(50);
-export const personalitySchema = z.object({
-  "companion-coworker": axis, "genz-boomer": axis, "execute-collaborate": axis,
-  "playful-serious": axis, "polite-unfiltered": axis,
-}).strict();
+const keys = z.enum(personalityAxes.map(axis => axis.id));
+export const personalitySchema = z.record(keys, value.default(50));
 export type Personality = z.infer<typeof personalitySchema>;
 export function personalityInstructions(value: Personality): string {
   const directions = personalityAxes.flatMap(axis => {

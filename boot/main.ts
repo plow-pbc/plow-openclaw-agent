@@ -19,7 +19,7 @@ try {
   const identity = await identityFromApi(base, process.env.PLOW_AGENT_TOKEN);
   const definition = await agentDefinition();
   await assertImageInstallation(definition);
-  const config = renderConfig(identity, base, process.env.PLOW_THREAD_TRUST ?? definition.defaults.threadTrust, definition.plugins, definition);
+  const config = renderConfig(identity, base, definition);
   await mkdir("/var/lib/plow/workspace", { recursive: true });
   await writeFile("/var/lib/plow/gateway-password", process.env.OPENCLAW_GATEWAY_PASSWORD + "\n", { mode: 0o600 });
   await chmod("/var/lib/plow/gateway-password", 0o600);
