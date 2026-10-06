@@ -6,6 +6,15 @@ import entry from "../plugin/index.ts";
 import { renderConfig } from "../boot/config.ts";
 import { probeIdentity } from "../boot/probe-fixture.ts";
 
+test("boot config loads the conversation hook through OpenClaw's plugin loader", async t => {
+  const { t: acquirePluginRegistryForInspection } = await import("/app/dist/loader-runtime-load-CMBCNIWa.mjs");
+  const { registry, release } = await acquirePluginRegistryForInspection({ config: renderConfig(probeIdentity, "http://fixture"),
+    onlyPluginIds: ["plow"], activate: false, cache: false });
+  t.after(release);
+  assert.equal(registry.plugins.find((plugin: any) => plugin.id === "plow")?.status, "loaded");
+  assert.equal(registry.typedHooks.filter((hook: any) => hook.pluginId === "plow" && hook.hookName === "agent_end").length, 1);
+});
+
 test("the messaging agent can schedule durable reminders with the native scheduler", async () => {
   const { resolveToolProfilePolicy, mergeAlsoAllowPolicy } = await import("/app/dist/tool-policy-BFtbULCH.mjs");
   const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CgrEQaD6.mjs");
@@ -17,7 +26,7 @@ test("the messaging agent can schedule durable reminders with the native schedul
   assert.deepEqual(available.map((tool: { name: string }) => tool.name), ["automations", "message"]);
 });
 
-for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools without a tool-call gate`, async () => {
+for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools with one native-send guard`, async () => {
   const names: string[] = [];
   const hooks: string[] = [];
   entry.register({
@@ -28,7 +37,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
-  assert.ok(!hooks.includes("before_tool_call"));
+  assert.equal(hooks.filter(name => name === "before_tool_call").length, 1);
   assert.equal(hooks.filter(name => name === "after_tool_call").length, 1);
 });
 
@@ -110,4 +119,40 @@ test("message tool hint keeps sends in the current conversation", () => {
   assert.match(hint, /message\(action=send\).*current conversation/);
   assert.match(hint, /plow_reply_to.*another conversation/);
   assert.doesNotMatch(hint, /owner-approved|approval/);
+});
+
+for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} guards incomplete sends through the native hook runner`, async () => {
+  const { t: createEmptyPluginRegistry } = await import("/app/dist/registry-empty--vb91VWS.mjs");
+  const { t: createHookRunner } = await import("/app/dist/hooks-CKanWLsK.mjs");
+  const registry = createEmptyPluginRegistry();
+  entry.register({ registrationMode: mode, registerChannel() {}, registerTool() {}, runtime: {}, logger: { info() {} },
+    on(hookName: string, handler: (...args: any[]) => unknown) { registry.typedHooks.push({ pluginId: "plow", hookName, handler, source: "fixture" }); },
+  });
+  const hooks = createHookRunner(registry, { catchErrors: false });
+  const check = (params: object, requester?: object, toolName = "message") => hooks.runBeforeToolCall({ toolName, params }, { toolName, requester });
+  for (const params of [{ action: "send" }, { action: "send", message: "  " }, { action: "send", target: "cht_home" }]) {
+    const result = await check(params);
+    assert.equal(result?.block, true);
+    assert.match(result.blockReason, /message.*text|text.*message/);
+    assert.match(result.blockReason, /Call message again/);
+  }
+  const noTarget = await check({ action: "send", message: "Hello" });
+  assert.equal(noTarget?.block, true);
+  assert.match(noTarget.blockReason, /target.*chat/);
+  const owner = { senderIsOwner: true, senderId: "+15550000001", channelId: "plow", conversationId: "cht_home" };
+  assert.equal(await check({ action: "send", message: "Hello" }, owner), undefined, "an owner DM can use the host's implicit destination");
+  assert.equal((await check({ action: "send" }, owner))?.block, true);
+  for (const media of [{ media: "/tmp/photo.png" }, { mediaUrl: "https://fixture/photo.png" }, { mediaUrls: ["https://fixture/photo.png"] },
+    { buffer: "aGVsbG8=" }, { path: "/tmp/photo.png" }, { filePath: "/tmp/photo.png" }, { fileUrl: "https://fixture/photo.png" },
+    { image: "/tmp/photo.png" }, { attachments: [{ path: "/tmp/photo.png" }] }]) {
+    assert.equal(await check({ action: "send", target: "cht_home", message: "", ...media }), undefined, JSON.stringify(media));
+    assert.equal(await check({ action: "send", ...media }, owner), undefined, "untargeted attachment in an owner DM");
+    assert.equal((await check({ action: "send", ...media }))?.block, true, "a system turn still needs a target");
+  }
+  for (const media of [{ media: " " }, { mediaUrls: [] }, { mediaUrls: [""] }, { attachments: [{}] }, { buffer: "" }]) {
+    assert.equal((await check({ action: "send", target: "cht_home", ...media }))?.block, true);
+  }
+  assert.equal(await check({ action: "send", target: "cht_home", message: "Hello" }), undefined);
+  assert.equal(await check({ action: "read" }), undefined);
+  assert.equal(await check({ action: "send" }, undefined, "plow_send_email"), undefined);
 });
