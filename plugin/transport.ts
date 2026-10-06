@@ -68,6 +68,12 @@ export async function request<T>(account: Pick<Account, "apiBase">, path: string
   return await response.json() as T;
 }
 
+export function normalizedHandle(handle: string): string {
+  const compact = handle.trim().replace(/[\s().-]/g, "");
+  return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
+}
+
+
 export function accepts(account: Account, chat: Chat): boolean {
   const line = account.accountId === "email" ? account.emailLineUid : account.lineUid;
   return chat.status === "active" && chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === line);

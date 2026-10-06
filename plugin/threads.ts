@@ -2,7 +2,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { threadIdempotencyKey } from "./delivery-guard.ts";
 import { request, requestDelivery, isSilent, findOwnerChat, DeliveryUnknownError, type Account, type Chat } from "./transport.ts";
 
-export type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
+export type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner" | "assertInvocationCurrent">;
 export function conversationUid(context: Requester): string | undefined {
   return (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
 }
@@ -12,6 +12,7 @@ export async function ownerDmTurn(account: Account, context: Requester): Promise
     || context.agentAccountId !== "chat" || !uid || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
   const chat = await request<Chat>(account, `/chats/${encodeURIComponent(uid)}`);
   if (findOwnerChat(account, [chat]) !== chat) throw new Error("This action requires the owner's main Plow DM.");
+  context.assertInvocationCurrent?.();
   return { chat };
 }
 
@@ -38,6 +39,7 @@ export async function startThread(account: Account, context: Requester, callId: 
   const members = [...new Set([threadHandle(owner.provider_key), ...args.members.map(threadHandle)])].sort();
   const trusted = groupTrust(account, args.trusted);
   const idempotencyKey = threadIdempotencyKey(callId, [account.lineUid, members, args.body, trusted]);
+  context.assertInvocationCurrent?.();
   const chat = await requestDelivery<{ uid: string }>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
   if (!chat.uid) throw new DeliveryUnknownError();
   return { chat_uid: chat.uid, message_sent: true };

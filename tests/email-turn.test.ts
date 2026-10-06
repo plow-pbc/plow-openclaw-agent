@@ -1,3 +1,4 @@
+import { toolFactory } from "./tool-factory.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -92,7 +93,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   };
   entry.register(api);
   // Tools run in a separate module instance, as they do in the gateway.
-  toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) { factories.push(factory); } });
+  toolEntry.register({ ...api, registerChannel() {}, registerTool(factory: (context: object) => Tool) { factory = toolFactory(factory); factories.push(factory); } });
   await channel!.gateway.startAccount({ account, cfg: config, abortSignal: controller.signal, log: { info(text: string) { logs.push(text); } } });
   return { posts, contexts, logs };
 }
@@ -255,7 +256,7 @@ test("collected email tools use the host route and retain owner authority", asyn
   for (const senderIsOwner of [true, false]) {
     let tool: Tool;
     toolEntry.register({ registrationMode: "full", on() {}, logger: { info() {} }, runtime: {}, registerChannel() {},
-      registerTool(factory: (context: object) => Tool) {
+      registerTool(factory: (context: object) => Tool) { factory = toolFactory(factory);
         const candidate = factory({ config, sessionKey: "agent:main:main", messageChannel: "plow", agentAccountId: "chat",
           requesterSenderId: senderIsOwner ? "plow-owner" : "+15550000002", senderIsOwner,
           deliveryContext: { channel: "plow", accountId: "chat", to: "plow:home" } });

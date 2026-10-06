@@ -23,10 +23,10 @@ export function installDeliveryGuard(api: Pick<OpenClawPluginApi, "on">) {
   api.on("before_tool_call", (event, ctx) => {
     const runId = event.runId ?? ctx.runId;
     const run = runId === undefined ? undefined : runs.get(runId);
-    if (!run || !mutations.has(event.toolName) || (event.toolName === "plow_send_email" && event.params?.action === "list")) return;
-    if (run.unknown) return { block: true, blockReason: unknown };
+    if (!run) return;
+    if (run.unknown && mutations.has(event.toolName) && !(event.toolName === "plow_send_email" && event.params?.action === "list")) return { block: true, blockReason: unknown };
     const callId = event.toolCallId ?? ctx.toolCallId;
-    if (callId && event.toolName === "plow_start_thread") calls.set(callId, { runId: runId!, source: run.source });
+    if (callId && ["plow_start_thread", "plow_tasks"].includes(event.toolName)) calls.set(callId, { runId: runId!, source: run.source });
   });
   api.on("after_tool_call", (event, ctx) => {
     const runId = event.runId ?? ctx.runId;

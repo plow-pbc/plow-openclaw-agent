@@ -1,3 +1,4 @@
+import { toolFactory } from "./tool-factory.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
@@ -22,12 +23,12 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   const hooks: string[] = [];
   entry.register({
     registrationMode: mode, registerChannel() {}, runtime: {}, logger: { info() {} },
-    registerTool(factory: (context: object) => { name: string }) { names.push(factory({}).name); },
+    registerTool(factory: (context: object) => { name: string }) { factory = toolFactory(factory); names.push(factory({}).name); },
     on(name: string) { hooks.push(name); },
   });
   assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
-  assert.deepEqual(manifest.contracts.tools, names);
+  assert.deepEqual(manifest.contracts.tools.toSorted(), names.toSorted());
   assert.ok(hooks.includes("before_tool_call"));
   assert.equal(hooks.filter(name => name === "after_tool_call").length, 1);
 });
@@ -35,7 +36,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
 test("start-thread refuses outside an active main Plow DM without a request", async t => {
   let factory: ((context: object) => { name: string; execute: (id: string, args: object) => Promise<unknown> }) | undefined;
   entry.register({ registrationMode: "full", runtime: {}, registerChannel() {}, logger: { info() {} }, on() {},
-    registerTool(value: typeof factory) { if (value?.({}).name === "plow_start_thread") factory = value; } });
+    registerTool(value: typeof factory) { value = toolFactory(value); if (value?.({}).name === "plow_start_thread") factory = value; } });
   assert.ok(factory);
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const calls: string[] = [];
@@ -52,7 +53,7 @@ test("start-thread refuses outside an active main Plow DM without a request", as
 test("start-thread returns a tool error without config and makes no request", async t => {
   let factory: ((context: object) => { name: string; execute: (id: string, args: object) => Promise<unknown> }) | undefined;
   entry.register({ registrationMode: "full", runtime: {}, registerChannel() {}, logger: { info() {} }, on() {},
-    registerTool(value: typeof factory) { if (value?.({}).name === "plow_start_thread") factory = value; } });
+    registerTool(value: typeof factory) { value = toolFactory(value); if (value?.({}).name === "plow_start_thread") factory = value; } });
   assert.ok(factory);
   const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
   assert.deepEqual(await factory({}).execute("call", { members: ["+15550000002"], body: "Hi" }), {

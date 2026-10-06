@@ -7,7 +7,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, pluginHandoff, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, normalizedHandle, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, pluginHandoff, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { conversationUid, ownerDmTurn, startThread } from "./threads.ts";
 export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
@@ -16,11 +16,6 @@ let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
-
-function normalizedHandle(handle: string): string {
-  const compact = handle.trim().replace(/[\s().-]/g, "");
-  return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
-}
 
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
   to = to.replace(/^plow:/i, "");
@@ -149,7 +144,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   log(`turn ${JSON.stringify({ chat: chat.uid, message: message.uid, first_contact: firstContact, senderId, senderName, senderIsOwner, sessionKey: route.sessionKey })}`);
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg, agentId: route.agentId, channel: "plow", accountId: account.accountId,
-    typing: account.accountId === "chat" ? {
+    // A group participation decision can end in silence. Avoid signalling a
+    // reply before that decision; long group work uses explicit progress texts.
+    typing: account.accountId === "chat" && kind === "direct" ? {
       start: () => request<void>(account, `/chats/${chat.uid}/typing`, { action: "start" }),
       stop: () => request<void>(account, `/chats/${chat.uid}/typing`, { action: "stop" }),
       keepaliveIntervalMs: 8_000, maxDurationMs: 10 * 60_000,
@@ -190,7 +187,6 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
         onObservedReplyDelivery: () => { observedReplyDelivery = true; },
         onAgentRunTerminalOutcome: outcome => {
-          finishRun();
           if (outcome === "failed") failure = new Error("Agent turn failed");
         },
       },
@@ -200,6 +196,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         preparePayload: (payload, info) => {
           if (activeRunId !== undefined) suppressFinal = deliveryRunIsSilent(activeRunId) || deliveryRunIsUnknown(activeRunId);
           if (suppressFinal && info.kind === "final") return null;
+          if (!email && !(payload.mediaUrls?.length || payload.mediaUrl) && isSilent(payload.text ?? "")) {
+            silent = true;
+            log(`silent chat=${chat.uid} message=${message.uid}`);
+            return null;
+          }
           if (payload.isFallbackNotice) { silent ||= email; return null; }
           if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
           if (!email && observedReplyDelivery && info.kind === "final") return null;
@@ -311,7 +312,7 @@ export default defineChannelPluginEntry({
   },
   registerCapabilities(api) {
     installDeliveryGuard(api);
-    api.registerTool(context => ({
+    api.registerTool({ contextVersion: 2, create: context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
       description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email.",
       parameters: {
@@ -331,8 +332,8 @@ export default defineChannelPluginEntry({
         api.logger.info(`plow started thread chat=${result.chat_uid}`);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
-    }));
-    api.registerTool(context => ({
+    }) });
+    api.registerTool({ contextVersion: 2, create: context => ({
       name: "plow_set_thread_trust", label: "Set Plow group trust",
       description: "From the owner's main Plow DM, set whether an existing group gives every member full access to tools, including the owner's Mac, mail and files. Use only when the owner asks to change that group's trust.",
       parameters: {
@@ -348,12 +349,13 @@ export default defineChannelPluginEntry({
         await ownerDmTurn(account, context);
         const target = await request<Chat>(account, `/chats/${encodeURIComponent(args.chat_uid)}`);
         if (!accepts(account, target) || target.participants.length <= 2) throw new Error("Target must be a served Plow group.");
+        context.assertInvocationCurrent();
         const result = await requestDelivery<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, "PUT");
         const details = { chat_uid: args.chat_uid, trusted: result.trusted };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
-    }));
-    api.registerTool(context => ({
+    }) });
+    api.registerTool({ contextVersion: 2, create: context => ({
       name: "plow_reply_to", label: "Reply to a Plow conversation",
       description: "From the owner's main Plow DM, send a follow-up to a known chat on this agent's phone line. Use the known chat uid.",
       parameters: {
@@ -373,6 +375,7 @@ export default defineChannelPluginEntry({
         const chat = await request<Chat>(destination, `/chats/${encodeURIComponent(args.chat_uid)}`);
         if (!accepts(destination, chat)) throw new Error("Plow account does not serve this conversation");
         const { kind, route, routeTo } = sessionRoute(cfg, destination, chat);
+        context.assertInvocationCurrent();
         let messageUid: string;
         try {
           messageUid = await durableSend(cfg, route, "chat", args.chat_uid, routeTo, args.text, kind);
@@ -383,8 +386,8 @@ export default defineChannelPluginEntry({
         const details = { message_uid: messageUid };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
-    }));
-    api.registerTool(context => {
+    }) });
+    api.registerTool({ contextVersion: 2, create: context => {
       const cfg = context.config;
       const persona = cfg && plugin.config.resolveAccount(cfg, "chat").emailName;
       // Receipts match the Hermes image's plow_send_email: failures are {success: false, error, …}.
@@ -435,6 +438,7 @@ export default defineChannelPluginEntry({
         if (typeof args.to === "string") {
           const chat = await request<Chat>(mailbox, `/chats/${encodeURIComponent(args.to)}`);
           if (!accepts(mailbox, chat)) return refuse(`${args.to} is not one of your email threads.`);
+          context.assertInvocationCurrent();
           if (args.to === turn.chat.uid) await postMessage(mailbox, args.to, body);
           else {
             // From another conversation, a durable send also records the reply in the thread's session.
@@ -445,6 +449,7 @@ export default defineChannelPluginEntry({
           return receipt({ sent: true, chat_uid: args.to });
         }
         if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
+        context.assertInvocationCurrent();
         const sent = await requestDelivery<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
           mailbox, "/chats", { line_uid: phone.emailLineUid, members: args.to, subject: args.subject, body });
         if (sent.status === "acceptance_unknown") throw new DeliveryUnknownError();
@@ -479,6 +484,6 @@ export default defineChannelPluginEntry({
           }
         },
       };
-    });
+    } });
   },
 });

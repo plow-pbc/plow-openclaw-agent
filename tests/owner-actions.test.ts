@@ -1,3 +1,4 @@
+import { toolFactory } from "./tool-factory.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -59,7 +60,7 @@ for (const action of ["pending", "thread", "owner-send"]) test(`owner action wit
   let failure: unknown;
   entry.register({ registrationMode: "full", on() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
-    registerTool(factory: (context: object) => typeof tool & { name: string }) {
+    registerTool(factory: (context: object) => typeof tool & { name: string }) { factory = toolFactory(factory);
       const candidate = factory({ config: cfg, sessionKey: "group" });
       if (candidate.name === "plow_start_thread") tool = candidate;
     },

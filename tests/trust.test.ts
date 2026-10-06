@@ -1,3 +1,4 @@
+import { toolFactory } from "./tool-factory.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { getSessionEntry, resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
@@ -75,7 +76,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   entry.register({ registrationMode: "full", on() {}, runtime, logger: { info() {} }, registerTool() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
   toolEntry.register({ registrationMode: "full", on() {}, runtime, logger: { info() {} }, registerChannel() {},
-    registerTool(factory: (context: object) => Tool) {
+    registerTool(factory: (context: object) => Tool) { factory = toolFactory(factory);
       const candidate = factory({ config: cfg, sessionKey, messageChannel: "plow", agentAccountId: accountId, nativeChannelId: chat.uid, requesterSenderId: scene.startsWith("member") ? member.provider_key : "plow-owner", senderIsOwner: !scene.startsWith("member") });
       if (candidate.name === toolName) tool = candidate;
     },

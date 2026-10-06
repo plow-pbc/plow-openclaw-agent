@@ -7,17 +7,17 @@ import { tmpdir } from "node:os";
 import type { Socket } from "node:net";
 import { test } from "node:test";
 
-for (const stage of ["ticket", "upgrade"]) test(`shutdown during WebSocket ${stage} exits without an unhandled error`, { timeout: 10_000 }, async t => {
+for (const stage of ["ticket", "upgrade"]) test(`shutdown during WebSocket ${stage} exits without an unhandled error`, { timeout: 40_000 }, async t => {
   const root = await mkdtemp(`${tmpdir()}/plow-shutdown-`);
   const peers = new Set<Socket>();
   const server = createServer((_request, response) => {
     if (stage === "ticket") {
       child.once("message", () => response.end(JSON.stringify({ ticket: "fixture" })));
-      child.send("stop");
+      stop();
     } else response.end(JSON.stringify({ ticket: "fixture" }));
   });
   server.on("connection", socket => { peers.add(socket); socket.on("close", () => peers.delete(socket)); });
-  server.on("upgrade", () => child.send("stop"));
+  server.on("upgrade", () => stop());
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
@@ -34,7 +34,16 @@ for (const stage of ["ticket", "upgrade"]) test(`shutdown during WebSocket ${sta
   const closed = once(child, "close");
   let errors = "";
   child.stderr.on("data", chunk => { errors += chunk; });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  // The pinned SDK import opens native SQLite workers. Measure the shutdown
+  // budget from the requested abort, separately from cold module startup.
+  let timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
+  let requested = false;
+  function stop() {
+    requested = true;
+    clearTimeout(timeout);
+    timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+    child.send("stop");
+  }
   t.after(async () => {
     clearTimeout(timeout); child.kill(); await closed;
     for (const peer of peers) peer.destroy();
@@ -42,5 +51,6 @@ for (const stage of ["ticket", "upgrade"]) test(`shutdown during WebSocket ${sta
     await rm(root, { recursive: true, force: true });
   });
   const [code] = await closed;
+  assert.equal(requested, true, "the connection reached the requested shutdown stage");
   assert.equal(code, 0, errors);
 });
