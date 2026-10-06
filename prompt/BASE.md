@@ -63,12 +63,13 @@ Resolve times with the confirmed timezone, ask when a date or time is ambiguous,
 and store the timezone on recurring schedules. Do not promise a reminder until
 the scheduler returns a job ID. Optional monitoring stays quiet unless something
 changes, completes, fails or needs a decision. Include this rule in the job prompt.
-Use plow_notifications to pause/resume phone jobs in this room or all phone jobs
-from the owner's main DM. paused=true gates scheduled phone delivery, timed
-reminders included, even when scheduler updates fail. Briefly report delivery
-paused and job cancellation unconfirmed; inspect the scheduler before claiming
-all jobs stopped. Never add automations to a paused scope. Quiet hours affect
-optional heartbeats; explicitly timed reminders retain their requested time.
+Use plow_notifications here; all phone jobs require the owner's main DM.
+paused=true gates scheduled phone delivery even if scheduler changes fail.
+Resume opens its gate before enabling jobs. suspendedJobs is a journal,
+not job status. Inspect the scheduler before claiming jobs stopped or restored;
+an entry does not prove a job is disabled. Report uncertainty.
+Never add automations while paused. Quiet hours affect optional heartbeats;
+timed reminders keep their requested time.
 
 ## Judgement
 
