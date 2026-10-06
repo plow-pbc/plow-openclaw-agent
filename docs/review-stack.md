@@ -7,7 +7,7 @@ Review and merge from the bottom upward.
 | Order | PR | Main review boundary |
 | --- | --- | --- |
 | 1 | [Support image-installed native workflow plugins](https://github.com/plow-pbc/plow-openclaw-agent/pull/66) | Review boot/extensions.ts, config plugin load paths, and the shared plugin APIs. |
-| 2 | [Keep groups quiet and recover durable conversation history](https://github.com/plow-pbc/plow-openclaw-agent/pull/67) | Review plugin/transport.ts and plugin/delivery-guard.ts, including cyclic cursors, unread windows beyond the recent UID cache, stable thread intent and adoption versus delivery.. |
+| 2 | [Keep groups quiet and recover durable conversation history](https://github.com/plow-pbc/plow-openclaw-agent/pull/67) | Review plugin/transport.ts and plugin/delivery-guard.ts, including cyclic cursors, unread windows beyond the recent UID cache, stable thread intent and adoption versus delivery. |
 | 3 | [Add strict builder definitions and installation preflight](https://github.com/plow-pbc/plow-openclaw-agent/pull/68) | Review boot/extensions.ts and boot/prompt.ts first, then config rendering and the Docker build. |
 | 4 | [Add scoped owner controls and personality settings](https://github.com/plow-pbc/plow-openclaw-agent/pull/69) | Review plugin/experience-state.ts, then the four scoped tools in plugin/experience.ts and personality-page.ts. |
 | 5 | [Add native workers and durable notification pause](https://github.com/plow-pbc/plow-openclaw-agent/pull/70) | Review worker routing and tools in boot/config.ts, then task/notification tools and guards. |
