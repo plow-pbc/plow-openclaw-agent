@@ -123,6 +123,11 @@ the final update. Confirmed journal entries require their exact recorded revisio
 edited/deleted jobs remain as the owner left them. New automations are blocked
 while paused. Overlapping source-room, destination-room and global pauses transfer
 the journal to a remaining paused scope; only the last resume enables the job.
+Resume opens its requested gate before scheduler effects and retains unconfirmed
+journal entries. This lets an accepted one-shot enable deliver even if its response
+is lost. An open gate does not prove every job was restored. Both the tool and
+physical delivery guards check the source room, destination room and global pause;
+phone groups receive that effective status without private owner state.
 An already confirmed external send cannot be withdrawn.
 Cancel tasks and their associated automations separately when ending a workflow.
 

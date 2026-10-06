@@ -172,6 +172,9 @@ verify these boundaries.
    authorized invocation. Resume preserves later job edits and pre-disabled jobs.
    If another room or global pause remains active, the job's journal moves there
    and it stays disabled until that scope resumes.
+   Resume opens the requested delivery gate before enabling jobs. A lost enable
+   response leaves the journal for reconciliation; inspect the scheduler and
+   retry resume. Do not report that all jobs resumed from `paused: false` alone.
 3. Cancel active tasks through their native task records.
 4. Cancel associated automations separately.
 5. Export or forget scoped memory when requested. Historical transcripts and

@@ -132,12 +132,23 @@ must match their recorded revision; pending entries must match the recorded publ
 definition before updating with the current revision. It does not undo a user's
 later schedule edits or re-enable jobs that were already disabled.
 
+Resume opens the requested scope's delivery gate before asking the scheduler to
+re-enable jobs. If the scheduler accepts an enable but its response is lost, a
+one-shot reminder can still deliver. The journal entry remains for reconciliation;
+retrying resume inspects the actual job without sending another confirmed enable.
+If the scheduler fails before enabling, some jobs remain disabled. An open gate
+therefore does not prove that every reminder has resumed. Report both facts.
+
 Room and global pauses can overlap. The job stays disabled while its source room,
 destination room, or all-scope gate remains paused. Resume transfers its journal
 to the remaining scope before removing the original entry; the last resume
 re-enables it. Direct replies remain available while paused. New automations in
 the paused scope are blocked. Paginated job listing uses stable names so disabling
 an earlier page cannot move unread jobs past the next page.
+The physical delivery guard checks source-room, destination-room and global
+gates again immediately before sending. Phone groups receive the effective
+`notifications_paused` boolean, including a global pause, without receiving
+private owner preferences or memory.
 
 Examples: "Pause scheduled notifications in this room" and "Resume all scheduled
 phone notifications." For one reminder, remove that automation directly.

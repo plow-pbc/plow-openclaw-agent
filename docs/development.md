@@ -121,10 +121,13 @@ writes, real silence and group delivery, native Sonnet image routing, scheduler
 pause/resume through a full-state backup/restore, reminder execution/delivery and
 cancellation, a pause during in-flight generation, responsive background workers
 and their cancellation, and the pinned client's native SQLite usage reader.
-It also checks lost native disable responses, invocation revocation after a
-successful mutation, and both room/global pause orders. The stress suite covers
-all 36 source-room/destination-room/global pause/resume orderings and 205 jobs
-across pagination boundaries.
+It also checks lost native disable and resume responses, invocation revocation
+after a successful mutation, both room/global pause orders, and an in-flight
+source-room pause when delivery targets another room. The stress suite covers
+all 40 two-scope and three-scope pause/resume orderings and 205 jobs across
+pagination boundaries. The email fixture allows 20 seconds for native SQLite
+initialization under concurrent load; temporary-state teardown retries transient
+directory races while native storage finishes its background work.
 
 ```sh
 docker run --rm --user root --network none \
