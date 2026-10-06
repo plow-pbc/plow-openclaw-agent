@@ -11,6 +11,8 @@ import { request, requestDelivery, normalizedHandle, postMessage, isSilent, list
 import { conversationUid, ownerDmTurn, startThread } from "./threads.ts";
 export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
+import { installExperienceTools } from "./experience.ts";
+import { experienceContext } from "./experience-state.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
@@ -128,6 +130,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   }));
   const phone = { ...account, accountId: "chat" };
   const origin = email ? await originOf(chat.uid) : undefined;
+  const experience = await experienceContext(account, chat.uid, findOwnerChat(phone, [chat]) === chat);
   const ctxPayload = await runtime.channel.inbound.buildContext({
     channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
@@ -143,7 +146,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...experience, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
       ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
     },
     media,
@@ -492,5 +495,9 @@ export default defineChannelPluginEntry({
         },
       };
     } });
+    installExperienceTools(api, context => {
+      if (!context.config) throw new Error("Plow configuration is unavailable");
+      return plugin.config.resolveAccount(context.getRuntimeConfig?.() ?? context.config, context.agentAccountId);
+    });
   },
 });

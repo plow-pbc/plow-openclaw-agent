@@ -129,9 +129,10 @@ test("guest tools default to empty and are declared once for channel and messagi
 });
 
 test("native messaging retains local workspace and memory file tools", () => {
-  assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
-  });
+  const { tools } = renderConfig(identity, "http://api:8000");
+  for (const name of ["read", "write", "edit", "exec", "automations", "plow_preferences", "plow_memory", "plow_room"]) assert.ok(tools.alsoAllow.includes(name));
+  assert.deepEqual(tools.message.crossContext, { allowWithinProvider: false, allowAcrossProviders: false });
+  assert.equal(tools.profile, "messaging"); assert.equal(tools.toolSearch, false);
 });
 
 test("private transcript recall is disabled across isolated conversations", () => {

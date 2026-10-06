@@ -9,7 +9,10 @@
       "plow_start_thread",
       "plow_set_thread_trust",
       "plow_reply_to",
-      "plow_send_email"
+      "plow_send_email",
+      "plow_preferences",
+      "plow_memory",
+      "plow_room"
     ]
   },
   "activation": {
