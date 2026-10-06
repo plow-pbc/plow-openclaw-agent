@@ -17,7 +17,7 @@ test("the messaging agent can schedule durable reminders with the native schedul
   assert.deepEqual(available.map((tool: { name: string }) => tool.name), ["automations", "message"]);
 });
 
-for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools without a tool-call gate`, async () => {
+for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} exposes Plow tools with a run-scoped delivery guard`, async () => {
   const names: string[] = [];
   const hooks: string[] = [];
   entry.register({
@@ -28,7 +28,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
-  assert.ok(!hooks.includes("before_tool_call"));
+  assert.ok(hooks.includes("before_tool_call"));
   assert.equal(hooks.filter(name => name === "after_tool_call").length, 1);
 });
 

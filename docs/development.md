@@ -66,20 +66,23 @@ spacing, a busy run lasting roughly 32 seconds can reach that limit.
 Every Plow tool uses the SDK's per-run requester, account and owner fields, resolving
 the conversation from its native ID or retained delivery route on collected follow-ups,
 then fetches current Plow chat facts. No shared receipt registry or
-async execution context is needed. Thread creation keys use the host tool-call ID.
+async execution context is needed for authorization. Thread creation keys use the
+stable inbound source and normalized payload; typed tool hooks bind the source to
+the host tool-call ID. Delivery uncertainty blocks later Plow mutations in the
+same run, and run completion clears that guard.
 Native message sends use OpenClaw's cross-context policy with both within-provider
 and across-provider permissions false; the Plow send adapter checks served lines
 and active destinations. Tool Search remains disabled.
 
 External plugins cannot use OpenClaw's trusted durable ingress. Plow retains UID
 deduplication and atomic per-chat checkpoints with a 512-UID recent set. Catch-up
-reads only the newest 50 messages per chat, stopping at the checkpoint; four chats
-can recover concurrently. Truncation warnings report the fetched count and an
-unknown older unread count because the API provides no total. Automatic phone
+pages through history until the checkpoint (or the answered boundary for a new
+owner DM); four chats can recover concurrently. Automatic phone
 finals use the SDK inbound dispatcher’s durable outbound queue. Adoption callbacks acknowledge sources, not successful replies;
 deferred sources remain pending until the host adopts them. Terminal commands
 without model runs acknowledge at completion. Uncertain delivery is not blindly
-replayed, but later explicit model sends are allowed. There is no run-wide latch.
+replayed, and later explicit mutations in the same run are blocked after an
+ambiguous delivery. The next run remains independent.
 
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local

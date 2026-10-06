@@ -108,25 +108,34 @@ export async function ownerChat(account: Account): Promise<Chat> {
 
 // Pages run newest-first; starting_after means older than the page cursor.
 // A first:<uid> checkpoint includes that message, but none of its older history.
-export async function recover(account: Account, chat: string, checkpoint: string, log?: (text: string) => void): Promise<Message[]> {
-  const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50`);
-  const boundary = page.data.findIndex(message => message.uid === checkpoint.replace(/^first:/, ""));
-  if (boundary < 0 && page.has_more) {
-    // The API exposes no total or checkpoint position beyond this page.
-    log?.(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; checkpoint absent from newest page`);
+async function* messagePages(account: Account, chat: string) {
+  let cursor = "";
+  while (true) {
+    const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50${cursor ? `&starting_after=${encodeURIComponent(cursor)}` : ""}`);
+    yield page;
+    if (!page.has_more) return;
+    const next = page.data.at(-1)?.uid;
+    if (!next || next === cursor) throw new Error("Plow history pagination did not advance");
+    cursor = next;
   }
-  return page.data.slice(0, boundary < 0 ? undefined : boundary + (checkpoint.startsWith("first:") ? 1 : 0)).reverse();
 }
 
-// The oldest of the unanswered messages at the end of a chat that `unanswered` accepts.
-async function earliestUnanswered(account: Account, chat: string, newest: Message, unanswered: (message: Message) => boolean, log: (text: string) => void): Promise<string> {
-  const page = await request<Page<Message>>(account, `/chats/${chat}/messages?limit=50`);
+export async function recover(account: Account, chat: string, checkpoint: string): Promise<Message[]> {
+  const messages: Message[] = [];
+  for await (const page of messagePages(account, chat)) {
+    const boundary = page.data.findIndex(message => message.uid === checkpoint.replace(/^first:/, ""));
+    messages.push(...page.data.slice(0, boundary < 0 ? undefined : boundary + (checkpoint.startsWith("first:") ? 1 : 0)));
+    if (boundary >= 0) break;
+  }
+  return messages.reverse();
+}
+
+async function earliestUnanswered(account: Account, chat: string, newest: Message, unanswered: (message: Message) => boolean, _log: (text: string) => void): Promise<string> {
   let earliest = newest.uid;
-  for (const message of page.data) {
+  for await (const page of messagePages(account, chat)) for (const message of page.data) {
     if (!unanswered(message)) return earliest;
     earliest = message.uid;
   }
-  if (page.has_more) log(`warning: catch-up truncated chat=${chat} fetched=${page.data.length} older_unread_skipped=unknown; backlog exceeds newest page`);
   return earliest;
 }
 
@@ -164,6 +173,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   const checkpoints = new Map<string, string>();
   const recent = new Map<string, Set<string>>();
   const unadopted = new Map<string, Set<string>>();
+  const recoveryEnds = new Map<string, string>();
   type Queued = { chatUid: string; message: Message; resolve: () => void; reject: (error: unknown) => void };
   const pending = new Map<string, Queued>();
   const dispatching = new Set<Promise<void>>();
@@ -190,10 +200,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
         handled.add(uid);
         unadopted.get(chat)?.delete(uid);
       }
-      while (handled.size > 512) handled.delete(handled.values().next().value!);
+      if (!unadopted.get(chat)?.size) while (handled.size > 512) handled.delete(handled.values().next().value!);
       recent.set(chat, handled);
       // Later handled rows must not move recovery past an unfinished source.
-      const cursor = unadopted.get(chat)?.size ? checkpoints.get(chat)! : uid;
+      const cursor = unadopted.get(chat)?.size ? checkpoints.get(chat)! : recoveryEnds.get(chat) ?? uid;
       await writeFile(`${dir}/${encodeURIComponent(chat)}.tmp`, JSON.stringify({ uid: cursor, recent: [...handled] }));
       await rename(`${dir}/${encodeURIComponent(chat)}.tmp`, `${dir}/${encodeURIComponent(chat)}`);
       checkpoints.set(chat, cursor);
@@ -292,10 +302,11 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   });
   const cancel = () => { for (const item of pending.values()) debouncer.cancelKey(key(item)); };
   signal.addEventListener("abort", cancel, { once: true });
-  const consume = async (chatUid: string, message: Message) => {
+  const consume = async (chatUid: string, message: Message, recovering = false) => {
     if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;
     const chat = discovered.get(chatUid);
     if (chat && !accepts(account, chat)) return;
+    if (!recovering) recoveryEnds.set(chatUid, message.uid);
     const sender = message.sender;
     if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
       if (!accepts(account, await request<Chat>(account, `/chats/${chatUid}`))) return;
@@ -412,7 +423,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             const first = buffered?.values().next().value;
             // A buffered frame moves first contact back only when history proves it is older.
             if (first && (!checkpoint.startsWith("first:") || (first !== checkpoint.slice(6) &&
-              (await recover(account, chat.uid, `first:${first}`, log)).some(message => message.uid === checkpoint.slice(6))))) checkpoint = `first:${first}`;
+              (await recover(account, chat.uid, `first:${first}`)).some(message => message.uid === checkpoint.slice(6))))) checkpoint = `first:${first}`;
             await ack(chat.uid, checkpoint, false);
             // Late frames can include an exclusive baseline, but must not replace pending first contact.
             if (!checkpoint.startsWith("first:") && bufferedChats.has(chat.uid)) {
@@ -429,13 +440,18 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const recoveredChats = new Set<string>();
       const replay = async (chatUid: string) => {
         const checkpoint = checkpoints.get(chatUid)!;
-        const window = await recover(account, chatUid, checkpoint, log);
+        const window = await recover(account, chatUid, checkpoint);
+        if (window.length) recoveryEnds.set(chatUid, window.at(-1)!.uid);
+        const unfinished = unadopted.get(chatUid) ?? new Set<string>();
+        for (const message of window) if (!recent.get(chatUid)?.has(message.uid) && message.direction === "inbound" &&
+          (message.sender.type === "member" || message.sender.relationship === "peer")) unfinished.add(message.uid);
+        unadopted.set(chatUid, unfinished);
         for (const message of window) {
           if (!accepting || signal.aborted) break;
           // A turn still running from before the drop decides the message: an
           // incomplete one leaves it unacked, and consume then dispatches it again.
           await inFlight.get(message.uid)?.catch(() => {});
-          await consume(chatUid, message);
+          await consume(chatUid, message, true);
           replayed.add(message.uid);
         }
         recoveredChats.add(chatUid);

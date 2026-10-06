@@ -1,3 +1,4 @@
+import { startDeliveryRun, finishDeliveryRun, deliveryRunIsUnknown, deliveryRunIsSilent, installDeliveryGuard } from "./delivery-guard.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
@@ -12,10 +13,6 @@ export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 
 let runtime: PluginRuntime;
-// Channel and discovery registries can load separate copies of this module.
-const silenceKey = Symbol.for("plow.run-tool-silence");
-const globalState = globalThis as typeof globalThis & { [silenceKey]?: Map<string, boolean> };
-const silentRuns = globalState[silenceKey] ??= new Map<string, boolean>();
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
@@ -168,9 +165,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   let activeRunId: string | undefined;
   const finishRun = () => {
     if (activeRunId === undefined) return;
-    suppressFinal = silentRuns.get(activeRunId) === true;
+    suppressFinal = deliveryRunIsSilent(activeRunId) || deliveryRunIsUnknown(activeRunId);
     silent ||= suppressFinal;
-    silentRuns.delete(activeRunId);
+    finishDeliveryRun(activeRunId);
     activeRunId = undefined;
   };
   const handoff = pluginHandoff(account.lineUid, chat.uid, message.uid);
@@ -185,7 +182,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           finishRun();
           silent = suppressFinal = false;
           activeRunId = runId;
-          silentRuns.set(runId, false);
+          startDeliveryRun(runId, JSON.stringify([account.lineUid, chat.uid, message.uid]));
           log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
         },
         // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
@@ -201,7 +198,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         durable: email ? false : { to: chat.uid, replyToId: null },
         observeMessageSent: true,
         preparePayload: (payload, info) => {
-          if (activeRunId !== undefined) suppressFinal = silentRuns.get(activeRunId) === true;
+          if (activeRunId !== undefined) suppressFinal = deliveryRunIsSilent(activeRunId) || deliveryRunIsUnknown(activeRunId);
           if (suppressFinal && info.kind === "final") return null;
           if (payload.isFallbackNotice) { silent ||= email; return null; }
           if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
@@ -210,6 +207,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           return email ? payload : { ...payload, replyToId: undefined, replyToCurrent: false };
         },
         deliver: async payload => {
+        if (activeRunId !== undefined && deliveryRunIsUnknown(activeRunId)) throw new DeliveryUnknownError();
           if (email) {
             // A NO_REPLY line the model left beside its text is the silence marker, not words for the owner.
             const text = (payload.text ?? "").split("\n").filter(line => !isSilent(line)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -312,12 +310,7 @@ export default defineChannelPluginEntry({
     if (api.registrationMode === "full") api.logger.info("plow channel registered");
   },
   registerCapabilities(api) {
-    api.on("after_tool_call", (event, ctx) => {
-      // Set this before any await: the hook runner does not wait before final delivery.
-      const runId = event.runId ?? ctx.runId;
-      const silent = (event.result as any)?.details?.silent;
-      if (runId !== undefined && silentRuns.has(runId) && typeof silent === "boolean") silentRuns.set(runId, silent);
-    });
+    installDeliveryGuard(api);
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
       description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email.",
@@ -454,6 +447,7 @@ export default defineChannelPluginEntry({
         if (!args.to?.length || !args.subject) return refuse("A new thread needs to (email addresses) and a subject.");
         const sent = await requestDelivery<{ status: string; chat_uid?: string | null; chat_unrecorded_reason?: string | null }>(
           mailbox, "/chats", { line_uid: phone.emailLineUid, members: args.to, subject: args.subject, body });
+        if (sent.status === "acceptance_unknown") throw new DeliveryUnknownError();
         // A thread started from an email turn reports to the owner's 1:1, the default.
         // The mail is out: a lost origin only sends later finals to the owner's 1:1, so it never fails the send.
         if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, turn.chat.uid).catch(error => api.logger.info(`plow origin not recorded chat=${sent.chat_uid}: ${(error as Error).name}`));

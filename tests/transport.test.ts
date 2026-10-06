@@ -14,23 +14,52 @@ const acceptedChat = (uid: string) => ({
 });
 const inbound = (uid: string) => ({ uid, direction: "inbound", sender: { type: "member" } });
 
-test("catch-up reads only the newest 50 and warns when older unread counts are unavailable", async t => {
+test("recovery pages beyond 50 messages to the checkpoint and preserves inclusive replay", async t => {
   process.env.PLOW_AGENT_TOKEN = "test-token";
-  const urls: string[] = [], logs: string[] = [];
+  const urls: string[] = [];
   const newest = Array.from({ length: 50 }, (_, i) => message(`new-${49 - i}`));
   t.mock.method(globalThis, "fetch", async (url: string) => {
     urls.push(url);
     return Response.json(url.includes("starting_after=")
-      ? { data: [message("acked")], has_more: false }
+      ? { data: [message("older-unread"), message("acked"), message("already-read")], has_more: true }
       : { data: newest, has_more: true });
   });
-  assert.deepEqual((await recover(account, "chat", "acked", text => logs.push(text))).map(m => m.uid), [...newest].reverse().map(m => m.uid));
-  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?limit=50"]);
-  assert.match(logs.join("\n"), /warning.*chat=chat.*fetched=50.*older_unread_skipped=unknown/);
-  urls.length = logs.length = 0;
-  assert.deepEqual((await recover(account, "chat", "new-47", text => logs.push(text))).map(m => m.uid), ["new-48", "new-49"]);
-  assert.equal(urls.length, 1);
-  assert.deepEqual(logs, []);
+  assert.deepEqual((await recover(account, "chat", "acked")).map(m => m.uid), ["older-unread", ...newest.map(m => m.uid).reverse()]);
+  assert.deepEqual(urls, ["http://fixture/v1/chats/chat/messages?limit=50", "http://fixture/v1/chats/chat/messages?limit=50&starting_after=new-0"]);
+  assert.deepEqual((await recover(account, "chat", "first:acked")).map(m => m.uid), ["acked", "older-unread", ...newest.map(m => m.uid).reverse()]);
+});
+
+test("first contact recovers an owner backlog beyond 50 through its answered boundary", async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
+  const sender = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
+  const chat = { ...acceptedChat("home"), participants: [...acceptedChat("home").participants, sender] };
+  const backlog = Array.from({ length: 60 }, (_, i) => ({ ...inbound(`missed-${i}`), sender }));
+  const older = [...backlog.slice(0, 10).reverse(), { ...inbound("answered"), direction: "outbound" }, inbound("old-history")];
+  const urls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    urls.push(url);
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } :
+      url.endsWith("/chats/home") ? chat : url.includes("limit=1") ? { data: [backlog.at(-1)], has_more: true } :
+      url.includes("starting_after=missed-10") ? { data: older, has_more: false } :
+      url.includes("limit=50") ? { data: backlog.slice(10).reverse(), has_more: true } : { ticket: "ticket" });
+  });
+  const received: string[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, () => {}, async (_chat, message, _first, _history, ingress) => {
+    received.push(message.uid);
+    ingress.onSubmitted();
+    if (message.uid === "missed-59") controller.abort();
+    return "completed";
+  });
+  assert.deepEqual(received, backlog.map(m => m.uid));
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/home`), "missed-59");
+  assert.ok(urls.some(url => url.includes("starting_after=missed-10")));
+});
+
+test("a non-advancing history page fails instead of advancing past unread work", async t => {
+  process.env.PLOW_AGENT_TOKEN = "test-token";
+  t.mock.method(globalThis, "fetch", async () => Response.json({ data: [message("same")], has_more: true }));
+  await assert.rejects(recover(account, "chat", "missing"), /pagination did not advance/);
 });
 
 test("empty first-install checkpoint still recovers the first missed message", async t => {
@@ -113,7 +142,7 @@ for (const owner of [false, true]) test(`a frame arriving while a synthesized ch
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), message.uid);
 });
 
-test("bounded recovery does not replay buffered frames or rewind the checkpoint", async t => {
+test("recovery beyond the seen cache does not replay buffered frames or rewind the checkpoint", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   await mkdir(`${root}/plow-checkpoints`);
   await writeFile(`${root}/plow-checkpoints/group`, "old");
@@ -128,8 +157,9 @@ test("bounded recovery does not replay buffered frames or rewind the checkpoint"
     }
     const cursor = new URL(url).searchParams.get("starting_after");
     const history = [...(live ? [inbound("live")] : []), ...[...messages].reverse(), { uid: "old" }];
+    const remaining = cursor ? history.slice(history.findIndex(m => m.uid === cursor) + 1) : history;
     return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/group") ? chat :
-      url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : cursor ? history.slice(history.findIndex(m => m.uid === cursor) + 1) : history.slice(0, 50), has_more: history.length > 50 } : { ticket: "ticket" });
+      url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : remaining.slice(0, 50), has_more: !url.includes("limit=20") && remaining.length > 50 } : { ticket: "ticket" });
   });
   const received: string[] = [];
   await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
@@ -140,8 +170,47 @@ test("bounded recovery does not replay buffered frames or rewind the checkpoint"
     if (text.startsWith("acked chat=group message=live ")) controller.abort();
   }, async (_chat, message) => { received.push(message.uid); return "completed"; });
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
-  assert.deepEqual(received, [...messages.slice(-50).map(message => message.uid), "live"]);
+  assert.deepEqual(received, [...messages.map(message => message.uid), "live"]);
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/group`), "live");
+});
+
+test("an interrupted backlog beyond 512 does not replay adopted sources across three boots", async t => {
+  const { root, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/chat`, JSON.stringify({ uid: "old", recent: [] }));
+  const chat = acceptedChat("chat");
+  const messages = Array.from({ length: 514 }, (_, i) => inbound(`source-${i}`));
+  const history = [...messages].reverse().concat([{ uid: "old" }]);
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const cursor = new URL(url).searchParams.get("starting_after");
+    const start = cursor ? history.findIndex(message => message.uid === cursor) + 1 : 0;
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") ? chat :
+      url.includes("limit=50") ? { data: history.slice(start, start + 50), has_more: start + 50 < history.length } :
+      url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
+  });
+  const calls: string[] = [];
+  for (let boot = 0; boot < 3; boot++) {
+    const controller = abortAfter();
+    await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
+      if (boot === 0 && text.startsWith("acked chat=chat message=source-513 ")) controller.abort();
+    }, async (_chat, message, _first, _history, ingress) => {
+      calls.push(message.uid);
+      ingress.onSubmitted();
+      if (boot === 0 && message.uid === "source-0") {
+        await new Promise<void>(resolve => controller.signal.addEventListener("abort", () => resolve(), { once: true }));
+        return "incomplete";
+      }
+      return "completed";
+    });
+    if (boot === 0) {
+      const checkpoint = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
+      assert.equal(checkpoint.uid, "old");
+      assert.equal(checkpoint.recent.length, 513, "every adoption behind the pinned cursor must survive restart");
+    }
+  }
+  assert.equal(calls.filter(uid => uid === "source-0").length, 2);
+  for (const message of messages.slice(1)) assert.equal(calls.filter(uid => uid === message.uid).length, 1, message.uid);
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "source-513");
 });
 
 for (const outcome of ["completed", "incomplete"] as const) test(`unknown delivery advances once; next turn ${outcome} during abort`, async t => {
@@ -641,7 +710,7 @@ test("out-of-order adoption records its cursor and remembers both sources across
       if (message.uid === "second") secondAdopted.resolve();
       return "completed";
     });
-    assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "first");
+    assert.equal(await checkpointUid(`${root}/plow-checkpoints/chat`), "second");
   }
   assert.deepEqual(calls, ["first", "second"]);
 });
@@ -677,12 +746,12 @@ for (const listed of [true, false]) test(`restart mid-turn replays unfinished ch
     });
     if (boot === 0) {
       assert.deepEqual([...completed].sort(), ["fast", "later"]);
-      assert.notEqual(await checkpointUid(`${root}/plow-checkpoints/slow`), "slow");
+      assert.notEqual(await checkpointUid(`${root}/plow-checkpoints/slow`), "later");
     }
   }
   assert.deepEqual(interrupted, ["slow"]);
   assert.deepEqual([...completed].sort(), ["fast", "later", "slow"]);
-  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "slow");
+  assert.equal(await checkpointUid(`${root}/plow-checkpoints/slow`), "later");
   assert.equal(await checkpointUid(`${root}/plow-checkpoints/fast`), "fast");
 });
 

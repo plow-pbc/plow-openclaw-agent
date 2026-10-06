@@ -1,5 +1,5 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { createHash } from "node:crypto";
+import { threadIdempotencyKey } from "./delivery-guard.ts";
 import { request, requestDelivery, isSilent, findOwnerChat, DeliveryUnknownError, type Account, type Chat } from "./transport.ts";
 
 export type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
@@ -37,7 +37,7 @@ export async function startThread(account: Account, context: Requester, callId: 
   if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
   const members = [...new Set([threadHandle(owner.provider_key), ...args.members.map(threadHandle)])].sort();
   const trusted = groupTrust(account, args.trusted);
-  const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, callId, members, args.body, trusted])).digest("hex");
+  const idempotencyKey = threadIdempotencyKey(callId, [account.lineUid, members, args.body, trusted]);
   const chat = await requestDelivery<{ uid: string }>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
   if (!chat.uid) throw new DeliveryUnknownError();
   return { chat_uid: chat.uid, message_sent: true };
