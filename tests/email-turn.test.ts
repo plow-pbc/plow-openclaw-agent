@@ -44,7 +44,7 @@ const transcript = async (sessionKey: string) => {
 // Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
 async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
   turn: (dispatch: Dispatch, tool: () => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }, config: object) => Promise<void>,
-  newThread: { status: string; chat_uid: string | null; chat_unrecorded_reason?: string; http?: number } = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
+  newThread: { status?: string; chat_uid?: string | null; chat_unrecorded_reason?: string; http?: number } | null = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
   const controller = abortAfter();
@@ -56,7 +56,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
     const path = new URL(url).pathname.replace(/^\/v1/, "");
     if (options.method === "POST" && path !== "/ws/ticket" && !path.endsWith("/typing")) {
       posts.push({ path, body: JSON.parse(options.body as string) });
-      return path === "/chats" && posts.at(-1)!.body.line_uid === "mail" ? Response.json(newThread, { status: newThread.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
+      return path === "/chats" && posts.at(-1)!.body.line_uid === "mail" ? Response.json(newThread, { status: newThread?.http ?? 201 }) : Response.json({ uid: `sent-${posts.length}` });
     }
     if (path === "/chats") return listingFailures-- > 0 ? Response.json({}, { status: 503 }) : Response.json({ data: Object.values(chats), has_more: false });
     if (forbidden.has(path.split("/")[2])) return Response.json({}, { status: 403 });
@@ -216,6 +216,10 @@ for (const [name, response, expected] of [
   ["sent with no chat id", { status: "sent", chat_uid: null, chat_unrecorded_reason: "persistence_failed" }, { sent: true, chat_uid: null, chat_unrecorded_reason: "persistence_failed" }],
   ["delivery unknown", { status: "error", chat_uid: null, http: 503 }, { success: false, delivery_unknown: true }],
   ["acceptance unknown", { status: "acceptance_unknown", chat_uid: null }, { success: false, delivery_unknown: true }],
+  ["malformed null acceptance", null, { success: false, delivery_unknown: true }],
+  ["malformed missing acceptance", {}, { success: false, delivery_unknown: true }],
+  ["malformed empty acceptance", { status: "", chat_uid: "started" }, { success: false, delivery_unknown: true }],
+  ["malformed unrecognized acceptance", { status: "queued", chat_uid: "started" }, { success: false, delivery_unknown: true }],
 ] as const) test(`a new thread's receipt is never an invented chat id and is sent once: ${name}`, async t => {
   let receipt: Record<string, unknown> = {};
   const { posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (_dispatch, tool) => {

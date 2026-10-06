@@ -40,7 +40,7 @@ export async function startThread(account: Account, context: Requester, callId: 
   const trusted = groupTrust(account, args.trusted);
   const idempotencyKey = threadIdempotencyKey(callId, [account.lineUid, members, args.body, trusted]);
   context.assertInvocationCurrent?.();
-  const chat = await requestDelivery<{ uid: string }>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
-  if (!chat.uid) throw new DeliveryUnknownError();
+  const chat = await requestDelivery<{ uid?: unknown } | null>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
+  if (typeof chat?.uid !== "string" || !chat.uid.trim()) throw new DeliveryUnknownError();
   return { chat_uid: chat.uid, message_sent: true };
 }

@@ -53,8 +53,9 @@ test("collected owner tools resolve the host delivery route and still refuse oth
   assert.deepEqual(posts[0].members, ["+15550000002", "guest@example.test", "owner@example.test"]);
 });
 
+const malformedReceipts: Record<string, unknown> = { "null receipt": null, "missing uid": {}, "empty uid": { uid: "" }, "nonstring uid": { uid: 42 }, "whitespace uid": { uid: "  " } };
 for (const toolName of ["plow_start_thread", "message"]) {
-  for (const status of [200, 403, 408, 424, 503, "network"] as const) test(`${toolName}: delivery errors and tool-call idempotency, status=${status}`, async t => {
+  for (const status of [200, 403, 408, 424, 503, "network", "null receipt", "missing uid", "empty uid", "nonstring uid", "whitespace uid"] as const) test(`${toolName}: delivery errors and tool-call idempotency, status=${status}`, async t => {
     process.env.PLOW_AGENT_TOKEN = "test-token";
     const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "line", threadTrust: "ask" };
     const cfg = { channels: { plow: account } };
@@ -67,7 +68,7 @@ for (const toolName of ["plow_start_thread", "message"]) {
       if (options.method === "POST") {
         posts.push(JSON.parse(options.body as string));
         if (status === "network") throw new TypeError("network error");
-        return Response.json({ uid: "created" }, { status });
+        return Response.json(typeof status === "number" ? { uid: "created" } : malformedReceipts[status], { status: typeof status === "number" ? status : 200 });
       }
       return Response.json(chat);
     });

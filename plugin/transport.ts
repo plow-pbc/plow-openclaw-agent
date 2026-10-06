@@ -560,7 +560,8 @@ export const isSilent = (text: string) =>
 
 export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
   if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
-  const sent = await requestDelivery<{ uid: string }>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
+  const sent = await requestDelivery<{ uid?: unknown } | null>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
     "POST", kind ? { "Plow-Message-Kind": kind } : undefined);
+  if (typeof sent?.uid !== "string" || !sent.uid.trim()) throw new DeliveryUnknownError();
   return { channel: "plow" as const, messageId: sent.uid };
 }
