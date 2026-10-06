@@ -9,7 +9,7 @@ const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-CJ
 const { t: createHookRunner } = await import("/app/dist/hooks-CKanWLsK.mjs");
 const { default: discoveryEntry } = await import("../plugin/index.ts?discovery");
 
-for (const runIdSource of ["event", "context"]) for (const outcome of ["silent", "cleared", "silenced-again"]) test(`tool silence via ${runIdSource}: ${outcome}, with explicit sends, overlapping runs, and the next turn`, async t => {
+for (const runIdSource of ["event", "context"]) for (const outcome of ["silent", "cleared", "silenced-again", "uncertain"]) test(`tool silence via ${runIdSource}: ${outcome}, with explicit sends, overlapping runs, and the next turn`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(20_000);
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -59,11 +59,13 @@ for (const runIdSource of ["event", "context"]) for (const outcome of ["silent",
               const runId = dispatch.ctxPayload.MessageSid;
               replyOptions.onAgentRunStart(runId);
               const result = (id: string | undefined, value: unknown, contextRunId = id) => hooks.runAfterToolCall({
-                toolName: "variant_handoff", params: {}, toolCallId: `call-${id}`, result: value,
+                toolName: outcome === "uncertain" ? "message" : "variant_handoff", params: {}, toolCallId: `call-${id}`, result: value,
                 ...(runIdSource === "event" ? { runId: id } : {}),
               }, { toolName: "variant_handoff", runId: contextRunId });
               if (runId === "silent") {
-                const pending = result(runId, { content: [{ type: "text", text: "handoff" }], details: { silent: true } });
+                const pending = result(runId, outcome === "uncertain"
+                  ? { isError: true, content: [{ type: "text", text: "Plow delivery is unknown; not replaying this send" }] }
+                  : { content: [{ type: "text", text: "handoff" }], details: { silent: true } });
                 // The runner is fire-and-forget: final preparation can start before it is awaited.
                 immediateFinal = dispatch.delivery.preparePayload({ text: "immediate final" }, { kind: "final" });
                 await pending;
@@ -105,11 +107,12 @@ for (const runIdSource of ["event", "context"]) for (const outcome of ["silent",
   }
   await channel!.gateway.startAccount({ account, cfg, abortSignal: controller.signal, log: { info(text: string) {
     logs.push(text);
-    if (text === "completed chat=one message=silent") sendFrame("one", "next");
+    if (text === "completed chat=one message=silent" || (outcome === "uncertain" && text.includes("Plow delivery is unknown"))) sendFrame("one", "next");
     if (text === "completed chat=one message=next") controller.abort();
   } } });
   assert.equal(immediateFinal, null, "the hook must suppress the final synchronously");
-  if (outcome !== "silent") assert.deepEqual(toggledFinal, { text: "cleared final", replyToId: undefined, replyToCurrent: false }, "the hook must clear suppression synchronously, even after a final was prepared");
+  if (outcome === "uncertain") assert.equal(toggledFinal, null, "a later result cannot clear delivery uncertainty");
+  else if (outcome !== "silent") assert.deepEqual(toggledFinal, { text: "cleared final", replyToId: undefined, replyToCurrent: false }, "the hook must clear suppression synchronously, even after a final was prepared");
   assert.deepEqual(posts, [
     { chat: "one", text: "explicit tool send" },
     { chat: "two", text: "final overlapping" },

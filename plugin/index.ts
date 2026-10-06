@@ -453,7 +453,7 @@ export default defineChannelPluginEntry({
         if (sent.chat_uid && !emailTurn) await recordOrigin(sent.chat_uid, turn.chat.uid).catch(error => api.logger.info(`plow origin not recorded chat=${sent.chat_uid}: ${(error as Error).name}`));
         api.logger.info(`plow started email status=${sent.status} chat=${sent.chat_uid ?? "none"}`);
         if (sent.chat_uid) return receipt({ sent: true, chat_uid: sent.chat_uid });
-        return receipt({ sent: sent.status === "sent" ? true : "unknown", chat_uid: null, chat_unrecorded_reason: sent.chat_unrecorded_reason ?? null,
+        return receipt({ sent: true, chat_uid: null, chat_unrecorded_reason: sent.chat_unrecorded_reason ?? null,
           note: "Plow has no chat id for this thread. Do not resend and do not guess a chat id." });
       }
       return {

@@ -308,10 +308,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     if (signal.aborted || seen.has(message.uid) || checkpoints.get(chatUid) === message.uid || recent.get(chatUid)?.has(message.uid) || pending.has(message.uid)) return;
     const chat = discovered.get(chatUid);
     if (chat && !accepts(account, chat)) return;
-    if (!recovering) recoveryEnds.set(chatUid, message.uid);
     const sender = message.sender;
     if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
       if (!accepts(account, await request<Chat>(account, `/chats/${chatUid}`))) return;
+      if (!recovering) recoveryEnds.set(chatUid, message.uid);
       if (account.accountId === "chat") await ack(chatUid, message.uid);
       remember(message.uid);
       log(`acked chat=${chatUid} message=${message.uid}`);
@@ -320,14 +320,15 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let resolve!: () => void, reject!: (error: unknown) => void;
     const outcome = new Promise<void>((done, failed) => { resolve = done; reject = failed; });
     const item = { chatUid, message, resolve, reject };
-    const previous = lastSpeaker.get(chatUid);
-    if (previous && previous !== key(item)) await debouncer.flushKey(previous);
-    if (signal.aborted) return;
-    lastSpeaker.set(chatUid, key(item));
     if (account.accountId === "chat") {
       if (!unadopted.has(chatUid)) unadopted.set(chatUid, new Set());
       unadopted.get(chatUid)!.add(message.uid);
     }
+    if (!recovering) recoveryEnds.set(chatUid, message.uid);
+    const previous = lastSpeaker.get(chatUid);
+    if (previous && previous !== key(item)) await debouncer.flushKey(previous);
+    if (signal.aborted) return;
+    lastSpeaker.set(chatUid, key(item));
     pending.set(message.uid, item);
     inFlight.set(message.uid, outcome);
     void outcome.catch(() => {}).finally(() => { if (inFlight.get(message.uid) === outcome) inFlight.delete(message.uid); });
@@ -517,8 +518,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
 }
 
 
-export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>, signal?: AbortSignal): Promise<T> {
-  try { return await request<T>(account, path, body, signal, method, headers); }
+export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path: string, body: unknown, method: "POST" | "PUT" = "POST", headers?: Record<string, string>): Promise<T> {
+  try { return await request<T>(account, path, body, undefined, method, headers); }
   catch (error) {
     if (!(error instanceof HttpError) || [408, 424].includes(error.status) || error.status >= 500) {
       throw new DeliveryUnknownError();
@@ -539,9 +540,9 @@ export async function requestDelivery<T>(account: Pick<Account, "apiBase">, path
 export const isSilent = (text: string) =>
   text.split("\n").filter(line => line.trim()).at(-1)?.trim().replace(/^[.*_ `]+|[.*_ `]+$/g, "") === "NO_REPLY";
 
-export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat", signal?: AbortSignal) {
+export async function postMessage(account: Pick<Account, "apiBase">, chatUid: string, text: string, attachmentUids: string[] = [], kind?: "heartbeat") {
   if (!attachmentUids.length && isSilent(text)) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const sent = await requestDelivery<{ uid: string }>(account, `/chats/${chatUid}/messages`, { body: text, attachment_uids: attachmentUids },
-    "POST", kind ? { "Plow-Message-Kind": kind } : undefined, signal);
+    "POST", kind ? { "Plow-Message-Kind": kind } : undefined);
   return { channel: "plow" as const, messageId: sent.uid };
 }

@@ -14,6 +14,48 @@ const acceptedChat = (uid: string) => ({
 });
 const inbound = (uid: string) => ({ uid, direction: "inbound", sender: { type: "member" } });
 
+for (const interruption of ["incomplete", "error", "abort-before-admission"] as const) test(`a speaker change cannot checkpoint past an unadopted next message: ${interruption}`, async t => {
+  const { root, server, apiBase, abortAfter } = await websocketFixture(t);
+  await mkdir(`${root}/plow-checkpoints`);
+  await writeFile(`${root}/plow-checkpoints/home`, JSON.stringify({ uid: "old", recent: ["old"] }));
+  const owner = { type: "member" as const, uid: "owner", role: "owner", provider_key: "+15550000001" };
+  const guest = { ...owner, uid: "guest", role: "member", provider_key: "+15550000002" };
+  const chat: Chat = { uid: "home", status: "active", trusted: true, participants: [owner, guest,
+    { type: "agent", relationship: "self", line: { uid: "line" } }] };
+  const message = (uid: string, sender = owner): Message => ({ uid, sender, direction: "inbound", body: uid, attachments: [], created_at: new Date().toISOString() });
+  const first = message("first"), next = message("next", guest);
+  const frame = (message: Message) => JSON.stringify({ event_type: "message_received", event_id: message.uid, chat_id: chat.uid, data: { message } });
+  let boot = 0;
+  server.on("connection", socket => { if (boot === 0) socket.send(frame(first)); });
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
+    url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/home") ? chat :
+    url.includes("/messages?") ? { data: url.includes("limit=20") ? [] : boot ? [next, first, message("old")] : [message("old")], has_more: false } : { ticket: "ticket" }));
+  const turns: string[] = [];
+  for (; boot < 2; boot++) {
+    const controller = abortAfter();
+    await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
+      if (boot === 0 && text.includes("message=first") && text.startsWith("buffered ")) for (const socket of server.clients) socket.send(frame(next));
+      if (boot === 0 && text.startsWith("turn incomplete chat=home message=next")) controller.abort();
+      if (boot === 1 && text.startsWith("acked chat=home message=next")) controller.abort();
+    }, async (_chat, message, _first, _history, ingress) => {
+      turns.push(message.uid);
+      if (message.uid === "first") {
+        await ingress.onAdopted();
+        if (boot === 0 && interruption === "abort-before-admission") controller.abort();
+      }
+      if (message.uid === "next" && boot === 0 && interruption === "error") throw new Error("interrupted before adoption");
+      return message.uid === "next" && boot === 0 ? "incomplete" : "completed";
+    }, { messages: { inbound: { byChannel: { plow: 50 } } } });
+    if (boot === 0) {
+      const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/home`, "utf8"));
+      assert.equal(saved.uid, "old");
+      assert.ok(saved.recent.includes("first"));
+      assert.ok(!saved.recent.includes("next"));
+    }
+  }
+  assert.deepEqual(turns, interruption === "abort-before-admission" ? ["first", "next"] : ["first", "next", "next"]);
+});
+
 test("recovery pages beyond 50 messages to the checkpoint and preserves inclusive replay", async t => {
   process.env.PLOW_AGENT_TOKEN = "test-token";
   const urls: string[] = [];
