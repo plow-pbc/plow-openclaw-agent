@@ -1,24 +1,8 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
 import { createServer } from "node:http";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { pathToFileURL } from "node:url";
 import { renderConfig } from "../boot/config.ts";
-
-const require = createRequire(new URL("../plugin/package.json", import.meta.url));
-const runtimeDist = dirname(require.resolve("openclaw"));
-
-// These request wrappers are internal to the pinned runtime, not plugin SDK exports.
-async function runtimeFunction(prefix: string, name: string) {
-  for (const file of (await readdir(runtimeDist)).filter(file => file.startsWith(prefix) && file.endsWith(".mjs"))) {
-    const module = await import(pathToFileURL(join(runtimeDist, file)).href);
-    const fn = Object.values(module).find(value => typeof value === "function" && value.name === name);
-    if (typeof fn === "function") return fn;
-  }
-  throw new Error(`Pinned OpenClaw runtime is missing ${name}`);
-}
+import { runtimeFunction } from "./runtime-function.ts";
 
 test("GLM opts out of reasoning on the wire without changing Sonnet or model selection", async () => {
   const applyExtraParams = await runtimeFunction("extra-params-", "applyExtraParamsToAgent");
