@@ -259,37 +259,34 @@ try {
   await rpc("cron.remove", { id: job.id });
   await assert.rejects(rpc("cron.get", { id: job.id }));
   record("reminder execution and cancellation", "resumed job invokes model and delivers once to the owner; removal confirmed by scheduler");
-  const queued: any = await rpc("cron.add", { name: "In-flight pause check", agentId: "main", sessionKey: context.sessionKey, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "IN_FLIGHT_ACCEPTANCE: remind Pat about dinner", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" } });
-  await rpc("cron.run", { id: queued.id, mode: "force" });
-  await until(() => !!releaseReminder, "in-flight reminder model request");
-  const sentBeforePause = outbound.length;
-  // Isolate the physical delivery gate: persist pause without disabling the job
-  // or aborting its model request, as on a partial scheduler-control failure.
-  await updateExperience(scope, context.assertInvocationCurrent, state => { state.paused = true; });
-  releaseReminder!();
-  await until(async () => ((await rpc("cron.runs", { id: queued.id, limit: 10 })) as any).entries?.some((entry: any) => entry.action === "finished"), "paused run completion");
-  assert.equal(outbound.length, sentBeforePause);
-  await message(home.uid, "PAUSED_REPLY_ACCEPTANCE: can you still answer me?", owner);
-  await until(() => outbound.some(value => value.body.includes("Direct replies still work")), "direct reply while notifications paused");
-  record("paused direct replies", "ordinary inbound replies still deliver while scheduled notifications are paused");
-  await rpc("cron.remove", { id: queued.id });
-  await notificationControl(scheduler, scope, context, "resume", false);
-  record("in-flight pause gate", "persisted pause blocks physical delivery from an already generating reminder even without scheduler disable/cancellation");
-  releaseReminder = undefined;
-  const sourceSession = `agent:main:plow:chat:group:${group.uid}`;
-  const sourceJob: any = await rpc("cron.add", { name: "Source-room pause check", agentId: "main", sessionKey: sourceSession, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "IN_FLIGHT_ACCEPTANCE SOURCE_ROOM: remind Pat about dinner", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" } });
-  const sourceView: any = await rpc("cron.get", { id: sourceJob.id });
-  assert.equal(sourceView.owner?.sessionKey ?? sourceView.sessionKey, sourceSession);
-  await rpc("cron.run", { id: sourceJob.id, mode: "force" });
-  await until(() => !!releaseReminder, "source-room reminder model request");
-  const sentBeforeSourcePause = outbound.length;
-  await updateExperience({ account, conversation: group.uid }, context.assertInvocationCurrent, state => { state.paused = true; });
-  releaseReminder!();
-  await until(async () => ((await rpc("cron.runs", { id: sourceJob.id, limit: 10 })) as any).entries?.some((entry: any) => entry.action === "finished"), "source-room paused run completion");
-  assert.equal(outbound.length, sentBeforeSourcePause, "pausing the source room must also gate delivery to a different room");
-  await rpc("cron.remove", { id: sourceJob.id });
-  await updateExperience({ account, conversation: group.uid }, context.assertInvocationCurrent, state => { state.paused = false; });
-  record("source-room in-flight pause", "a persisted source-room pause blocks scheduled delivery to another room even after generation has begun");
+  const pauseGateCases = [
+    { name: "In-flight pause check", sessionKey: context.sessionKey, scope, check: "in-flight pause gate", result: "persisted pause blocks physical delivery from an already generating reminder even without scheduler disable/cancellation" },
+    { name: "Source-room pause check", sessionKey: `agent:main:plow:chat:group:${group.uid}`, scope: { account, conversation: group.uid }, check: "source-room in-flight pause", result: "a persisted source-room pause blocks scheduled delivery to another room even after generation has begun" },
+  ];
+  for (const gate of pauseGateCases) {
+    releaseReminder = undefined;
+    const queued: any = await rpc("cron.add", { name: gate.name, agentId: "main", sessionKey: gate.sessionKey, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "IN_FLIGHT_ACCEPTANCE: remind Pat about dinner", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" } });
+    const sourceView: any = await rpc("cron.get", { id: queued.id });
+    assert.equal(sourceView.owner?.sessionKey ?? sourceView.sessionKey, gate.sessionKey);
+    await rpc("cron.run", { id: queued.id, mode: "force" });
+    await until(() => !!releaseReminder, `${gate.name}: model request`);
+    const sentBeforePause = outbound.length;
+    // Isolate the physical delivery gate without disabling or aborting the job,
+    // as on a partial scheduler-control failure.
+    await updateExperience(gate.scope, context.assertInvocationCurrent, state => { state.paused = true; });
+    releaseReminder!();
+    await until(async () => ((await rpc("cron.runs", { id: queued.id, limit: 10 })) as any).entries?.some((entry: any) => entry.action === "finished"), `${gate.name}: paused run completion`);
+    assert.equal(outbound.length, sentBeforePause, `${gate.name}: the paused scope gates destination delivery`);
+    if (gate.scope.conversation === home.uid) {
+      await message(home.uid, "PAUSED_REPLY_ACCEPTANCE: can you still answer me?", owner);
+      await until(() => outbound.some(value => value.body.includes("Direct replies still work")), "direct reply while notifications paused");
+      record("paused direct replies", "ordinary inbound replies still deliver while scheduled notifications are paused");
+    }
+    await rpc("cron.remove", { id: queued.id });
+    if (gate.scope.conversation === home.uid) await notificationControl(scheduler, scope, context, "resume", false);
+    else await updateExperience(gate.scope, context.assertInvocationCurrent, state => { state.paused = false; });
+    record(gate.check, gate.result);
+  }
   await message(home.uid, "WORKER_START: do a bounded background analysis of dinner options", owner);
   await until(() => !!releaseWorker, "native background worker start");
   await message(home.uid, "WORKER_PING: are you available while the analysis runs?", owner);
