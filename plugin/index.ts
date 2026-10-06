@@ -218,7 +218,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         if (!payload.isError && payload.isFallbackNotice) { silent ||= email; return null; }
         if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
         if (!payload.isError && !email && observedReplyDelivery && info.kind === "final") return null;
-        if (payload.isError) payload = { ...payload, text: "Sorry, I couldn't finish that just now. Please send it again in a moment." };
+        if (payload.isError) payload = { ...payload, text: "Sorry, I couldn't finish that just now. Some actions may have completed; check before retrying." };
         // Plow sends unquoted replies; implicit quote targets would bypass durable delivery.
         return email ? payload : { ...payload, replyToId: undefined, replyToCurrent: false };
       },

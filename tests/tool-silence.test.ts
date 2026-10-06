@@ -124,7 +124,7 @@ for (const runIdSource of ["event", "context"]) for (const outcome of ["silent",
     { chat: "one", text: "explicit tool send" },
     { chat: "two", text: "final overlapping" },
     ...(outcome === "cleared" ? [{ chat: "one", text: "final silent" }] : []),
-    ...(outcome === "silent-error" ? [{ chat: "one", text: "Sorry, I couldn't finish that just now. Please send it again in a moment." }] : []),
+    ...(outcome === "silent-error" ? [{ chat: "one", text: "Sorry, I couldn't finish that just now. Some actions may have completed; check before retrying." }] : []),
     { chat: "one", text: "final next" },
   ], logs.join("\n"));
   assert.ok(logs.includes("completed chat=one message=silent"), logs.join("\n"));
