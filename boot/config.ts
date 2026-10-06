@@ -45,11 +45,16 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
         { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", input: ["text", "image"], contextWindow: 1000000, maxTokens: 16384, compat: { maxTokensField: "max_tokens" }, cost: { input: 2.00, output: 10.00 } },
       ],
     } } },
-    agents: { entries: { main: { identity: { name } } }, defaults: {
+    agents: { ownership: "explicit", entries: {
+      main: { identity: { name }, subagents: { allowAgents: ["plow-worker"], requireAgentId: true } },
+      "plow-worker": { identity: { name: `${name} background worker` }, workspace: "/var/lib/plow/workspace-worker", tools: { allow: ["web_search", "web_fetch"] } },
+    }, defaults: {
+      systemAgent: { agentId: "main" },
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
       // A phone turn, not OpenClaw's 48-hour default: a stuck run blocks its chat.
       timeoutSeconds: 600,
       silentReply: { group: "allow" },
+      subagents: { maxConcurrent: 2, maxSpawnDepth: 1, maxChildrenPerAgent: 2 },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
       // Model params must not become a legacy model-selection allowlist.
       modelPolicy: {},
@@ -71,13 +76,16 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
-    bindings: [{ agentId: "main", match: { channel: "plow", accountId: "chat", peer: { kind: "direct", id: "plow-owner" } }, session: { dmScope: "main" } }],
+    bindings: [
+      { agentId: "main", match: { channel: "plow", accountId: "chat", peer: { kind: "direct", id: "plow-owner" } }, session: { dmScope: "main" } },
+      { agentId: "main", match: { channel: "plow", accountId: "*" } },
+    ],
     commands: { ownerAllowFrom: ["plow-owner"] },
     memory: { search: { rememberAcrossConversations: false } },
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills", ...definition.skills] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", "plow_preferences", "plow_personality", "plow_memory", "plow_room", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "sessions_spawn", "subagents", "web_search", "web_fetch", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", "plow_preferences", "plow_personality", "plow_memory", "plow_room", "plow_tasks", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
   };
 }
 
@@ -94,6 +102,12 @@ const ownedPaths = [
   ["message-queue", ["messages", "queue"]],
   ["inbound-debounce", ["messages", "inbound", "byChannel", "plow"]],
   ["identity", ["agents", "entries", "main", "identity"]],
+  ["agent-ownership", ["agents", "ownership"]],
+  ["legacy-default", ["agents", "entries", "main", "default"]],
+  ["system-agent", ["agents", "defaults", "systemAgent"]],
+  ["worker-routing", ["agents", "entries", "main", "subagents"]],
+  ["worker-agent", ["agents", "entries", "plow-worker"]],
+  ["worker-limits", ["agents", "defaults", "subagents"]],
   ["run-timeout", ["agents", "defaults", "timeoutSeconds"]],
   ["session", ["session"]],
   ["memory", ["memory"]],
@@ -188,10 +202,15 @@ export async function syncConfig(
     defaults.heartbeat = { ...(isObject(heartbeat) ? heartbeat : {}), ...rendered.agents.defaults.heartbeat };
   }
   const bindingPath = join(includeDir, "binding.json5");
+  const channelBindingPath = join(includeDir, "channel-binding.json5");
   await writeFile(bindingPath, JSON.stringify(rendered.bindings[0], null, 2) + "\n");
+  await writeFile(channelBindingPath, JSON.stringify(rendered.bindings[1], null, 2) + "\n");
   const ownerBindings = Array.isArray(owner.bindings) ? owner.bindings.filter(binding =>
-    !(isObject(binding) && binding.$include === bindingPath) && !isPlowOwnerBinding(binding)) : [];
-  owner.bindings = [{ $include: bindingPath }, ...ownerBindings];
+    !(isObject(binding) && [bindingPath, channelBindingPath].includes(binding.$include as string))
+    && !isPlowOwnerBinding(binding)
+    && !(isObject(binding) && binding.agentId === "main" && isObject(binding.match)
+      && binding.match.channel === "plow" && binding.match.accountId === "*" && Object.keys(binding.match).length === 2)) : [];
+  owner.bindings = [{ $include: bindingPath }, ...ownerBindings, { $include: channelBindingPath }];
   const temporaryPath = `${configPath}.tmp`;
   await writeFile(temporaryPath, JSON.stringify(owner, null, 2) + "\n", { mode: 0o600 });
   await rename(temporaryPath, configPath);

@@ -3,6 +3,7 @@ import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plug
 import { accepts, request, normalizedHandle, type Account, type Chat } from "./transport.ts";
 import { conversationUid, ownerDmTurn } from "./threads.ts";
 import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, type Scope } from "./experience-state.ts";
+import { threadIdempotencyKey } from "./delivery-guard.ts";
 import { personalitySchema, personalityPatchSchema, personalityInstructions } from "../boot/personality.ts";
 
 type Context = OpenClawPluginToolContext<2>;
@@ -34,6 +35,12 @@ const memoryArgs = z.object({
 const preferenceArgs = z.object({ action: z.enum(["get", "set", "reset"]), preferences: preferencesSchema.optional() }).strict();
 const personalityArgs = z.object({ action: z.enum(["get", "preview", "set", "reset"]), sliders: personalityPatchSchema.optional() }).strict();
 const roomArgs = z.object({ action: z.enum(["get", "set", "reset"]), settings: roomSchema.optional() }).strict();
+const taskArgs = z.object({
+  action: z.enum(["list", "create", "wait", "resume", "finish", "fail", "cancel"]), id: z.string().optional(),
+  goal: z.string().trim().min(1).max(1000).optional(), completion: z.string().trim().min(1).max(1000).optional(),
+  deadline: z.string().datetime().optional(), step: z.string().max(1000).optional(),
+  evidence: z.string().trim().min(1).max(2000).optional(), delivery: z.enum(["confirmed", "failed", "unknown"]).optional(),
+}).strict();
 export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx: Context) => Account) {
   function tool<S extends z.ZodType>(name: string, description: string, schema: S, execute: (ctx: Context, args: z.output<S>, id: string) => Promise<unknown>) {
     api.registerTool({ contextVersion: 2, create: ctx => ({
@@ -102,5 +109,35 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
       }
     });
     return { scope: selected, notes: state.notes, revision: state.notesRevision };
+  });
+  tool("plow_tasks", "Durable current-conversation commitments using native task flows. Create requires goal and observable completion condition; this does not schedule a wakeup. List before resuming after restart. Finish requires factual tool/provider evidence; uncertain delivery must fail with delivery=unknown. Cancel stops native work; cancel associated automations separately.", taskArgs, async (ctx, args, callId) => {
+    await activeScope(accountFor(ctx), ctx, "plow_tasks", args.action !== "list");
+    const flows = api.runtime.tasks.async.managedFlows.fromToolContext(ctx);
+    if (args.action === "list") return (await flows.list()).filter(flow => flow.controllerId === "plow");
+    ctx.assertInvocationCurrent();
+    if (args.action === "create") {
+      if (!args.goal || !args.completion) throw new Error("A task needs a goal and completion condition");
+      const intent = threadIdempotencyKey(callId, [ctx.sessionKey, args.goal, args.completion]);
+      const existing = (await flows.list()).find(flow => flow.controllerId === "plow" && flow.stateJson && typeof flow.stateJson === "object" && !Array.isArray(flow.stateJson) && flow.stateJson.intent === intent);
+      if (existing) return existing;
+      ctx.assertInvocationCurrent();
+      return await flows.createManaged({ controllerId: "plow", goal: args.goal, status: "queued", notifyPolicy: "silent", stateJson: { intent, completion: args.completion, deadline: args.deadline ?? null, authorizedBy: ctx.requesterSenderId!, conversation: conversationUid(ctx)!, destination: ctx.deliveryContext?.to ?? conversationUid(ctx)! } });
+    }
+    const flow = args.id ? await flows.get(args.id) : undefined;
+    if (!flow || flow.controllerId !== "plow") throw new Error("Choose a task from this conversation's list");
+    const mutation = { flowId: flow.flowId, expectedRevision: flow.revision };
+    ctx.assertInvocationCurrent();
+    if (args.action === "cancel") return await api.runtime.tasks.managedFlows.fromToolContext(ctx).cancel({ flowId: flow.flowId, cfg: ctx.config! });
+    if (args.action === "wait") return await flows.setWaiting({ ...mutation, currentStep: args.step, waitJson: { question: args.step ?? "Awaiting input" } });
+    if (args.action === "resume") return await flows.resume({ ...mutation, status: "running", currentStep: args.step });
+    if (!args.evidence) throw new Error("Record the observed outcome and evidence");
+    if (args.action === "finish" && (args.delivery === "unknown" || args.delivery === "failed")) throw new Error("Unconfirmed delivery cannot count as completed");
+    const previous = flow.stateJson && typeof flow.stateJson === "object" && !Array.isArray(flow.stateJson) ? flow.stateJson : {};
+    const stateJson = { ...previous, evidence: args.evidence, delivery: args.delivery ?? null };
+    return args.action === "finish" ? await flows.finish({ ...mutation, stateJson }) : await flows.fail({ ...mutation, stateJson, blockedSummary: args.evidence });
+  });
+  api.on("before_tool_call", async (event, ctx) => {
+    if (ctx.agentId === "plow-worker" && !["web_search", "web_fetch"].includes(event.toolName)) return { block: true, blockReason: "Background workers perform read-only research and analysis; the conversational agent owns messages, memory, scheduling and mutations" };
+    if (event.toolName === "sessions_spawn" && (event.params?.agentId !== "plow-worker" || (event.params?.runtime && event.params.runtime !== "subagent"))) return { block: true, blockReason: "Delegate bounded research/analysis to agentId=plow-worker using the native subagent runtime" };
   });
 }

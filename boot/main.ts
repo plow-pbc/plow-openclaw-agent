@@ -28,6 +28,8 @@ try {
   }
   const prompt = composePrompt(await readFile("/opt/plow/prompt/BASE.md", "utf8"), await readFile("/opt/plow/prompt/AGENTS.md", "utf8"), definition);
   await writeFile("/var/lib/plow/workspace/AGENTS.md", await renderPrompt(prompt, identity.mcp_url, process.env.PLOW_AGENT_TOKEN, config.channels.plow.threadTrust, identity.agent?.web_url));
+  await mkdir("/var/lib/plow/workspace-worker", { recursive: true });
+  await writeFile("/var/lib/plow/workspace-worker/AGENTS.md", await readFile("/opt/plow/prompt/WORKER.md", "utf8"));
   await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex(300_000, writeLog);

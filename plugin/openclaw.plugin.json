@@ -13,6 +13,7 @@
       "plow_preferences",
       "plow_memory",
       "plow_room",
+      "plow_tasks",
       "plow_personality"
     ]
   },

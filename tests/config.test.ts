@@ -130,7 +130,7 @@ test("guest tools default to empty and are declared once for channel and messagi
 
 test("native messaging retains local workspace and memory file tools", () => {
   const { tools } = renderConfig(identity, "http://api:8000");
-  for (const name of ["read", "write", "edit", "exec", "automations", "plow_preferences", "plow_personality", "plow_memory", "plow_room"]) assert.ok(tools.alsoAllow.includes(name));
+  for (const name of ["read", "write", "edit", "exec", "automations", "sessions_spawn", "subagents"]) assert.ok(tools.alsoAllow.includes(name));
   assert.deepEqual(tools.message.crossContext, { allowWithinProvider: false, allowAcrossProviders: false });
   assert.equal(tools.profile, "messaging"); assert.equal(tools.toolSearch, false);
 });
@@ -142,7 +142,7 @@ test("private transcript recall is disabled across isolated conversations", () =
 
 test("the API agent name configures the assistant identity", () => {
   const config = renderConfig(identity, "http://api:8000");
-  assert.deepEqual(config.agents.entries, { main: { identity: { name: "Juniper" } } });
+  assert.deepEqual(config.agents.entries.main.identity, { name: "Juniper" });
 });
 
 for (const name of [undefined, null, "", "  "]) test(`missing agent name is not invented: ${JSON.stringify(name)}`, () => {
@@ -200,7 +200,9 @@ test("fresh boot seeds owner defaults and external includes for Plow-owned setti
   assert.equal(JSON5.parse(await readFile(join(includes, "plow-channel.json5"), "utf8")).threadTrust, "ask");
   assert.deepEqual(owner.messages.visibleReplies, { $include: join(includes, "visible-replies.json5") });
   assert.equal(JSON5.parse(await readFile(join(includes, "visible-replies.json5"), "utf8")), "automatic");
-  assert.deepEqual(owner.bindings, [{ $include: join(includes, "binding.json5") }]);
+  assert.deepEqual(owner.bindings, [{ $include: join(includes, "binding.json5") }, { $include: join(includes, "channel-binding.json5") }]);
+  assert.equal(JSON5.parse(await readFile(owner.agents.ownership.$include, "utf8")), "explicit");
+  assert.deepEqual(JSON5.parse(await readFile(owner.agents.defaults.systemAgent.$include, "utf8")), { agentId: "main" });
   assert.deepEqual(JSON5.parse(await readFile(join(includes, "gateway.json5"), "utf8")).port, 3000);
 });
 
@@ -212,6 +214,10 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.plugins.entries.extra = { enabled: true };
   old.agents.defaults.model.primary = "extra/model";
   old.agents.entries.main.identity.emoji = "old";
+  old.agents.entries.main.default = true;
+  delete old.agents.ownership;
+  delete old.agents.defaults.systemAgent;
+  delete old.agents.entries["plow-worker"];
   old.messages.queue = { mode: "steer", cap: 99 };
   old.messages.inbound = { debounceMs: 800, byChannel: { plow: 1, signal: 500 } };
   old.messages.groupChat = { visibleReplies: "message_tool" };
@@ -232,9 +238,12 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
   assert.deepEqual(owner.agents.defaults.heartbeat, { every: "1h", target: "plow", to: "plow-heartbeat", accountId: "chat" }, "rebuilt agents get the marked route and keep their cadence");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
-  assert.equal(owner.bindings.length, 2);
+  assert.equal(owner.agents.entries.main.default, undefined);
+  assert.ok(owner.agents.entries["plow-worker"].$include);
+  assert.equal(owner.bindings.length, 3);
   assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });
   assert.deepEqual(owner.bindings[1], { agentId: "extra", match: { channel: "telegram" } });
+  assert.deepEqual(owner.bindings[2], { $include: join(includes, "channel-binding.json5") });
   assert.equal(JSON5.parse(await readFile(join(includes, "plow-provider.json5"), "utf8")).baseUrl, "http://new-api:8000/v1");
   owner.gateway.port = 9999;
   owner.channels.plow.enabled = false;

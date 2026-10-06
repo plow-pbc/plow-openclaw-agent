@@ -177,3 +177,28 @@ test("manifest persona composition retains base policy and existing explicit def
   await writeFile(path, JSON.stringify({ agents: { defaults: {} } })); await syncConfig(config, path, includes);
   assert.equal(JSON.parse(await readFile(path, "utf8")).agents.defaults.silentReply.group, "allow");
 });
+
+test("native task flows persist commitments across runtime recreation, isolate rooms and record terminal evidence", async t => {
+  const require = createRequire(new URL("../plugin/package.json", import.meta.url));
+  const dist = dirname(require.resolve("openclaw"));
+  const file = (await readdir(dist)).find(file => /^runtime-[a-zA-Z0-9_-]+\.mjs$/.test(file) && file.startsWith("runtime-DkD"));
+  assert.ok(file, "Pinned runtime's native task implementation must exist");
+  const module = await import(pathToFileURL(join(dist, file)).href);
+  const createRuntime: any = Object.values(module).find((fn: any) => typeof fn === "function" && fn.name === "createPluginRuntime");
+  assert.ok(createRuntime);
+  const runtime = createRuntime();
+  const { root, tool } = await fixture(t, runtime);
+  await writeFile(join(root, "openclaw.json"), JSON.stringify(renderConfig({ agent: { name: "Fixture" }, line: { uid: account.lineUid }, chats: [] }, account.apiBase)));
+  const tasks = tool("plow_tasks");
+  const created = (await tasks.execute("create", { action: "create", goal: "Dinner booking", completion: "Restaurant confirms a table", deadline: "2026-12-01T18:00:00Z" })).details;
+  assert.equal(created.status, "queued");
+  const secondRuntime = createRuntime();
+  const records = await secondRuntime.tasks.async.managedFlows.bindSession({ sessionKey: "agent:main:plow:chat:group:cht_room" }).list();
+  assert.ok(records.some((record: any) => record.flowId === created.flowId));
+  assert.deepEqual((await tool("plow_tasks", false, { sessionKey: "agent:main:plow:chat:group:cht_other", nativeChannelId: "cht_other" }).execute("list", { action: "list" })).details, []);
+  await tasks.execute("resume", { action: "resume", id: created.flowId, step: "Waiting for restaurant receipt" });
+  await assert.rejects(tasks.execute("unknown", { action: "finish", id: created.flowId, evidence: "Request timed out", delivery: "unknown" }), /cannot count as completed/);
+  const finished = (await tasks.execute("finish", { action: "finish", id: created.flowId, evidence: "Provider receipt fixture-1 confirms a table", delivery: "confirmed" })).details;
+  assert.equal(finished.applied, true); assert.equal(finished.flow.status, "succeeded");
+  assert.match(finished.flow.stateJson.evidence, /fixture-1/);
+});

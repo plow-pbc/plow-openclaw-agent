@@ -11,6 +11,7 @@ COPY plugin /opt/plow/plugin
 COPY prompt /opt/plow/prompt
 COPY skills /opt/plow/skills
 COPY build.ts /opt/plow/build.ts
+COPY patch-runtime.ts /opt/plow/patch-runtime.ts
 COPY package.json package-lock.json tsconfig.json /opt/plow/
 
 # The Agent Index usage reporter, fetched at build from an immutable commit and
@@ -44,7 +45,7 @@ RUN case "$TARGETARCH" in \
  && tar -xzf /tmp/agentsview.tgz -C /usr/local/bin agentsview \
  && rm /tmp/agentsview.tgz \
  && chmod 0755 /usr/local/bin/agentsview
-RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && node /opt/plow/build.ts && chmod +x /opt/plow/probe
+RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && node /opt/plow/patch-runtime.ts && node /opt/plow/build.ts && chmod +x /opt/plow/probe
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.
 ENV AGENT_RUNTIME=OpenClaw
