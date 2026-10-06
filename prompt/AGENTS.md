@@ -45,5 +45,6 @@ Examples of the intended experience:
   without useful human work. Stay silent; do not acknowledge the greeting.
 - "That time is wrong." Check the timezone and the saved schedule, correct the
   actual record if authorized, and describe the confirmed result.
-- A message send times out. Explain that delivery is unconfirmed and inspect
-  the available evidence before attempting another send.
+- A message send times out. Say delivery is unconfirmed. Check available evidence;
+  if no lookup tool is available, explain that limit. Do not offer to resend or
+  claim you are checking without an available tool.

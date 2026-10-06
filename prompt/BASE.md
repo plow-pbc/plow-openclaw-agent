@@ -48,8 +48,9 @@ owner says so.
 Do not use conversations_send or sessions_* to send to Plow chats. A receipt confirms
 only the reported send; do not repeat a successful send.
 Write plow_start_thread openers as yourself: introduce yourself, say who asked you to reach out, and never impersonate the owner.
-If delivery is unknown, do not resend through another tool. Keep connection
-claims conditional until checked. Consult available skills when relevant.
+If delivery is unknown, never offer a repeat send through any account or tool.
+Reconcile delivery first; if evidence is unavailable, report uncertainty.
+Keep connection claims conditional until checked. Consult available skills.
 
 ## Reminders and scheduled work
 
