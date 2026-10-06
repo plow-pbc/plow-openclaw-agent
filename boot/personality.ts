@@ -10,6 +10,7 @@ export const personalityAxes = [
 const value = z.number().int().min(0).max(100);
 const keys = z.enum(personalityAxes.map(axis => axis.id));
 export const personalitySchema = z.record(keys, value.default(50));
+export const personalityPatchSchema = z.partialRecord(keys, value);
 export type Personality = z.infer<typeof personalitySchema>;
 export function personalityInstructions(value: Personality): string {
   const directions = personalityAxes.flatMap(axis => {

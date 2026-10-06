@@ -12,6 +12,7 @@ import { agentDefinition, agentDefinitionSchema } from "../boot/extensions.ts";
 import { composePrompt, renderPrompt } from "../boot/prompt.ts";
 import { renderConfig, syncConfig } from "../boot/config.ts";
 import { healthy } from "../boot/health.ts";
+import { personalityAxes, personalitySchema, personalityPatchSchema } from "../boot/personality.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "ln_fixture", guestTools: ["plow_memory", "plow_tasks"] };
 const owner = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
@@ -40,6 +41,18 @@ async function fixture(t: any, runtime: any = {}) {
   return { root, tool };
 }
 
+test("personality schemas derive every axis from the registry and reject unknown or invalid values", () => {
+  const neutral = personalitySchema.parse({});
+  assert.deepEqual(Object.keys(neutral), personalityAxes.map(axis => axis.id));
+  assert.ok(Object.values(neutral).every(value => value === 50));
+  for (const axis of personalityAxes) {
+    for (const value of [0, 50, 100]) assert.deepEqual(personalityPatchSchema.parse({ [axis.id]: value }), { [axis.id]: value });
+    for (const value of [-1, 101, 1.5, "50", null]) assert.equal(personalityPatchSchema.safeParse({ [axis.id]: value }).success, false);
+  }
+  assert.equal(personalityPatchSchema.safeParse({ permission: 100 }).success, false);
+  assert.equal(personalitySchema.safeParse({ permission: 100 }).success, false);
+});
+
 test("private preferences survive reopen and never enter a group's context", async t => {
   const { tool } = await fixture(t);
   await tool("plow_preferences", true).execute("one", { action: "set", preferences: { name: "Sam", timezone: "America/Sao_Paulo", voice: "Very direct", verbosity: "brief" } });
@@ -52,6 +65,24 @@ test("private preferences survive reopen and never enter a group's context", asy
   await tool("plow_preferences", true).execute("reset", { action: "reset" });
   assert.deepEqual((await tool("plow_preferences", true).execute("get", { action: "get" })).details, {});
   await assert.rejects(tool("plow_preferences", true).execute("bad", { action: "set", preferences: { timezone: "MadeUp/Mars" } }));
+});
+
+test("public personality sliders preview without saving, preserve partial edits and survive reset without changing grants", async t => {
+  const { tool } = await fixture(t);
+  const personality = tool("plow_personality", true);
+  const preview = (await personality.execute("preview", { action: "preview", sliders: { "execute-collaborate": 0, "polite-unfiltered": 100 } })).details;
+  assert.equal(preview.saved, false); assert.match(preview.preview, /already authorized/);
+  assert.equal((await readExperience({ account, conversation: "agent" })).personality, undefined);
+  await personality.execute("save", { action: "set", sliders: { "execute-collaborate": 0, "polite-unfiltered": 100 } });
+  await personality.execute("change", { action: "set", sliders: { "playful-serious": 100 } });
+  const state = (await personality.execute("get", { action: "get" })).details;
+  assert.equal(state.sliders["execute-collaborate"], 0); assert.equal(state.sliders["playful-serious"], 100);
+  assert.match((await experienceContext(account, room.uid, false)).personality!.guidance, /Base routing, privacy, permissions/);
+  await assert.rejects(tool("plow_personality").execute("guest", { action: "set", sliders: { "polite-unfiltered": 100 } }), /owner's main/);
+  await assert.rejects(personality.execute("bad", { action: "set", sliders: { "polite-unfiltered": 101 } }));
+  assert.equal(room.trusted, false);
+  await personality.execute("reset", { action: "reset" });
+  assert.equal((await experienceContext(account, room.uid, false)).personality, undefined);
 });
 
 test("scoped memory records provenance, supports correction/export/expiry/forget, and rejects another room's id", async t => {

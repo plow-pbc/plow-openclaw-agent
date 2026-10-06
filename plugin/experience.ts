@@ -3,6 +3,7 @@ import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plug
 import { accepts, request, normalizedHandle, ownerChat, type Account, type Chat } from "./transport.ts";
 import { conversationUid, ownerDmTurn } from "./threads.ts";
 import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, scopePath, type Scope } from "./experience-state.ts";
+import { personalitySchema, personalityPatchSchema, personalityInstructions } from "../boot/personality.ts";
 
 type Context = OpenClawPluginToolContext<2>;
 const receipt = (details: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(details) }], details });
@@ -31,6 +32,7 @@ const memoryArgs = z.object({
   expectedRevision: z.number().int().nonnegative().optional(),
 }).strict();
 const preferenceArgs = z.object({ action: z.enum(["get", "set", "reset"]), preferences: preferencesSchema.optional() }).strict();
+const personalityArgs = z.object({ action: z.enum(["get", "preview", "set", "reset"]), sliders: personalityPatchSchema.optional() }).strict();
 const roomArgs = z.object({ action: z.enum(["get", "set", "reset"]), settings: roomSchema.optional() }).strict();
 export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx: Context) => Account) {
   function tool<S extends z.ZodType>(name: string, description: string, schema: S, execute: (ctx: Context, args: z.output<S>, id: string) => Promise<unknown>) {
@@ -51,6 +53,21 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     if (args.action === "get") return (await readExperience(scope)).preferences;
     if (args.action === "set" && !args.preferences) throw new Error("Supply the confirmed preferences");
     return (await updateExperience(scope, ctx.assertInvocationCurrent, state => { state.preferences = args.action === "reset" ? {} : { ...state.preferences, ...args.preferences }; })).preferences;
+  });
+  tool("plow_personality", "From the owner's main DM, inspect, preview, set or reset this agent's five personality sliders (integers 0–100, neutral 50). Settings apply across its conversations and survive restart. Omitted axes keep saved values. This changes voice only, never permissions, room modes or notification policy. Preview never saves; reset returns to the builder persona.", personalityArgs, async (ctx, args) => {
+    const privateContext = await privateScope(accountFor(ctx), ctx);
+    const scope = { ...privateContext, conversation: "agent" };
+    const current = (await readExperience(scope)).personality;
+    if (["get", "preview"].includes(args.action)) {
+      const sliders = personalitySchema.parse({ ...scope.account.personalityDefaults, ...current, ...(args.action === "preview" ? args.sliders : {}) });
+      return { saved: !!current, sliders, preview: personalityInstructions(sliders) };
+    }
+    if (args.action === "set" && !args.sliders) throw new Error("Supply personality slider values");
+    const state = await updateExperience(scope, ctx.assertInvocationCurrent, value => {
+      if (args.action === "reset") delete value.personality;
+      else value.personality = personalitySchema.parse({ ...scope.account.personalityDefaults, ...value.personality, ...args.sliders });
+    });
+    return { saved: !!state.personality, sliders: state.personality ?? personalitySchema.parse(scope.account.personalityDefaults ?? {}), preview: state.personality ? personalityInstructions(state.personality) : "Builder personality restored" };
   });
   tool("plow_room", "Inspect or change this conversation's purpose and helper/coordinator/facilitator mode. This never changes room trust or tools.", roomArgs, async (ctx, args) => {
     const account = accountFor(ctx), scope = await activeScope(account, ctx, "plow_room", args.action !== "get");

@@ -12,7 +12,8 @@
       "plow_send_email",
       "plow_preferences",
       "plow_memory",
-      "plow_room"
+      "plow_room",
+      "plow_personality"
     ]
   },
   "activation": {

@@ -13,6 +13,7 @@ export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { installExperienceTools } from "./experience.ts";
 import { experienceContext } from "./experience-state.ts";
+import { installPersonalityPage } from "./personality-page.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
@@ -318,6 +319,7 @@ export default defineChannelPluginEntry({
   id: "plow", name: "Plow", description: "Plow channel", plugin,
   setRuntime: value => { runtime = value; },
   registerFull(api) {
+    installPersonalityPage(api);
     if (api.registrationMode === "full") api.logger.info("plow channel registered");
   },
   registerCapabilities(api) {

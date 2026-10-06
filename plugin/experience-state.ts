@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Account } from "./transport.ts";
+import { personalitySchema, personalityInstructions } from "../boot/personality.ts";
 
 const timezone = z.string().max(100).refine(value => {
   try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; }
@@ -26,6 +27,7 @@ const note = z.object({
 }).strict();
 const stateSchema = z.object({
   version: z.literal(1), preferences: preferencesSchema.default({}), room: roomSchema.default({}),
+  personality: personalitySchema.optional(),
   lastHeartbeatAt: z.string().datetime().optional(),
   notes: z.array(note).max(100).default([]), paused: z.boolean().default(false),
   notesRevision: z.number().int().nonnegative().default(0),
@@ -77,7 +79,9 @@ export async function experienceContext(account: Account, conversation: string, 
   const scope = { account, conversation: ownerDm ? "owner" : conversation };
   const state = await readExperience(scope);
   const room = ownerDm ? await readExperience({ account, conversation }) : state;
+  const persona = (await readExperience({ account, conversation: "agent" })).personality;
   return { ...(ownerDm ? { owner_preferences: state.preferences } : {}), room: { mode: account.groupMode ?? "helper", ...room.room },
+    ...(persona ? { personality: { sliders: persona, guidance: personalityInstructions(persona) } } : {}),
     memory: [...state.notes.map(note => ({ ...note, scope: ownerDm ? "owner" : "conversation" })), ...(ownerDm ? room.notes.map(note => ({ ...note, scope: "conversation" })) : [])].slice(-8), notifications_paused: state.paused || room.paused };
 }
 export function quietNow(state: ExperienceState, now = new Date()): boolean {
