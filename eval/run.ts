@@ -20,10 +20,7 @@ for (let index = 0; index < args.length; index += 2) {
 }
 function option(name: string) {
   const index = args.indexOf(name);
-  if (index < 0) return undefined;
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) throw new Error(`Missing value for ${name}`);
-  return value;
+  return index < 0 ? undefined : args[index + 1];
 }
 const repeat = z.coerce.number().int().min(1).max(5).parse(option("--repeat") ?? 1);
 const maxTokens = z.coerce.number().int().min(128).max(16_384).parse(option("--max-tokens") ?? 700);
@@ -35,7 +32,7 @@ if (credentials) for (const line of (await readFile(credentials, "utf8")).split(
   if (match) env[match[1]] = match[2].trim().replace(/^['"]|['"]$/g, "");
 }
 if (!env.PLOW_API_BASE || !env.PLOW_AGENT_TOKEN) throw new Error("Provide PLOW_API_BASE/PLOW_AGENT_TOKEN or --credentials PATH. Credentials are never included in reports.");
-const scenarioSchema = z.object({ id: z.string().min(1), category: z.string().optional(), review: z.array(z.string()).optional(), personality: personalitySchema.optional(), facts: z.record(z.string(), z.unknown()), messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).min(1), contains: z.array(z.string()).optional(), excludes: z.array(z.string()).optional(), doesNotAssert: z.array(z.string()).optional(), anyOf: z.array(z.string()).optional(), silent: z.boolean().optional(), maxChars: z.number().positive().optional() });
+const scenarioSchema = z.object({ id: z.string().min(1), category: z.string().optional(), review: z.array(z.string()).optional(), personality: personalitySchema.optional(), facts: z.record(z.string(), z.unknown()), messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }).strict()).min(1), contains: z.array(z.string()).optional(), excludes: z.array(z.string()).optional(), doesNotAssert: z.array(z.string()).optional(), anyOf: z.array(z.string()).optional(), silent: z.boolean().optional(), maxChars: z.number().positive().optional() }).strict();
 const casesPath = option("--cases");
 const casesSource = await readFile(casesPath ? resolve(casesPath) : new URL("./cases.json", import.meta.url), "utf8");
 const allCases = z.array(scenarioSchema).min(1).parse(JSON.parse(casesSource));
@@ -48,7 +45,8 @@ if (!models.length) throw new Error("Unknown configured evaluation model");
 const modelSettings: Record<string, { params?: { extraBody?: Record<string, unknown> } }> = config.agents.defaults.models;
 if (reasoning !== undefined) {
   if (models.length !== 1 || models[0].id !== "z-ai/glm-5.2") throw new Error("--reasoning requires --model z-ai/glm-5.2");
-  modelSettings["plow/z-ai/glm-5.2"] = { params: { extraBody: { reasoning: { enabled: reasoning === "enabled" } } } };
+  const current = modelSettings["plow/z-ai/glm-5.2"];
+  modelSettings["plow/z-ai/glm-5.2"] = { ...current, params: { ...current?.params, extraBody: { ...current?.params?.extraBody, reasoning: { enabled: reasoning === "enabled" } } } };
 }
 const base = await readFile(new URL("../prompt/BASE.md", import.meta.url), "utf8");
 const persona = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");

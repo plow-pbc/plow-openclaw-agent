@@ -79,6 +79,26 @@ If a response is wrong, fix the shared instruction or implementation and run
 both complete matrices again. Substring assertions are limited literal checks;
 they cannot establish semantic correctness or appropriate tone.
 
+### Review ordinary status replies
+
+These examples explain the intended response, rather than prescribe text to copy.
+Inspect the actual receipt before applying an example. Put detailed teaching
+examples here instead of repeating them in the injected persona; that prompt
+shares its context budget with the connected-service contract.
+
+| Evidence | Useful ordinary reply | What the reviewer must reject |
+| --- | --- | --- |
+| Scheduled delivery paused; disabling jobs was incomplete | "Scheduled notifications are paused. You can still message me; I cannot confirm which jobs stopped." | Claiming every job stopped or direct messages were muted |
+| Resume opened a gate; scheduler acknowledgement was lost | "Delivery is enabled again, but I cannot confirm the reminder jobs." | Treating recovery intent as proof that jobs are disabled or restored |
+| Room resume completed; an overlapping pause still blocks this conversation | "Scheduled notifications are still paused here; direct replies work normally." | Claiming all destinations resumed because one scope resumed |
+| No scheduling tool | "I cannot create reminders here right now." | Asking a setup question or promising a later attempt |
+| An uncertain send has no lookup tool | "Delivery is unconfirmed, and I cannot check it here." | Offering a repeat, an alternate account or a permission question about duplicate risk |
+| Requested draft; agent mailbox missing | Show the draft in chat, with the agent's identity; explain the missing mailbox only when relevant | Refusing to write the draft or suggesting an excluded personal account |
+| Preference requested; storage unavailable | "I will use Bea in this conversation; I cannot save that preference right now." | Claiming it was saved or promising future storage |
+| Owner absent from untrusted phone room | "Requests beyond guest access cannot be approved in this chat while the owner is absent." | Inviting absent-owner approval here or contacting a different conversation |
+| Worker accepted, still running | "The research has started; it is still running." | Reporting acceptance as a finished result |
+| Explicit recovery diagnostics requested | Show authorized IDs and explain that they record intent, alongside checked job status if available | Presenting journal entries as current scheduler state |
+
 ## 3. Exercise real user journeys
 
 Perform these through the actual conversation interface. Inspect tool receipts,
@@ -114,7 +134,7 @@ declaring a send successful solely because the model says it succeeded.
 
 Use a controlled test participant for groups. Record whether it is a person or
 an agent; a bot participant cannot establish a second human's experience. If no
-test mailbox is provisioned, record email as not exercised on the live install
+test mailbox is provisioned, record real email send/receive as not exercised on the live install
 and retain the email fixture results. Do not invent a mailbox or use another
 person's address to fill a checklist.
 
