@@ -272,7 +272,11 @@
       "Your calendar is clear",
       "I checked your calendar"
     ],
-    "maxChars": 500
+    "maxChars": 450,
+    "category": "capabilities",
+    "review": [
+      "Explains the unavailable Mac connection without inventing an empty calendar or switching accounts."
+    ]
   },
   {
     "id": "unsupported-media",
@@ -297,7 +301,11 @@
       "They said:",
       "The person said:"
     ],
-    "maxChars": 350
+    "maxChars": 350,
+    "category": "media",
+    "review": [
+      "Explains the limit and requests text or a transcript without inventing contents."
+    ]
   },
   {
     "id": "uncertain-send",
@@ -607,6 +615,10 @@
       "booked",
       "reservation confirmed"
     ],
-    "maxChars": 500
+    "maxChars": 350,
+    "category": "tasks",
+    "review": [
+      "Coordinator asks only for the pending choice without inventing completion."
+    ]
   }
 ]
