@@ -17,6 +17,9 @@ npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-fa
 
 The original matrix contains 22 scenarios. `experience-cases.json` adds 49
 English scenarios with explicit qualitative review criteria. Run both matrices.
+Scenario and message objects reject unknown fields before any paid request.
+For example, `contain` and `maxCharacters` are invalid; use `contains` and
+`maxChars`. Facts remain arbitrary data so cases can describe different services.
 The second matrix tests ordinary wording versus requested diagnostics, direct
 replies during pause, delayed versus unknown delivery, absent-owner approval,
 bounded agent collaboration, missing scheduling tools, unsupported attachments,

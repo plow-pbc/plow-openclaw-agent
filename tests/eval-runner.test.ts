@@ -74,6 +74,18 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     assert.notEqual(duplicate.code, 0);
     assert.match(duplicate.logs, /Duplicate evaluation case ID/);
     assert.equal(requests, 3);
+    const scenario = JSON.parse(matrix)[0];
+    for (const malformed of [
+      { ...scenario, contain: ["24"] },
+      { ...scenario, maxCharacters: 1 },
+      { ...scenario, messages: [{ ...scenario.messages[0], typo: true }] },
+    ]) {
+      await writeFile(path, JSON.stringify([malformed]));
+      const invalid = await run([]);
+      assert.notEqual(invalid.code, 0, invalid.logs);
+      assert.match(invalid.logs, /unrecognized_keys/);
+      assert.equal(requests, 3, "misspelled scenario fields must fail before paid requests");
+    }
     await writeFile(path, matrix);
     expectedReasoning = true; expectedMaxTokens = 2000;
     const diagnostic = await run(["--reasoning", "enabled", "--max-tokens", "2000"]);

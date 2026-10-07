@@ -110,6 +110,14 @@ guidance, and connected Mac instructions. Base text has a 13,000-character cap;
 builder guidance has a 6,000-character cap. Mac instructions receive the remaining
 20,000-character composition budget, capped at 8,000 characters.
 
+Keep injected guidance compact. The individual caps are validation limits, not
+recommended lengths. Repeating base policy in a persona consumes space that
+Latch needs to explain connected services. Put detailed teaching examples and
+procedures in the agent's documentation and skills. The default-composition test
+checks that the maintained base and default persona leave room for a complete
+8,000-character Latch contract, including trust guidance and a dashboard URL.
+Check the rendered composition when a variant uses longer custom guidance.
+
 Boot writes workspace `AGENTS.md` and removes boot-owned `BOOTSTRAP.md`,
 `SOUL.md`, `IDENTITY.md`, and `USER.md`. These files are outputs.
 Durable preferences, memory, tasks, and schedules belong in supported state stores.
