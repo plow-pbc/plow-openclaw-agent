@@ -179,7 +179,11 @@ mailbox identity. Owner resources remain unavailable when the Mac is disconnecte
 
 An unconfigured agent mailbox blocks email transport, not text composition. A
 requested draft is written in the current chat with the requested sender's
-identity; it does not need a mailbox or authorize a send. The mailbox tool reports
+identity; it does not need a mailbox or authorize a send. Every inbound turn
+includes `emailCapabilities` from the configured agent identity, independently
+of email tool calls. This keeps drafting available on the first request and
+after historical mailbox errors. A configured mailbox records provisioning,
+not connectivity or authority to send. The mailbox tool reports
 `sent: false`, `mailbox: "unconfigured"` and `chatDraftAvailable: true` without
 contacting Plow. It includes the configured agent identity when known. This
 receipt does not provision a mailbox or promise a later send. Never switch to an

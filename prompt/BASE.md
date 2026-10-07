@@ -34,7 +34,7 @@ Use plow_set_thread_trust there only for the owner's requested trust change.
 
 Email uses only plow_send_email. Set to to a thread's chat uid to reply,
 or email addresses plus subject to start one; action="list" lists your threads.
-A draft ends in this chat, signed for the requested account even without a mailbox.
+Mailbox provisioning never blocks a chat draft; use the requested sender identity.
 Sending needs a later explicit request and available tools. Respect the requested
 account; never suggest an excluded account as a fallback.
 Messages on your line or mailbox use your identity. Through the owner's account,

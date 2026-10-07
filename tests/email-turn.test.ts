@@ -44,13 +44,14 @@ const transcript = async (sessionKey: string) => {
 // Runs one turn per frame on the given account; `turn` plays the model inside dispatch.
 async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: string; sender: object }[],
   turn: (dispatch: Dispatch, tool: () => Tool, channel: { outbound: { sendText: (context: object) => Promise<unknown> } }, config: object) => Promise<void>,
-  newThread: { status?: string; chat_uid?: string | null; chat_unrecorded_reason?: string; http?: number } | null = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
+  newThread: { status?: string; chat_uid?: string | null; chat_unrecorded_reason?: string; http?: number } | null = { status: "sent", chat_uid: "started" }, state?: string, options: { terminal?: string; mailbox?: boolean } = {}) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
   const controller = abortAfter(20_000);
-  const account = { ...cfg.channels.plow, apiBase, accountId };
+  const plow = options.mailbox === false ? { lineUid: "line" } : cfg.channels.plow;
+  const account = { ...plow, apiBase, accountId };
   // The durable sender loads the plugin's outbound adapter from this path.
-  const config = { channels: { plow: { ...cfg.channels.plow, apiBase } }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
+  const config = { channels: { plow: { ...plow, apiBase } }, agents: { entries: { main: { identity: { name: "Cedar" } } } }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const posts: { path: string; body: Record<string, unknown> }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit = {}) => {
     const path = new URL(url).pathname.replace(/^\/v1/, "");
@@ -85,7 +86,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
           nativeChannelId: dispatch.ctxPayload.conversation.id, requesterSenderId: dispatch.ctxPayload.sender.id,
           senderIsOwner: dispatch.ctxPayload.sender.id === "plow-owner" })).find(tool => tool.name === "plow_send_email")!;
         await turn(dispatch, tool, channel, config);
-        dispatch.replyOptions.onAgentRunTerminalOutcome(terminal);
+        dispatch.replyOptions.onAgentRunTerminalOutcome(options.terminal ?? "completed");
         if (contexts.length === frames.length) controller.abort();
         return { dispatched: true, dispatchResult: {} };
       },
@@ -102,6 +103,17 @@ async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
   const prepared = dispatch.delivery.preparePayload(payload, { kind });
   if (prepared) await dispatch.delivery.deliver(prepared);
 }
+
+for (const mailbox of [false, true]) test(`phone context distinguishes chat drafting from mailbox provisioning without an email call: ${mailbox}`, async t => {
+  const { contexts, posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async dispatch => {
+    await final(dispatch, { text: "Draft only." });
+  }, undefined, undefined, { mailbox });
+  const facts = contexts[0].supplemental.channelStructuredContext[0].payload as { emailCapabilities: object };
+  assert.deepEqual(facts.emailCapabilities, {
+    mailbox: mailbox ? "configured" : "unconfigured", chatDraftAvailable: true, senderIdentity: mailbox ? "Elm" : "Cedar",
+  });
+  assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+});
 
 for (const action of ["list", "send"] as const) test(`unconfigured mailbox preserves chat drafting without network effects: ${action}`, async t => {
   let requests = 0;
@@ -168,7 +180,7 @@ for (const [name, payload, toOwner] of [
 ] as const) test(`runtime notices on an email turn: ${name}`, async t => {
   const { posts } = await run(t, "email", [{ chat: "thread", sender: outsider }], async dispatch => {
     await dispatch.delivery.deliver(payload);
-  }, undefined, undefined, "failed");
+  }, undefined, undefined, { terminal: "failed" });
   assert.deepEqual(posts.map(post => post.path), toOwner ? ["/chats/home/messages"] : []);
 });
 

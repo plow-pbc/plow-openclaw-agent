@@ -151,6 +151,10 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
   const persona = (email && account.emailName) || selfName;
+  const emailCapabilities = {
+    mailbox: account.emailLineUid ? "configured" : "unconfigured", chatDraftAvailable: true,
+    ...((account.emailName || selfName) ? { senderIdentity: account.emailName || selfName } : {}),
+  };
   const participants = chat.participants.map(p => ({
     ...(p.type === "agent" && p.relationship === "self" ? { name: persona } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
@@ -174,7 +178,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...experience, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, emailCapabilities, ...experience, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
       ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
     },
     media,
