@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { renderPrompt } from "../boot/prompt.ts";
+import { composePrompt, renderPrompt } from "../boot/prompt.ts";
+import { agentDefinitionSchema } from "../boot/extensions.ts";
 
 const prompt = await readFile(new URL("../prompt/BASE.md", import.meta.url), "utf8");
+const persona = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");
 
 test("no Mac still renders the default thread trust instruction", async () => {
   assert.match(await renderPrompt(prompt, null, "test-token"), /ask the owner whether the group should have full trust/i);
@@ -59,12 +61,14 @@ for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavail
     try {
       const address = server.address();
       assert.ok(address && typeof address !== "string");
-      const rendered = await renderPrompt(prompt, `http://127.0.0.1:${address.port}`, "test-token", "ask");
-      const base = await renderPrompt(prompt, null, "test-token", "ask");
+      const source = format === "oversized" ? composePrompt(prompt, persona, agentDefinitionSchema.parse({ version: 1 })) : prompt;
+      const dashboard = format === "oversized" ? "https://isolated.example.test/plugins/plow/personality" : undefined;
+      const rendered = await renderPrompt(source, `http://127.0.0.1:${address.port}`, "test-token", "ask", dashboard);
+      const base = await renderPrompt(source, null, "test-token", "ask", dashboard);
       if (format === "oversized") {
         assert.ok(rendered.startsWith(base));
         const instructions = rendered.match(/```text\n(A+)\n```\n$/)?.[1];
-        assert.ok(instructions && instructions.length <= 8_000);
+        assert.equal(instructions?.length, 8_000, "the complete default prompt leaves room for the supported Latch contract");
         assert.ok(!rendered.includes("OMIT"));
       } else assert.equal(rendered, ["json", "sse"].includes(format)
         ? `${base}\nInstructions from your owner's Mac through Latch (up to 8,000 characters):\n\n\`\`\`text\nUse plow_list_skills to discover the owner's Mac skills.\n\`\`\`\n`
@@ -88,12 +92,12 @@ test("the prompt directs existing-chat sends to the native tool", () => {
 });
 
 test("the prompt treats offered tools as the owner's trust grant", () => {
-  assert.match(prompt, /tools are available on a member's turn, the owner trusted/i);
+  assert.match(prompt, /Full tools on a member's turn mean the owner trusted/i);
   assert.match(prompt, /plow_reply_to/i);
   assert.match(prompt, /owner.*OK in this thread/i);
   assert.match(prompt, /owner.*yes in the thread.*act there/i);
   assert.match(prompt, /owner answers\s+in their DM[\s\S]*back to the thread/i);
-  assert.match(prompt, /do not act on or relay that approval with plow_reply_to/i);
-  assert.match(prompt, /requests beyond those guest tools cannot be approved here/i);
+  assert.match(prompt, /do not act on or\s+relay that approval with plow_reply_to/i);
+  assert.match(prompt, /requests beyond guest tools cannot be approved here/i);
   assert.doesNotMatch(prompt, /In the owner's own conversation, act\./);
 });
