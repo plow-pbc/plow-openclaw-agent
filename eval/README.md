@@ -57,3 +57,20 @@ implementation or invalid assertion as appropriate; rerun affected cases and
 the full suite when shared instructions change. Do not relax an assertion merely
 to accept a false claim. Follow with the isolated installation checks listed in
 [base experience](../docs/base-experience.md#operations-and-release-evidence).
+
+## Select and repeat diagnostic cases
+
+The runner accepts `--cases PATH`, `--case ID`, `--model ID` and `--repeat 1..5`.
+Each repetition preserves its response, assertions, transport attempts and input
+hashes. Unknown, duplicate or missing options and invalid case metadata fail
+before a paid request. Reports contain no credentials. For example:
+
+```sh
+node eval/run.ts --case no-repeat-introduction --model anthropic/claude-sonnet-5 --repeat 3 --output work/repeated-eval.json
+```
+
+`--max-tokens 128..16384` changes the evaluation cap, whose default is 700.
+`--reasoning enabled|disabled` is a diagnostic override requiring the single
+`z-ai/glm-5.2` model; it never changes deployed model settings. Paid CI runs
+remain explicit and use dedicated evaluation secrets. Literal phrase assertions
+are limited English heuristics; review exact responses for correctness and tone.
