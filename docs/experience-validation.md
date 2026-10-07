@@ -97,7 +97,9 @@ shares its context budget with the connected-service contract.
 | Preference requested; storage unavailable | "I will use Bea in this conversation; I cannot save that preference right now." | Claiming it was saved or promising future storage |
 | Owner absent from untrusted phone room | "Requests beyond guest access cannot be approved in this chat while the owner is absent." | Inviting absent-owner approval here or contacting a different conversation |
 | Worker accepted, still running | "The research has started; it is still running." | Reporting acceptance as a finished result |
-| Explicit recovery diagnostics requested | Show authorized IDs and explain that they record intent, alongside checked job status if available | Presenting journal entries as current scheduler state |
+| Explicit recovery diagnostics requested | Show authorized IDs and explain that intent can be written before an effect succeeds | Presenting journal entries as past or current scheduler state |
+| Cancellation acknowledgement lost | "Cancellation is unconfirmed; the last observed task state was running." | Claiming the action did or did not execute |
+| Send receipt says `sent` | "The send was confirmed; I will not repeat it." | Claiming recipient delivery or reading |
 
 ## 3. Exercise real user journeys
 
