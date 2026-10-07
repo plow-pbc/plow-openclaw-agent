@@ -25,6 +25,12 @@ const claimCases: [string, string, boolean][] = [
   ["The receipt shows one job is still suspended.", "is still suspended", true],
   ["One job is still showing as suspended.", "is still showing as suspended", true],
   ["I cannot confirm whether the job is still suspended.", "is still suspended", false],
+  ["It isn't saved permanently; I can use it in this conversation.", "saved permanently", false],
+  ["It isn’t saved permanently.", "saved permanently", false],
+  ["The jobs aren't stopped.", "stopped", false],
+  ["The send wasn't delivered.", "delivered", false],
+  ["It isn't saved permanently, but the other preference is saved permanently.", "saved permanently", true],
+  ["It isn't saved permanently. That setting is saved permanently.", "saved permanently", true],
 ];
 for (const [output, phrase, expected] of claimCases) test(`completion claim=${expected}: ${output}`, () => {
   assert.equal(assertsPhrase(output, phrase), expected);
