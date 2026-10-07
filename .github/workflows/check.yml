@@ -47,7 +47,13 @@ jobs:
           chmod 777 reports
           docker run --rm -e PLOW_API_BASE -e PLOW_AGENT_TOKEN \
             -v "$PWD/reports:/reports" plow-openclaw:test \
-            node /opt/plow/eval/run.ts --output /reports/eval-results.json
+            sh -c '
+              original_status=0
+              node /opt/plow/eval/run.ts --output /reports/eval-results.json || original_status=$?
+              experience_status=0
+              node /opt/plow/eval/run.ts --cases /opt/plow/eval/experience-cases.json --output /reports/experience-results.json || experience_status=$?
+              test "$original_status" -eq 0 && test "$experience_status" -eq 0
+            '
       - name: Preserve model evaluation results
         if: always() && github.event_name == 'workflow_dispatch' && inputs.live_eval
         uses: actions/upload-artifact@v4

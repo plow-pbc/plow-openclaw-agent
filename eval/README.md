@@ -11,7 +11,39 @@ covered separately by the pinned gateway and runtime tests.
 ```sh
 npm run eval -- --credentials /PRIVATE/test-credentials --output /TMP/dialogues.json
 npm run eval -- --credentials /PRIVATE/test-credentials --case ambient-human-group
+npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-cases.json --output /TMP/experience.json
+npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
+
+The original matrix contains 22 scenarios. `experience-cases.json` adds 43
+English scenarios with explicit qualitative review criteria. Run both matrices.
+Scenario and message objects reject unknown fields before any paid request.
+For example, `contain` and `maxCharacters` are invalid; use `contains` and
+`maxChars`. Facts remain arbitrary data so cases can describe different services.
+The second matrix tests ordinary wording versus requested diagnostics, direct
+replies during pause, delayed versus unknown delivery, absent-owner approval,
+bounded agent collaboration, missing scheduling tools, unsupported attachments,
+and the distinction between recorded deadlines and scheduled execution.
+
+`--model` selects one configured model ID, such as `z-ai/glm-5.2` or
+`anthropic/claude-sonnet-5`. Omit it to run both. `--repeat` accepts 1 through 5;
+each repetition is a fresh completion with the same supplied conversation.
+It does not continue the previous response. Expected paid requests are selected
+models multiplied by selected scenarios multiplied by repetitions, with at most
+one transport retry per completion. Use a separate output path for each process.
+Unknown options, duplicate options, missing values and invalid selections fail
+before a model request; a typo must not silently expand a paid run.
+Reports preserve repetition numbers and SHA-256 hashes of the base, persona,
+scenario file and rendered prompt. Changed instructions require a fresh run;
+never relabel an old report as evidence for a new prompt.
+
+For a controlled model-configuration comparison, select GLM explicitly and use
+`--reasoning enabled` or `--reasoning disabled`. `--max-tokens` accepts 128 through
+16384 and defaults to 700. Keep that cap, scenarios, repetitions and prompts equal
+between comparison arms. These diagnostic overrides do not change the image's
+defaults; reports record the effective settings and cap. Reasoning can consume
+completion tokens, so a small cap may leave no visible answer. Review actual
+outputs and usage rather than treating a larger budget as evidence of quality.
 
 Use a dedicated test credential. Reports contain synthetic inputs, model outputs,
 assertions, scenario facts, model settings, latency, usage and estimated cost,
@@ -58,19 +90,15 @@ the full suite when shared instructions change. Do not relax an assertion merely
 to accept a false claim. Follow with the isolated installation checks listed in
 [base experience](../docs/base-experience.md#operations-and-release-evidence).
 
-## Select and repeat diagnostic cases
+Record whether a review was performed by a person or assisted by a model. A model
+can help identify contradictions and poor wording, but its review is not human
+approval. The [experience validation SOP](../docs/experience-validation.md)
+connects the dialogue rubric to real installation checks and fault tests.
 
-The runner accepts `--cases PATH`, `--case ID`, `--model ID` and `--repeat 1..5`.
-Each repetition preserves its response, assertions, transport attempts and input
-hashes. Unknown, duplicate or missing options and invalid case metadata fail
-before a paid request. Reports contain no credentials. For example:
-
-```sh
-node eval/run.ts --case no-repeat-introduction --model anthropic/claude-sonnet-5 --repeat 3 --output work/repeated-eval.json
-```
-
-`--max-tokens 128..16384` changes the evaluation cap, whose default is 700.
-`--reasoning enabled|disabled` is a diagnostic override requiring the single
-`z-ai/glm-5.2` model; it never changes deployed model settings. Paid CI runs
-remain explicit and use dedicated evaluation secrets. Literal phrase assertions
-are limited English heuristics; review exact responses for correctness and tone.
+The extended introduction, direct group question and accepted-worker cases share
+the same decisions as `no-repeat-introduction`, `direct-group-question` and
+`worker-accepted-is-running`. Their qualitative metadata and stricter limits live
+in those original cases, so there is one maintained definition per decision.
+Historical evaluation reports retain the earlier inputs and outputs. Duplicate
+risk is a required explanation of unknown delivery; naming that risk is not an
+offer to repeat a send. Specific resend-offer assertions remain in both matrices.

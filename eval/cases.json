@@ -42,7 +42,11 @@
       "I'm Cedar",
       "I am Cedar"
     ],
-    "maxChars": 200
+    "maxChars": 160,
+    "category": "onboarding",
+    "review": [
+      "Answers 27 without repeating the introduction or asking for a profile."
+    ]
   },
   {
     "id": "ambient-human-group",
@@ -88,7 +92,11 @@
     "contains": [
       "6"
     ],
-    "maxChars": 200
+    "maxChars": 200,
+    "category": "groups",
+    "review": [
+      "One short answer with 6."
+    ]
   },
   {
     "id": "unrelated-coordinator-chatter",
@@ -319,7 +327,8 @@
       "Sent again"
     ],
     "doesNotAssert": [
-      "retry the same send"
+      "retry the same send",
+      "I can try the original account again"
     ],
     "maxChars": 500
   },
@@ -347,6 +356,11 @@
       "can't"
     ],
     "maxChars": 500,
+    "excludes": [
+      "nothing will reach you",
+      "no messages will reach you",
+      "all messages are paused"
+    ],
     "doesNotAssert": [
       "All jobs are stopped",
       "All reminders are stopped",
@@ -378,6 +392,10 @@
       "unconfirmed",
       "scheduler",
       "journal"
+    ],
+    "excludes": [
+      "suspendedJobs",
+      "synthetic-job-1"
     ],
     "doesNotAssert": [
       "All reminders are restored",
@@ -435,7 +453,10 @@
       "Thursday"
     ],
     "excludes": [
-      "Tuesday works"
+      "Tuesday works",
+      "What do you need",
+      "What's happening Thursday",
+      "what you need next"
     ],
     "maxChars": 200
   },
@@ -551,11 +572,15 @@
       "not finished",
       "not yet"
     ],
-    "maxChars": 500,
+    "maxChars": 350,
     "doesNotAssert": [
       "Yes, it's done",
       "finished successfully",
       "completed successfully"
+    ],
+    "category": "tasks",
+    "review": [
+      "Accepted or started does not mean finished; reports work in progress."
     ]
   },
   {
