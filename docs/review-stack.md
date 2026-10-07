@@ -25,6 +25,8 @@ Review and merge from the bottom upward.
 | 17 | [Report notification gates without leaking recovery internals](https://github.com/plow-pbc/plow-openclaw-agent/pull/80) | Effective delivery gates, scheduler uncertainty and explicitly requested recovery diagnostics. |
 | 18 | [Separate mailbox transport from available chat drafting](https://github.com/plow-pbc/plow-openclaw-agent/pull/84) | Verified capability context on every turn, missing-mailbox receipts and sender identity. |
 | 19 | [Reconnect local dashboards after Compose agent restarts](https://github.com/plow-pbc/plow-openclaw-agent/pull/85) | Agent/proxy dependency restart, retained state and the actual Compose regression fixture. |
+| 20 | [Constrain unavailable send offers in drafts and uncertain status replies](https://github.com/plow-pbc/plow-openclaw-agent/pull/86) | Default prompt candidate; targeted real-model evidence retains six material findings and requires further qualitative acceptance. |
+| 21 | [Stop model evaluation on exhausted provider credits](https://github.com/plow-pbc/plow-openclaw-agent/pull/87) | HTTP 402 checkpoint and unrun accounting; preserved retries and continuation for other errors. |
 
 The three focused quality layers replace the broader [closed PR #78](https://github.com/plow-pbc/plow-openclaw-agent/pull/78). Its review and historical evidence remain available. The follow-up layers are drafts while qualitative and isolated live acceptance remain open. Their attached recordings state the captured source and whether they show an evidence page, a fixture or a real installation.
 
