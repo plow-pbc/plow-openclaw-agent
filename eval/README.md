@@ -15,7 +15,7 @@ npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-
 npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
 
-The original matrix contains 22 scenarios. `experience-cases.json` adds 46
+The original matrix contains 22 scenarios. `experience-cases.json` adds 36
 English scenarios with explicit qualitative review criteria. Run both matrices.
 Scenario and message objects reject unknown fields before any paid request.
 For example, `contain` and `maxCharacters` are invalid; use `contains` and
@@ -95,16 +95,44 @@ can help identify contradictions and poor wording, but its review is not human
 approval. The [experience validation SOP](../docs/experience-validation.md)
 connects the dialogue rubric to real installation checks and fault tests.
 
-The extended introduction, direct group question and accepted-worker cases share
-the same decisions as `no-repeat-introduction`, `direct-group-question` and
-`worker-accepted-is-running`. Their qualitative metadata and stricter limits live
-in those original cases, so there is one maintained definition per decision.
-Historical evaluation reports retain the earlier inputs and outputs. Duplicate
-risk is a required explanation of unknown delivery; naming that risk is not an
-offer to repeat a send. Specific resend-offer assertions remain in both matrices.
+## Canonical scenarios and historical reports
 
-Likewise, disconnected-Mac, unsupported-voice and missing-worker-input decisions
-live in `mac-offline`, `unsupported-media` and
-`worker-needs-input-through-coordinator`. Those original messages, facts and
-negative assertions are preserved, with the extended cases' review metadata
-and tighter limits. The deleted paraphrases remain in frozen historical reports.
+A decision has one maintained fixture. The original matrix keeps its messages,
+facts, private canary values, personality settings and existing assertions. The
+consolidations below add qualitative review metadata, retain every stronger
+negative assertion and use the smaller output limit. Historical reports keep
+the earlier IDs, inputs, outputs and failures; they are not rerun or relabeled
+when a paraphrase is retired. A historical failure remains unresolved until a
+fresh run of the canonical case and qualitative review establish the correction.
+
+| Retired extended ID | Maintained original ID |
+| --- | --- |
+| `experience-first-use` | `first-owner-dm` |
+| `experience-no-repeat-introduction` | `no-repeat-introduction` |
+| `experience-frustrated-correction` | `frustrated-correction` |
+| `experience-helper-human-chatter` | `ambient-human-group` |
+| `experience-helper-direct-question` | `direct-group-question` |
+| `experience-coordinator-unrelated` | `unrelated-coordinator-chatter` |
+| `experience-agent-greeting` | `agent-loop` |
+| `experience-private-memory-canary` | `owner-private-memory` |
+| `experience-personality-no-authority` | `independent-style-without-capability` |
+| `experience-mac-disconnected` | `mac-offline` |
+| `experience-unsupported-voice-message` | `unsupported-media` |
+| `experience-unknown-send-no-retry` | `uncertain-send` |
+| `experience-pause-scheduler-unavailable` | `pause-failure` |
+| `experience-resume-lost-ack` | `resume-partial-failure` |
+| `experience-worker-running` | `worker-accepted-is-running` |
+| `experience-worker-needs-input` | `worker-needs-input-through-coordinator` |
+
+Duplicate risk is a required explanation of unknown delivery; naming that risk
+is not an offer to repeat a send. `uncertain-send` retains specific resend-offer
+assertions, and the subprocess regression exercises both a compliant warning
+and an actual resend offer against that canonical fixture.
+
+Keep cases separate when the facts or requested behavior test another boundary:
+partial versus complete participant responses, absent-owner approval, explicit
+diagnostics, planning versus scheduling, style-specific silence, bounded bot
+collaboration and distinct capability/receipt variants. The extended retrieved
+injection also tests recovery of a supplied dinner time; the original injection
+fixture contains no time. Sharing an injection theme does not make those factual
+assertions interchangeable.
