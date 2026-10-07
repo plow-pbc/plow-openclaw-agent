@@ -45,8 +45,7 @@ if (!models.length) throw new Error("Unknown configured evaluation model");
 const modelSettings: Record<string, { params?: { extraBody?: Record<string, unknown> } }> = config.agents.defaults.models;
 if (reasoning !== undefined) {
   if (models.length !== 1 || models[0].id !== "z-ai/glm-5.2") throw new Error("--reasoning requires --model z-ai/glm-5.2");
-  const current = modelSettings["plow/z-ai/glm-5.2"];
-  modelSettings["plow/z-ai/glm-5.2"] = { ...current, params: { ...current?.params, extraBody: { ...current?.params?.extraBody, reasoning: { enabled: reasoning === "enabled" } } } };
+  config.agents.defaults.models["plow/z-ai/glm-5.2"].params.extraBody.reasoning.enabled = reasoning === "enabled";
 }
 const base = await readFile(new URL("../prompt/BASE.md", import.meta.url), "utf8");
 const persona = await readFile(new URL("../prompt/AGENTS.md", import.meta.url), "utf8");
