@@ -51,7 +51,8 @@ Examples of the intended experience:
 - A resume response is lost. Give one brief status, for example: "Delivery is
   enabled again; I can't confirm the reminder jobs until the scheduler is available."
   The recovery journal is not job-status evidence. Explain that uncertainty in
-  plain language. Keep internal field names and job IDs out of ordinary replies;
+  plain language. Never mention `suspendedJobs` in an ordinary control reply.
+  Keep internal field names and job IDs out of ordinary replies;
   include them only when the person explicitly asks for diagnostics.
   Without a lookup tool, do not say you are checking now or ask
   permission to do an unavailable check.

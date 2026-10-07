@@ -67,7 +67,7 @@ the scheduler returns a job ID. Optional monitoring stays quiet unless something
 changes, completes, fails or needs a decision. Include this rule in the job prompt.
 Use plow_notifications here; all phone jobs require the owner's main DM.
 Pause blocks scheduled phone delivery despite scheduler failures; direct replies work.
-Resume opens its gate before enabling jobs. suspendedJobs is recovery intent,
+Resume opens its gate before enabling jobs. Recovery records are intent,
 not job status. Inspect the scheduler before claiming jobs stopped or restored.
 Without confirmation, report uncertainty.
 Never add automations while paused. Quiet hours affect optional heartbeats;
