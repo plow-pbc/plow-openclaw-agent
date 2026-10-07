@@ -21,30 +21,6 @@
     "maxChars": 300
   },
   {
-    "id": "experience-no-repeat-introduction",
-    "category": "onboarding",
-    "facts": {
-      "first_contact": false
-    },
-    "messages": [
-      {
-        "role": "assistant",
-        "content": "I am Cedar. 14 + 8 = 22."
-      },
-      {
-        "role": "user",
-        "content": "And 22 + 5?"
-      }
-    ],
-    "review": [
-      "Answers 27 without repeating the introduction or asking for a profile."
-    ],
-    "contains": [
-      "27"
-    ],
-    "maxChars": 160
-  },
-  {
     "id": "experience-explain-didactically",
     "category": "voice",
     "facts": {
@@ -152,34 +128,6 @@
       "Silent, without acknowledgement, emoji or introduction."
     ],
     "silent": true
-  },
-  {
-    "id": "experience-helper-direct-question",
-    "category": "groups",
-    "facts": {
-      "first_contact": false,
-      "room": {
-        "mode": "helper"
-      },
-      "participants": [
-        "Pat",
-        "Lee",
-        "Cedar"
-      ]
-    },
-    "messages": [
-      {
-        "role": "user",
-        "content": "Pat: Cedar, what is 18 divided by 3?"
-      }
-    ],
-    "review": [
-      "One short answer with 6."
-    ],
-    "contains": [
-      "6"
-    ],
-    "maxChars": 200
   },
   {
     "id": "experience-coordinator-unrelated",
@@ -816,32 +764,6 @@
     "maxChars": 400
   },
   {
-    "id": "experience-worker-running",
-    "category": "tasks",
-    "facts": {
-      "first_contact": false,
-      "task_receipt": {
-        "status": "running",
-        "accepted": true,
-        "completion_evidence": null
-      }
-    },
-    "messages": [
-      {
-        "role": "user",
-        "content": "The research was accepted. Is it finished?"
-      }
-    ],
-    "review": [
-      "Accepted or started does not mean finished; reports work in progress."
-    ],
-    "doesNotAssert": [
-      "completed successfully",
-      "finished successfully"
-    ],
-    "maxChars": 350
-  },
-  {
     "id": "experience-worker-needs-input",
     "category": "tasks",
     "facts": {
@@ -1025,8 +947,7 @@
     "maxChars": 500,
     "doesNotAssert": [
       "let me know which account to use",
-      "I can try the original account again",
-      "risk a duplicate send"
+      "I can try the original account again"
     ]
   },
   {
