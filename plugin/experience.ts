@@ -262,20 +262,35 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     const account = accountFor(ctx);
     if (account.accountId !== "chat") throw new Error("Notification controls require a phone conversation");
     const scope = args.scope === "all" ? await privateScope(account, ctx) : await activeScope(account, ctx, "plow_notifications", args.action !== "get");
-    const present = async (state: { paused: boolean; suspendedJobs: string[] }, complete: boolean) => {
-      const currentConversationScheduledDeliveryPaused = await notificationPaused(account, conversationUid(ctx));
+    let phase = "persist_scope_gate", schedulerMethod: string | undefined;
+    const gateway: Scheduler = { async request(method, params) {
+      phase = "scheduler_request"; schedulerMethod = method;
+      const result = await scheduler.request(method, params);
+      phase = "reconcile_response_or_journal";
+      return result;
+    } };
+    const present = async (state: { paused: boolean; suspendedJobs: string[] }, complete: boolean, failure?: { phase: string; schedulerMethod?: string }) => {
+      phase = "read_delivery_gates";
+      const deliveryPaused = await notificationPaused(account, conversationUid(ctx));
       ctx.assertInvocationCurrent();
+      const delivery = !deliveryPaused ? "Scheduled delivery here is not paused"
+        : !state.paused ? `Scheduled delivery here is still paused by ${args.scope === "all" ? "this conversation's pause" : "the pause for all conversations"}`
+        : "Scheduled delivery here is paused";
+      const jobs = args.action === "get" ? "Job state was not checked."
+        : complete ? "Eligible job changes were reconciled." : "Scheduler changes are unconfirmed.";
       return {
         status: args.action === "get" ? "observed" : complete ? "complete" : "incomplete",
-        scope: args.scope, paused: state.paused, currentConversationScheduledDeliveryPaused,
+        summary: `${delivery}; direct replies still work. ${jobs}`,
+        scheduledDeliveryHere: deliveryPaused ? "paused" : "not_paused",
         directReplies: "available_during_pause_and_resume",
         schedulerJobs: args.action === "get" ? "not_checked" : complete ? "eligible_jobs_reconciled" : "unconfirmed",
-        recoveryPending: state.suspendedJobs.length > 0,
-        ...(args.diagnostics ? { diagnostics: { suspendedJobs: state.suspendedJobs, meaning: "Recovery intent; not current job state" } } : {}),
+        scopeControl: { scope: args.scope, paused: state.paused },
+        ...(args.diagnostics ? { diagnostics: { suspendedJobs: state.suspendedJobs, meaning: "Recovery intent; not current job state", ...(failure ? { failure } : {}) } } : {}),
       };
     };
     try {
-      const state = await notificationControl(scheduler, scope, ctx, args.action, args.scope === "all", async job => {
+      const state = await notificationControl(gateway, scope, ctx, args.action, args.scope === "all", async job => {
+        phase = "cancel_active_runs"; schedulerMethod = undefined;
         const sessionKey = job.owner?.sessionKey ?? job.sessionKey;
         if (!sessionKey) return;
         const binding = { sessionKey, agentId: ctx.agentId };
@@ -290,11 +305,12 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
       return await present(state, true);
     } catch (error) {
       if (args.action === "get") throw error;
+      const failure = { phase, ...(schedulerMethod ? { schedulerMethod } : {}) };
       ctx.assertInvocationCurrent();
       const state = await readExperience(scope);
       ctx.assertInvocationCurrent();
-      api.logger?.info(`plow notification action=${args.action} result=incomplete`);
-      return await present({ paused: state.paused, suspendedJobs: state.suspendedJobs.map(job => job.id) }, false);
+      api.logger?.info(`plow notification action=${args.action} result=incomplete phase=${failure.phase} method=${failure.schedulerMethod ?? "none"}`);
+      return await present({ paused: state.paused, suspendedJobs: state.suspendedJobs.map(job => job.id) }, false, failure);
     }
   });
   api.on("before_tool_call", async (event, ctx) => {

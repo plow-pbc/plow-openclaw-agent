@@ -1165,12 +1165,14 @@
       "tools_available": [],
       "notifications_receipt": {
         "status": "incomplete",
-        "paused": false,
+        "scheduledDeliveryHere": "not_paused",
         "directReplies": "available_during_pause_and_resume",
         "schedulerJobs": "unconfirmed",
-        "recoveryPending": true,
-        "scope": "all",
-        "currentConversationScheduledDeliveryPaused": false
+        "scopeControl": {
+          "scope": "all",
+          "paused": false
+        },
+        "summary": "Scheduled delivery here is not paused; direct replies still work. Scheduler changes are unconfirmed."
       }
     },
     "messages": [
@@ -1181,12 +1183,14 @@
     ],
     "review": [
       "Explains that delivery is enabled but individual jobs remain unconfirmed.",
-      "Does not turn recoveryPending into proof that a job is disabled or add internal field names to an ordinary reply.",
+      "Does not infer enabled/disabled jobs or invent a failure cause. Keeps internal field names out of ordinary replies.",
       "Makes clear that direct replies work during pause and resume; does not imply resuming notifications restored direct messaging."
     ],
     "excludes": [
-      "recoveryPending",
-      "schedulerJobs"
+      "scheduledDeliveryHere",
+      "scopeControl",
+      "schedulerJobs",
+      "suspendedJobs"
     ],
     "maxChars": 400
   },
@@ -1198,12 +1202,14 @@
       "tools_available": [],
       "notifications_receipt": {
         "status": "incomplete",
-        "paused": true,
+        "scheduledDeliveryHere": "paused",
         "directReplies": "available_during_pause_and_resume",
         "schedulerJobs": "unconfirmed",
-        "recoveryPending": true,
-        "scope": "all",
-        "currentConversationScheduledDeliveryPaused": true
+        "scopeControl": {
+          "scope": "all",
+          "paused": true
+        },
+        "summary": "Scheduled delivery here is paused; direct replies still work. Scheduler changes are unconfirmed."
       }
     },
     "messages": [
@@ -1221,8 +1227,10 @@
       "paused"
     ],
     "excludes": [
-      "recoveryPending",
-      "schedulerJobs"
+      "scheduledDeliveryHere",
+      "scopeControl",
+      "schedulerJobs",
+      "suspendedJobs"
     ],
     "doesNotAssert": [
       "all jobs are stopped"
@@ -1237,12 +1245,14 @@
       "tools_available": [],
       "notifications_receipt": {
         "status": "complete",
-        "scope": "conversation",
-        "paused": false,
-        "currentConversationScheduledDeliveryPaused": true,
+        "scheduledDeliveryHere": "paused",
         "directReplies": "available_during_pause_and_resume",
         "schedulerJobs": "eligible_jobs_reconciled",
-        "recoveryPending": false
+        "scopeControl": {
+          "scope": "conversation",
+          "paused": false
+        },
+        "summary": "Scheduled delivery here is still paused by the pause for all conversations; direct replies still work. Eligible job changes were reconciled."
       }
     },
     "messages": [
@@ -1259,8 +1269,10 @@
       "paused"
     ],
     "excludes": [
-      "currentConversationScheduledDeliveryPaused",
-      "eligible_jobs_reconciled"
+      "scheduledDeliveryHere",
+      "scopeControl",
+      "schedulerJobs",
+      "suspendedJobs"
     ],
     "doesNotAssert": [
       "notifications are enabled",

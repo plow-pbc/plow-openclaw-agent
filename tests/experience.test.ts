@@ -30,7 +30,8 @@ async function fixture(t: any, runtime: any = {}) {
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(url.includes("cht_home") ? home : room));
   const factories = new Map<string, any>();
-  installExperienceTools({ config: { channels: { plow: account } }, runtime, on() {}, registerTool(factory: any) {
+  const logs: string[] = [];
+  installExperienceTools({ config: { channels: { plow: account } }, runtime, logger: { info(text: string) { logs.push(text); } }, on() {}, registerTool(factory: any) {
     const context = { assertInvocationCurrent() {} };
     factories.set(factory.create(context).name, factory);
   } } as any, () => account);
@@ -40,7 +41,7 @@ async function fixture(t: any, runtime: any = {}) {
       requesterSenderId: privateDm ? "plow-owner" : guest.provider_key, senderIsOwner: privateDm,
       deliveryContext: { channel: "plow", accountId: "chat", to: privateDm ? "cht_home" : "cht_room" }, assertInvocationCurrent() {}, ...overrides });
   }
-  return { root, tool };
+  return { root, tool, logs };
 }
 
 test("personality schemas derive every axis from the registry and reject unknown or invalid values", () => {
@@ -162,10 +163,9 @@ test("ordinary notification receipts expose the gate; only requested diagnostics
   t.mock.method(scheduler, "request", async () => { throw new Error("get must not inspect the scheduler"); });
   const control = tool("plow_notifications", true);
   const ordinary = await control.execute("get", { action: "get", scope: "all" });
-  assert.equal(ordinary.details.paused, true);
-  assert.equal(ordinary.details.currentConversationScheduledDeliveryPaused, true);
+  assert.equal(ordinary.details.scopeControl.paused, true);
+  assert.equal(ordinary.details.scheduledDeliveryHere, "paused");
   assert.equal(ordinary.details.schedulerJobs, "not_checked");
-  assert.equal(ordinary.details.recoveryPending, true);
   assert.doesNotMatch(JSON.stringify(ordinary), /internal-recovery-731|suspendedJobs/);
   const diagnostic = await control.execute("diagnostic", { action: "get", scope: "all", diagnostics: true });
   assert.deepEqual(diagnostic.details.diagnostics.suspendedJobs, ["internal-recovery-731"]);
@@ -173,15 +173,20 @@ test("ordinary notification receipts expose the gate; only requested diagnostics
 });
 
 test("a partial notification pause reports its persisted gate without leaking scheduler diagnostics", async t => {
-  const { tool } = await fixture(t);
+  const { tool, logs } = await fixture(t);
   t.mock.method(scheduler, "request", async () => { throw new Error("synthetic-private-gateway-error-731"); });
   const result = await tool("plow_notifications", true).execute("pause", { action: "pause", scope: "all" });
   assert.equal(result.details.status, "incomplete");
-  assert.equal(result.details.paused, true);
+  assert.equal(result.details.scopeControl.paused, true);
   assert.equal(result.details.directReplies, "available_during_pause_and_resume");
   assert.equal(result.details.schedulerJobs, "unconfirmed");
   assert.doesNotMatch(JSON.stringify(result), /synthetic-private-gateway-error-731/);
   assert.equal((await readExperience({ account, conversation: "owner" })).paused, true);
+  assert.ok(logs.some(line => line.includes("phase=scheduler_request method=cron.list")));
+  assert.doesNotMatch(JSON.stringify(logs), /synthetic-private-gateway-error-731/);
+  const diagnostic = await tool("plow_notifications", true).execute("diagnostics", { action: "pause", scope: "all", diagnostics: true });
+  assert.deepEqual(diagnostic.details.diagnostics.failure, { phase: "scheduler_request", schedulerMethod: "cron.list" });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /synthetic-private-gateway-error-731/);
 });
 
 test("a lost resume response separates its open gate from scheduler uncertainty and reconciles once", async t => {
@@ -199,14 +204,13 @@ test("a lost resume response separates its open gate from scheduler uncertainty 
   const control = tool("plow_notifications", true);
   const lost = await control.execute("resume", { action: "resume", scope: "all" });
   assert.equal(lost.details.status, "incomplete");
-  assert.equal(lost.details.paused, false);
-  assert.equal(lost.details.currentConversationScheduledDeliveryPaused, false);
+  assert.equal(lost.details.scopeControl.paused, false);
+  assert.equal(lost.details.scheduledDeliveryHere, "not_paused");
   assert.equal(lost.details.schedulerJobs, "unconfirmed");
-  assert.equal(lost.details.recoveryPending, true);
   assert.doesNotMatch(JSON.stringify(lost), /internal-recovery-731|suspendedJobs/);
   const reconciled = await control.execute("retry", { action: "resume", scope: "all" });
   assert.equal(reconciled.details.status, "complete");
-  assert.equal(reconciled.details.recoveryPending, false);
+  assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
   assert.equal(updates, 1);
 });
 
@@ -235,15 +239,16 @@ test("a room receipt observes the effective gate while another pause remains act
   const controls = tool("plow_notifications", false, { senderIsOwner: true, requesterSenderId: "plow-owner" });
   await updateExperience({ account, conversation: "owner" }, () => {}, state => { state.paused = true; });
   const roomState = await controls.execute("get", { action: "get" });
-  assert.equal(roomState.details.paused, false);
-  assert.equal(roomState.details.currentConversationScheduledDeliveryPaused, true);
-  assert.equal(roomState.details.scope, "conversation");
+  assert.equal(roomState.details.scopeControl.paused, false);
+  assert.equal(roomState.details.scheduledDeliveryHere, "paused");
+  assert.equal(roomState.details.scopeControl.scope, "conversation");
   assert.equal(roomState.details.directReplies, "available_during_pause_and_resume");
   t.mock.method(scheduler, "request", async () => ({ jobs: [] }));
   const resumed = await controls.execute("resume", { action: "resume" });
   assert.equal(resumed.details.status, "complete");
-  assert.equal(resumed.details.paused, false);
-  assert.equal(resumed.details.currentConversationScheduledDeliveryPaused, true);
+  assert.equal(resumed.details.scopeControl.paused, false);
+  assert.equal(resumed.details.scheduledDeliveryHere, "paused");
+  assert.match(resumed.details.summary, /still paused by the pause for all conversations/);
   assert.equal((await readExperience({ account, conversation: "owner" })).paused, true);
 });
 

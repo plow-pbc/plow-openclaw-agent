@@ -156,7 +156,8 @@ the owner's main DM. Pause blocks scheduled delivery/new jobs despite scheduler
 failures. Direct replies remain available during pause and resume.
 Resume opens only its selected gate before enabling eligible unchanged jobs;
 other room/global pauses may still block delivery. The effective gate for this
-conversation does not describe every destination. Get observes gates, not job state.
+conversation does not describe every destination. Use scheduledDeliveryHere
+for delivery here; scopeControl describes the selected scope. Get does not check jobs.
 Recovery records are intent, not proof of enabled/disabled jobs.
 Check the scheduler before saying jobs stopped/resumed; otherwise state uncertainty.
 Never create automations while paused. Resume does not create a previously requested

@@ -123,19 +123,22 @@ The receipt separates observed delivery state from scheduler reconciliation:
 | Field | Meaning |
 | --- | --- |
 | `status` | `observed` for get, `complete` for reconciliation, or `incomplete` after a failed operation |
-| `scope` and `paused` | The selected scope and its persisted gate; another scope may still pause delivery |
-| `currentConversationScheduledDeliveryPaused` | Effective scheduled-delivery gate for this conversation, including an overlapping global pause; does not describe every destination or job |
+| `summary` | Plain-language explanation computed from these observations, including a remaining overlapping pause |
+| `scheduledDeliveryHere` | `paused` or `not_paused` for this conversation, including overlapping global/room pauses; does not describe every destination or job |
+| `scopeControl` | The requested scope and its persisted `paused` gate; removing it may leave another scope's pause active |
 | `directReplies` | `available_during_pause_and_resume`; notification pause does not mute conversation |
 | `schedulerJobs` | `not_checked`, `eligible_jobs_reconciled`, or `unconfirmed`; no claim that every job is enabled or disabled |
-| `recoveryPending` | Recovery records exist; they do not establish current job status |
 
 `get` reads the scope and current-conversation gates without querying the scheduler. A partial pause/resume
 returns the observed persisted gate and `schedulerJobs: "unconfirmed"`.
 Revoked invocations and unreadable state still fail rather than returning a
 success receipt. Ordinary receipts omit journal IDs and raw scheduler errors.
 Requested diagnostics add `diagnostics.suspendedJobs` and explicitly label them
-as recovery intent. Runtime logs record an incomplete action without copying the
-raw scheduler error into the model's receipt.
+as recovery intent. For incomplete mutations they also include
+`diagnostics.failure.phase` and the scheduler method when applicable. These
+controlled values identify gate persistence, scheduler requests, response/journal
+reconciliation, active-run cancellation or effective-gate reads. Operator logs
+retain the same phase/method without copying raw private error text into receipts.
 
 Pause first writes the durable gate, then disables matching jobs with expected
 configuration revisions and cancels owned active runs. A scheduler failure can
