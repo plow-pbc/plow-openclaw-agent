@@ -12,6 +12,7 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
   const dir = await mkdtemp(join(tmpdir(), "plow-eval-"));
   let requests = 0;
   let expectedReasoning = false, expectedMaxTokens = 700;
+  let completion = "22";
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -24,7 +25,7 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     requests++;
     response.setHeader("Content-Type", "application/json");
     if (requests === 1) { response.writeHead(429).end("{}"); return; }
-    response.end(JSON.stringify({ choices: [{ message: { content: "22" } }] }));
+    response.end(JSON.stringify({ choices: [{ message: { content: completion } }] }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -94,6 +95,18 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     const diagnosticReport = JSON.parse(await readFile(output, "utf8"));
     assert.equal(diagnosticReport.modelSettings["plow/z-ai/glm-5.2"].params.extraBody.reasoning.enabled, true);
     assert.equal(diagnosticReport.maxTokens, 2000);
+    expectedReasoning = false; expectedMaxTokens = 700;
+    for (const [file, id] of [["cases.json", "uncertain-send"], ["experience-cases.json", "experience-unknown-send-no-retry"]]) {
+      const cases = JSON.parse(await readFile(new URL(`../eval/${file}`, import.meta.url), "utf8"));
+      await writeFile(path, JSON.stringify([cases.find((scenario: { id: string }) => scenario.id === id)]));
+      completion = "Delivery is unconfirmed. Trying again would risk a duplicate send, so I will stop here.";
+      const warning = await run([]);
+      assert.equal(warning.code, 0, warning.logs);
+      completion = "Delivery is unconfirmed. I can try the original account again.";
+      const offer = await run([]);
+      assert.equal(offer.code, 1, offer.logs);
+      assert.equal(JSON.parse(await readFile(output, "utf8")).results[0].checks.doesNotAssert, false);
+    }
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
