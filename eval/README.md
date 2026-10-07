@@ -15,7 +15,7 @@ npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-
 npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
 
-The original matrix contains 22 scenarios. `experience-cases.json` adds 46
+The original matrix contains 22 scenarios. `experience-cases.json` adds 49
 English scenarios with explicit qualitative review criteria. Run both matrices.
 The second matrix tests ordinary wording versus requested diagnostics, direct
 replies during pause, delayed versus unknown delivery, absent-owner approval,

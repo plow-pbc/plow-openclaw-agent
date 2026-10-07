@@ -115,7 +115,27 @@ automation separately.
 ## Scheduled delivery: `plow_notifications`
 
 Actions are `get`, `pause`, and `resume`. Scope defaults to `conversation`;
-`all` requires the owner's main phone DM.
+`all` requires the owner's main phone DM. Set `diagnostics: true` only when the
+person explicitly requests internal recovery details.
+
+The receipt separates observed delivery state from scheduler reconciliation:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `observed` for get, `complete` for reconciliation, or `incomplete` after a failed operation |
+| `scope` and `paused` | The selected scope and its persisted gate; another scope may still pause delivery |
+| `currentConversationScheduledDeliveryPaused` | Effective scheduled-delivery gate for this conversation, including an overlapping global pause; does not describe every destination or job |
+| `directReplies` | `available_during_pause_and_resume`; notification pause does not mute conversation |
+| `schedulerJobs` | `not_checked`, `eligible_jobs_reconciled`, or `unconfirmed`; no claim that every job is enabled or disabled |
+| `recoveryPending` | Recovery records exist; they do not establish current job status |
+
+`get` reads the scope and current-conversation gates without querying the scheduler. A partial pause/resume
+returns the observed persisted gate and `schedulerJobs: "unconfirmed"`.
+Revoked invocations and unreadable state still fail rather than returning a
+success receipt. Ordinary receipts omit journal IDs and raw scheduler errors.
+Requested diagnostics add `diagnostics.suspendedJobs` and explicitly label them
+as recovery intent. Runtime logs record an incomplete action without copying the
+raw scheduler error into the model's receipt.
 
 Pause first writes the durable gate, then disables matching jobs with expected
 configuration revisions and cancels owned active runs. A scheduler failure can
@@ -138,7 +158,7 @@ one-shot reminder can still deliver. The journal entry remains for reconciliatio
 retrying resume inspects the actual job without sending another confirmed enable.
 If the scheduler fails before enabling, some jobs remain disabled. An open gate
 therefore does not prove that every reminder has resumed. Report both facts.
-`suspendedJobs` lists recovery journal entries, not observed scheduler status.
+`diagnostics.suspendedJobs` lists recovery journal entries, not scheduler status.
 After a lost enable response, a listed job may already be enabled. Read its
 native scheduler state before saying it is disabled or running.
 

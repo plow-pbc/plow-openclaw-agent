@@ -43,7 +43,7 @@ const taskArgs = z.object({
   deadline: z.string().datetime().optional(), step: z.string().max(1000).optional(),
   evidence: z.string().trim().min(1).max(2000).optional(), delivery: z.enum(["confirmed", "failed", "unknown"]).optional(),
 }).strict();
-const notifyArgs = z.object({ action: z.enum(["get", "pause", "resume"]), scope: z.enum(["conversation", "all"]).default("conversation") }).strict();
+const notifyArgs = z.object({ action: z.enum(["get", "pause", "resume"]), scope: z.enum(["conversation", "all"]).default("conversation"), diagnostics: z.boolean().default(false) }).strict();
 const jobSchema = z.object({
   id: z.string(), enabled: z.boolean(), configRevision: z.string().optional(), agentId: z.string().optional(), sessionKey: z.string().optional(),
   owner: z.object({ agentId: z.string().optional(), sessionKey: z.string().optional(), accountId: z.string().optional() }).passthrough().optional(),
@@ -258,22 +258,44 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     const stateJson = { ...previous, evidence: args.evidence, delivery: args.delivery ?? null };
     return args.action === "finish" ? await flows.finish({ ...mutation, stateJson }) : await flows.fail({ ...mutation, stateJson, blockedSummary: args.evidence });
   });
-  tool("plow_notifications", "Inspect or persist pause/resume for scheduled phone work in this conversation; scope=all is owner-main-DM only. Pause disables existing jobs and blocks new ones; resume re-enables only unchanged jobs disabled by this control. Direct replies still work.", notifyArgs, async (ctx, args) => {
+  tool("plow_notifications", "Inspect or persist pause/resume for scheduled phone work; scope=all is owner-main-DM only. Pause blocks scheduled delivery and new jobs; direct replies work. Resume reconciles only unchanged jobs. Receipts separate the delivery gate from unconfirmed scheduler changes. Get does not inspect jobs. Use diagnostics=true only for explicitly requested internal recovery details; journal IDs are intent, never live job status.", notifyArgs, async (ctx, args) => {
     const account = accountFor(ctx);
     if (account.accountId !== "chat") throw new Error("Notification controls require a phone conversation");
     const scope = args.scope === "all" ? await privateScope(account, ctx) : await activeScope(account, ctx, "plow_notifications", args.action !== "get");
-    return await notificationControl(scheduler, scope, ctx, args.action, args.scope === "all", async job => {
-      const sessionKey = job.owner?.sessionKey ?? job.sessionKey;
-      if (!sessionKey) return;
-      const binding = { sessionKey, agentId: ctx.agentId };
-      const runs = await api.runtime.tasks.async.runs.bindSession(binding).list();
-      for (const run of runs) if (run.sourceId === job.id || run.sourceId === `cron:${job.id}`) {
-        if (!["queued", "running", "waiting", "blocked"].includes(run.status)) continue;
-        ctx.assertInvocationCurrent();
-        const result = await api.runtime.tasks.runs.bindSession(binding).cancel({ taskId: run.id, cfg: ctx.config! });
-        if (!result.cancelled) throw new Error("The job is disabled but its active run could not be cancelled; check task status before confirming a complete stop");
-      }
-    });
+    const present = async (state: { paused: boolean; suspendedJobs: string[] }, complete: boolean) => {
+      const currentConversationScheduledDeliveryPaused = await notificationPaused(account, conversationUid(ctx));
+      ctx.assertInvocationCurrent();
+      return {
+        status: args.action === "get" ? "observed" : complete ? "complete" : "incomplete",
+        scope: args.scope, paused: state.paused, currentConversationScheduledDeliveryPaused,
+        directReplies: "available_during_pause_and_resume",
+        schedulerJobs: args.action === "get" ? "not_checked" : complete ? "eligible_jobs_reconciled" : "unconfirmed",
+        recoveryPending: state.suspendedJobs.length > 0,
+        ...(args.diagnostics ? { diagnostics: { suspendedJobs: state.suspendedJobs, meaning: "Recovery intent; not current job state" } } : {}),
+      };
+    };
+    try {
+      const state = await notificationControl(scheduler, scope, ctx, args.action, args.scope === "all", async job => {
+        const sessionKey = job.owner?.sessionKey ?? job.sessionKey;
+        if (!sessionKey) return;
+        const binding = { sessionKey, agentId: ctx.agentId };
+        const runs = await api.runtime.tasks.async.runs.bindSession(binding).list();
+        for (const run of runs) if (run.sourceId === job.id || run.sourceId === `cron:${job.id}`) {
+          if (!["queued", "running", "waiting", "blocked"].includes(run.status)) continue;
+          ctx.assertInvocationCurrent();
+          const result = await api.runtime.tasks.runs.bindSession(binding).cancel({ taskId: run.id, cfg: ctx.config! });
+          if (!result.cancelled) throw new Error("The job is disabled but its active run could not be cancelled; check task status before confirming a complete stop");
+        }
+      });
+      return await present(state, true);
+    } catch (error) {
+      if (args.action === "get") throw error;
+      ctx.assertInvocationCurrent();
+      const state = await readExperience(scope);
+      ctx.assertInvocationCurrent();
+      api.logger?.info(`plow notification action=${args.action} result=incomplete`);
+      return await present({ paused: state.paused, suspendedJobs: state.suspendedJobs.map(job => job.id) }, false);
+    }
   });
   api.on("before_tool_call", async (event, ctx) => {
     if (ctx.agentId === "plow-worker" && !["web_search", "web_fetch"].includes(event.toolName)) return { block: true, blockReason: "Background workers perform read-only research and analysis; the conversational agent owns messages, memory, scheduling and mutations" };

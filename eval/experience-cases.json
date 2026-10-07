@@ -1156,5 +1156,116 @@
       "time zone"
     ],
     "maxChars": 500
+  },
+  {
+    "id": "experience-structured-resume-receipt",
+    "category": "notifications",
+    "facts": {
+      "first_contact": false,
+      "tools_available": [],
+      "notifications_receipt": {
+        "status": "incomplete",
+        "paused": false,
+        "directReplies": "available_during_pause_and_resume",
+        "schedulerJobs": "unconfirmed",
+        "recoveryPending": true,
+        "scope": "all",
+        "currentConversationScheduledDeliveryPaused": false
+      }
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Did all my reminders resume?"
+      }
+    ],
+    "review": [
+      "Explains that delivery is enabled but individual jobs remain unconfirmed.",
+      "Does not turn recoveryPending into proof that a job is disabled or add internal field names to an ordinary reply.",
+      "Makes clear that direct replies work during pause and resume; does not imply resuming notifications restored direct messaging."
+    ],
+    "excludes": [
+      "recoveryPending",
+      "schedulerJobs"
+    ],
+    "maxChars": 400
+  },
+  {
+    "id": "experience-structured-pause-receipt",
+    "category": "notifications",
+    "facts": {
+      "first_contact": false,
+      "tools_available": [],
+      "notifications_receipt": {
+        "status": "incomplete",
+        "paused": true,
+        "directReplies": "available_during_pause_and_resume",
+        "schedulerJobs": "unconfirmed",
+        "recoveryPending": true,
+        "scope": "all",
+        "currentConversationScheduledDeliveryPaused": true
+      }
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Can I still message you, and are my scheduled notifications paused?"
+      }
+    ],
+    "review": [
+      "Confirms direct conversation works and scheduled delivery is paused.",
+      "Does not claim all native jobs stopped or expose recovery fields.",
+      "Makes clear that direct replies work during pause and resume; does not imply resuming notifications restored direct messaging."
+    ],
+    "contains": [
+      "paused"
+    ],
+    "excludes": [
+      "recoveryPending",
+      "schedulerJobs"
+    ],
+    "doesNotAssert": [
+      "all jobs are stopped"
+    ],
+    "maxChars": 400
+  },
+  {
+    "id": "experience-overlapping-pause-receipt",
+    "category": "notifications",
+    "facts": {
+      "first_contact": false,
+      "tools_available": [],
+      "notifications_receipt": {
+        "status": "complete",
+        "scope": "conversation",
+        "paused": false,
+        "currentConversationScheduledDeliveryPaused": true,
+        "directReplies": "available_during_pause_and_resume",
+        "schedulerJobs": "eligible_jobs_reconciled",
+        "recoveryPending": false
+      }
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "I resumed this room. Are scheduled notifications allowed here now?"
+      }
+    ],
+    "review": [
+      "Reports that scheduled delivery in this conversation is still paused even though this room's own pause was removed.",
+      "Does not claim every destination resumed or infer job state from the gate. Direct replies remain available."
+    ],
+    "contains": [
+      "paused"
+    ],
+    "excludes": [
+      "currentConversationScheduledDeliveryPaused",
+      "eligible_jobs_reconciled"
+    ],
+    "doesNotAssert": [
+      "notifications are enabled",
+      "delivery is enabled"
+    ],
+    "maxChars": 400
   }
 ]

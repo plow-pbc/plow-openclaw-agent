@@ -128,6 +128,11 @@ journal entries. This lets an accepted one-shot enable deliver even if its respo
 is lost. An open gate does not prove every job was restored. Both the tool and
 physical delivery guards check the source room, destination room and global pause;
 phone groups receive that effective status without private owner state.
+The notification tool separates the persisted gate from reconciliation status.
+Ordinary receipts omit recovery IDs; `diagnostics: true` exposes intent records
+only when requested. A partial operation reports scheduler changes as unconfirmed.
+Read the [receipt field reference](owner-controls.md#scheduled-delivery-plow_notifications)
+before interpreting get or recovery results as live job status.
 An already confirmed external send cannot be withdrawn.
 Cancel tasks and their associated automations separately when ending a workflow.
 
