@@ -30,6 +30,8 @@ jobs:
             '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test --test-concurrency=2 /opt/plow/tests/*.test.ts'
       - name: Offline gateway probe
         run: docker run --rm --network none plow-openclaw:test /opt/plow/probe
+      - name: Development proxy origins
+        run: bash tests/dev-proxy-acceptance.sh plow-openclaw:test
       - name: Real gateway experience acceptance
         run: |
           docker run --rm --user root --network none \

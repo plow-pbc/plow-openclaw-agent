@@ -41,8 +41,20 @@ stopped, so you can exercise preview, save, stale edits, reset and mobile layout
 It uses the same `dev/Caddyfile` and pinned Caddy image as the normal development
 dashboard. Only `127.0.0.1:3001` is published; anyone with access to that local
 port administers this synthetic agent. Do not change the bind address or expose
-this fixture through a tunnel. Use a different checkout/session if port 3001 is
-already occupied by an agent you need to keep running.
+this fixture through a tunnel. If port 3001 is occupied, set `PLOW_DEV_PORT=3017`
+for all fixture Compose commands and open the page on port 3017. The mapping
+and origin allowlist use that same value; the internal proxy still listens on 3001.
+
+Verify the real development proxy separately:
+
+```sh
+bash tests/dev-proxy-acceptance.sh plow-openclaw:test
+```
+
+This starts the pinned Caddy with a synthetic backend in shared, isolated
+container networking. It checks default and custom origins, foreign-origin
+rejection, and replacement of spoofed owner/forwarding headers. It publishes
+no host ports, loads no credentials and removes only its own containers.
 
 Stop both services when finished:
 

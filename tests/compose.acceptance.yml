@@ -7,7 +7,7 @@ services:
     environment:
       PLOW_ACCEPTANCE_SERVE: "1"
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:${PLOW_DEV_PORT:-3001}:3001"
     volumes:
       - ../node_modules:/opt/plow/node_modules:ro
       - .:/opt/plow/tests:ro
@@ -21,5 +21,7 @@ services:
     network_mode: service:agent
     depends_on:
       - agent
+    environment:
+      PLOW_DEV_PORT: ${PLOW_DEV_PORT:-3001}
     volumes:
       - ../dev/Caddyfile:/etc/caddy/Caddyfile:ro

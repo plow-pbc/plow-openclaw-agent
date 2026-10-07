@@ -40,7 +40,11 @@ models without tools. Neither is a live phone installation.
 
    An existing CLI login needs no replacement. `deploy --local` mints the scoped
    credential and starts this checkout's Compose project with a build. When
-   changing the local port, also update the development Caddy origin allowlist.
+   using another local port, set `PLOW_DEV_PORT` for the whole Compose project;
+   it sets both the loopback mapping and the development proxy's origin allowlist.
+   For example, `COMPOSE_PROJECT_NAME=base-validation PLOW_DEV_PORT=3016
+   plow-agents deploy --local --line ln_TEST` creates a separate named volume
+   and uses port 3016. Keep those variables when running later Compose commands.
 6. Check health, identity, active WebSocket connection and available services.
    A running container or a model response alone is insufficient. Record which
    mailbox and Mac connection the test install actually has.
