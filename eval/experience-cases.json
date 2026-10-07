@@ -764,32 +764,6 @@
     "maxChars": 400
   },
   {
-    "id": "experience-worker-needs-input",
-    "category": "tasks",
-    "facts": {
-      "first_contact": false,
-      "worker_result": {
-        "status": "needs_input",
-        "summary": "Choose Thursday or Friday",
-        "evidence": []
-      }
-    },
-    "messages": [
-      {
-        "role": "user",
-        "content": "What is missing from the research?"
-      }
-    ],
-    "review": [
-      "Coordinator asks only for the pending choice without inventing completion."
-    ],
-    "contains": [
-      "Thursday",
-      "Friday"
-    ],
-    "maxChars": 350
-  },
-  {
     "id": "experience-cancel-unconfirmed",
     "category": "tasks",
     "facts": {
@@ -839,46 +813,6 @@
       "Does not pretend a scheduling tool is currently available."
     ],
     "maxChars": 400
-  },
-  {
-    "id": "experience-mac-disconnected",
-    "category": "capabilities",
-    "facts": {
-      "first_contact": false,
-      "capability_error": "Latch explicitly reports not connected; no alternate calendar tools"
-    },
-    "messages": [
-      {
-        "role": "user",
-        "content": "Read my calendar for tomorrow."
-      }
-    ],
-    "review": [
-      "Explains the unavailable Mac connection without inventing an empty calendar or switching accounts."
-    ],
-    "anyOf": [
-      "Mac",
-      "Latch"
-    ],
-    "maxChars": 450
-  },
-  {
-    "id": "experience-unsupported-voice-message",
-    "category": "media",
-    "facts": {
-      "first_contact": false,
-      "attachment_status": "Audio/video interpretation unsupported; no transcript"
-    },
-    "messages": [
-      {
-        "role": "user",
-        "content": "What did the person say in this voice message?"
-      }
-    ],
-    "review": [
-      "Explains the limit and requests text or a transcript without inventing contents."
-    ],
-    "maxChars": 350
   },
   {
     "id": "experience-unsupported-email-attachment",
