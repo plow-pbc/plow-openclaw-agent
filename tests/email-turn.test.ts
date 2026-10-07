@@ -47,7 +47,7 @@ async function run(t: TestContext, accountId: "chat" | "email", frames: { chat: 
   newThread: { status?: string; chat_uid?: string | null; chat_unrecorded_reason?: string; http?: number } | null = { status: "sent", chat_uid: "started" }, state?: string, terminal = "completed") {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   if (state) process.env.OPENCLAW_STATE_DIR = state;
-  const controller = abortAfter();
+  const controller = abortAfter(20_000);
   const account = { ...cfg.channels.plow, apiBase, accountId };
   // The durable sender loads the plugin's outbound adapter from this path.
   const config = { channels: { plow: { ...cfg.channels.plow, apiBase } }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
@@ -198,7 +198,7 @@ test("plow_send_email on a non-owner email turn replies only in its own thread",
 
 test("a thread started from a trusted group reports its finals to that group, recorded in the group's session", async t => {
   const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
-  t.after(() => rm(state, { recursive: true }));
+  t.after(() => rm(state, { recursive: true, maxRetries: 5 }));
   let receipt: unknown;
   await run(t, "chat", [{ chat: "group", sender: outsider }], async (_dispatch, tool) => {
     const send = tool();
@@ -289,7 +289,7 @@ for (const [name, invalidate, cleanup] of [
   ["no longer readable", () => { forbidden.add("group"); }, () => { forbidden.clear(); }],
 ] as const) test(`a thread's recorded origin that is ${name} falls back to the owner's 1:1`, async t => {
   const state = await mkdtemp(`${tmpdir()}/plow-email-state-`);
-  t.after(() => { cleanup(); return rm(state, { recursive: true }); });
+  t.after(() => { cleanup(); return rm(state, { recursive: true, maxRetries: 5 }); });
   await run(t, "chat", [{ chat: "group", sender: owner }], async (_dispatch, tool) => {
     await tool().execute("call", { to: ["new@example.com"], subject: "Hello", body: "Opening" });
   }, undefined, state);
