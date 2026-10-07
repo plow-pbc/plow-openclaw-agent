@@ -53,6 +53,13 @@ the report. Assertion failures do not retry. Provider-reported cost may be absen
 an absent value is unknown, not zero. Estimates use the configured model rates
 and do not establish a provider bill.
 
+HTTP 402 stops the current evaluation immediately after checkpointing the failed
+request and any preceding results. The report retains `expectedResults` and adds
+`stopped: { httpStatus: 402, unrunResults: N }`. Unrun combinations have no result
+rows and are not passes or model-quality failures. The command exits unsuccessfully.
+Restore the test account's credits, preserve the partial report, and rerun with a
+new output path. Separate evaluation processes each stop their own invocation.
+
 Use `excludes` for text that must never appear, such as a private value.
 `doesNotAssert` checks a forbidden affirmative phrase while allowing an explicit
 negation or pending-verification qualifier in the same English clause, such as

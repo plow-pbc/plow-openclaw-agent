@@ -55,15 +55,17 @@ const inputs = { baseSha256: hash(base), personaSha256: hash(persona), casesSha2
 const completionSchema = z.object({ choices: z.array(z.object({ message: z.object({ content: z.string().nullable(), tool_calls: z.array(z.unknown()).nullish() }).passthrough() })).min(1), usage: z.object({ prompt_tokens: z.number(), completion_tokens: z.number() }).passthrough().optional() }).passthrough();
 const results: object[] = [];
 let failures = 0;
+const expectedResults = models.length * cases.length * repeat;
+let stopped: { httpStatus: 402; unrunResults: number } | undefined;
 const output = resolve(option("--output") ?? "work/eval-results.json");
 await mkdir(dirname(output), { recursive: true });
 const generatedAt = new Date().toISOString();
 async function checkpoint() {
-  await writeFile(`${output}.tmp`, JSON.stringify({ generatedAt, kind: "live model dialogues with synthetic context; no live phone or email sends", acceptance: "All automated checks must pass; humans review tone and correctness separately", inputs, scenarios: cases, modelSettings, maxTokens, repeat, expectedResults: models.length * cases.length * repeat, results, failures }, null, 2) + "\n");
+  await writeFile(`${output}.tmp`, JSON.stringify({ generatedAt, kind: "live model dialogues with synthetic context; no live phone or email sends", acceptance: "All automated checks must pass; humans review tone and correctness separately", inputs, scenarios: cases, modelSettings, maxTokens, repeat, expectedResults, results, failures, stopped }, null, 2) + "\n");
   await rename(`${output}.tmp`, output);
 }
 await checkpoint();
-for (const model of models) for (const scenario of cases) for (let repetition = 1; repetition <= repeat; repetition++) {
+evaluation: for (const model of models) for (const scenario of cases) for (let repetition = 1; repetition <= repeat; repetition++) {
   const start = Date.now();
   const attempts: string[] = [];
   try {
@@ -103,8 +105,13 @@ for (const model of models) for (const scenario of cases) for (let repetition = 
   } catch (error) {
     failures++; results.push({ model: model.id, scenario: scenario.id, repetition, passed: false, attempts, error: error instanceof Error ? error.message : "Unknown model error" });
     console.log(`ERROR ${model.id} ${scenario.id} ${error instanceof Error ? error.message : "Unknown model error"}`);
+    if (error instanceof Error && error.message === "Model HTTP 402") stopped = { httpStatus: 402, unrunResults: expectedResults - results.length };
   }
   await checkpoint();
+  if (stopped) {
+    console.log(`Stopped on Model HTTP 402. Unrun results: ${stopped.unrunResults}/${expectedResults}`);
+    break evaluation;
+  }
 }
 console.log(`Results: ${output}. Failures: ${failures}/${results.length}`);
 process.exitCode = failures ? 1 : 0;

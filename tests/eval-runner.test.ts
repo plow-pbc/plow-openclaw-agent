@@ -13,17 +13,19 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
   let requests = 0;
   let expectedReasoning = false, expectedMaxTokens = 700;
   let completion = "22";
+  let creditLimitAt: number | undefined;
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
     assert.equal(request.url, "/v1/chat/completions");
-    assert.equal(input.model, "z-ai/glm-5.2");
-    assert.equal(input.reasoning.enabled, expectedReasoning);
-    assert.equal(input.max_tokens, expectedMaxTokens);
     assert.equal(request.headers.authorization, "Bearer fixture-only-secret");
     requests++;
     response.setHeader("Content-Type", "application/json");
+    if (creditLimitAt !== undefined && requests >= creditLimitAt) { response.writeHead(402).end("{}"); return; }
+    assert.equal(input.model, "z-ai/glm-5.2");
+    assert.equal(input.reasoning.enabled, expectedReasoning);
+    assert.equal(input.max_tokens, expectedMaxTokens);
     if (requests === 1) { response.writeHead(429).end("{}"); return; }
     response.end(JSON.stringify({ choices: [{ message: { content: completion } }] }));
   });
@@ -33,8 +35,8 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
   const path = join(dir, "cases.json"), output = join(dir, "report.json");
   const matrix = JSON.stringify([{ id: "fixture", category: "onboarding", review: ["Answer the question"], facts: {}, messages: [{ role: "user", content: "14 + 8?" }], contains: ["22"] }]);
   await writeFile(path, matrix);
-  async function run(args: string[]) {
-    const child = spawn(process.execPath, [fileURLToPath(new URL("../eval/run.ts", import.meta.url)), "--cases", path, "--model", "z-ai/glm-5.2", "--output", output, ...args], {
+  async function run(args: string[], model: string | null = "z-ai/glm-5.2") {
+    const child = spawn(process.execPath, [fileURLToPath(new URL("../eval/run.ts", import.meta.url)), "--cases", path, ...(model ? ["--model", model] : []), "--output", output, ...args], {
       env: { ...process.env, PLOW_API_BASE: `http://127.0.0.1:${address.port}`, PLOW_AGENT_TOKEN: "fixture-only-secret" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -107,6 +109,29 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     const offer = await run([]);
     assert.equal(offer.code, 1, offer.logs);
     assert.equal(JSON.parse(await readFile(output, "utf8")).results[0].checks.doesNotAssert, false);
+    await writeFile(path, matrix);
+    completion = "22";
+    const beforeCredits = requests;
+    creditLimitAt = requests + 2;
+    const exhausted = await run(["--repeat", "2"], null);
+    assert.equal(exhausted.code, 1, exhausted.logs);
+    assert.match(exhausted.logs, /Stopped on Model HTTP 402\. Unrun results: 2\/4/);
+    assert.equal(requests, beforeCredits + 2, "credit exhaustion stops the entire model/case/repetition matrix without retrying");
+    const creditRaw = await readFile(output, "utf8"), creditReport = JSON.parse(creditRaw);
+    assert.equal(creditReport.expectedResults, 4);
+    assert.equal(creditReport.results.length, 2);
+    assert.equal(creditReport.results[0].output, "22", "completed evidence survives the provider failure");
+    assert.equal(creditReport.results[0].passed, true);
+    assert.equal(creditReport.results[1].error, "Model HTTP 402");
+    assert.equal(creditReport.results[1].output, undefined);
+    assert.deepEqual(creditReport.results[1].attempts, ["Model HTTP 402"]);
+    assert.equal(creditReport.failures, 1);
+    assert.deepEqual(creditReport.stopped, { httpStatus: 402, unrunResults: 2 });
+    assert.ok(!creditRaw.includes("fixture-only-secret"));
+    creditLimitAt = undefined;
+    const restored = await run([]);
+    assert.equal(restored.code, 0, restored.logs);
+    assert.equal(JSON.parse(await readFile(output, "utf8")).stopped, undefined);
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
