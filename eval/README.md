@@ -15,7 +15,7 @@ npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-
 npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
 
-The original matrix contains 22 scenarios. `experience-cases.json` adds 45
+The original matrix contains 22 scenarios. `experience-cases.json` adds 46
 English scenarios with explicit qualitative review criteria. Run both matrices.
 The second matrix tests ordinary wording versus requested diagnostics, direct
 replies during pause, delayed versus unknown delivery, absent-owner approval,
@@ -33,6 +33,14 @@ before a model request; a typo must not silently expand a paid run.
 Reports preserve repetition numbers and SHA-256 hashes of the base, persona,
 scenario file and rendered prompt. Changed instructions require a fresh run;
 never relabel an old report as evidence for a new prompt.
+
+For a controlled model-configuration comparison, select GLM explicitly and use
+`--reasoning enabled` or `--reasoning disabled`. `--max-tokens` accepts 128 through
+16384 and defaults to 700. Keep that cap, scenarios, repetitions and prompts equal
+between comparison arms. These diagnostic overrides do not change the image's
+defaults; reports record the effective settings and cap. Reasoning can consume
+completion tokens, so a small cap may leave no visible answer. Review actual
+outputs and usage rather than treating a larger budget as evidence of quality.
 
 Use a dedicated test credential. Reports contain synthetic inputs, model outputs,
 assertions, scenario facts, model settings, latency, usage and estimated cost,

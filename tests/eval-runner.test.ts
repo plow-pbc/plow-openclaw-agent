@@ -11,12 +11,15 @@ import { test } from "node:test";
 test("evaluation selects a custom matrix and model, preserves repetitions, retries and input hashes", { timeout: 30_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), "plow-eval-"));
   let requests = 0;
+  let expectedReasoning = false, expectedMaxTokens = 700;
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString());
     assert.equal(request.url, "/v1/chat/completions");
     assert.equal(input.model, "z-ai/glm-5.2");
+    assert.equal(input.reasoning.enabled, expectedReasoning);
+    assert.equal(input.max_tokens, expectedMaxTokens);
     assert.equal(request.headers.authorization, "Bearer fixture-only-secret");
     requests++;
     response.setHeader("Content-Type", "application/json");
@@ -61,7 +64,7 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     assert.notEqual(missingValue.code, 0);
     assert.match(missingValue.logs, /Missing value for --repeat/);
     assert.equal(requests, 3);
-    for (const args of [["--repeats", "2"], ["--repeat", "2", "--repeat", "3"], ["--case", "missing"]]) {
+    for (const args of [["--repeats", "2"], ["--repeat", "2", "--repeat", "3"], ["--case", "missing"], ["--reasoning", "maybe"], ["--max-tokens", "0"]]) {
       const invalid = await run(args);
       assert.notEqual(invalid.code, 0, invalid.logs);
       assert.equal(requests, 3, "invalid selection must not incur a model request");
@@ -71,6 +74,14 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     assert.notEqual(duplicate.code, 0);
     assert.match(duplicate.logs, /Duplicate evaluation case ID/);
     assert.equal(requests, 3);
+    await writeFile(path, matrix);
+    expectedReasoning = true; expectedMaxTokens = 2000;
+    const diagnostic = await run(["--reasoning", "enabled", "--max-tokens", "2000"]);
+    assert.equal(diagnostic.code, 0, diagnostic.logs);
+    assert.equal(requests, 4);
+    const diagnosticReport = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(diagnosticReport.modelSettings["plow/z-ai/glm-5.2"].params.extraBody.reasoning.enabled, true);
+    assert.equal(diagnosticReport.maxTokens, 2000);
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

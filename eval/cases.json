@@ -319,7 +319,9 @@
       "Sent again"
     ],
     "doesNotAssert": [
-      "retry the same send"
+      "retry the same send",
+      "I can try the original account again",
+      "risk a duplicate send"
     ],
     "maxChars": 500
   },
@@ -444,7 +446,10 @@
       "Thursday"
     ],
     "excludes": [
-      "Tuesday works"
+      "Tuesday works",
+      "What do you need",
+      "What's happening Thursday",
+      "what you need next"
     ],
     "maxChars": 200
   },
