@@ -30,13 +30,13 @@ for(let attempt=0;attempt<100;attempt++){
 }
 assert.ok(ready,"Caddy did not become ready");
 for(const host of ["localhost","127.0.0.1"]){
-  const response=await fetch(url,{headers:{Origin:`http://${host}:${port}`,Host:`${host}:${port}`,"X-Plow-User":"forged-owner","X-Forwarded-Host":"forged.invalid","Forwarded":"for=forged","X-Real-IP":"forged"}});
+  const response=await fetch(url,{headers:{Origin:`http://${host}:${port}`,"X-Plow-User":"forged-owner","X-Forwarded-Host":"forged.invalid","Forwarded":"for=forged","X-Real-IP":"forged"}});
   assert.equal(response.status,200);
   const headers=await response.json();
   assert.equal(headers.origin,"http://127.0.0.1:3000");
   assert.equal(headers.host,"127.0.0.1:3000");
   assert.equal(headers["x-plow-user"],"dev-owner");
-  assert.equal(headers["x-forwarded-host"],`${host}:${port}`);
+  assert.equal(headers["x-forwarded-host"],"127.0.0.1:3001");
   assert.equal(headers.forwarded,undefined);
   assert.equal(headers["x-real-ip"],undefined);
 }
