@@ -61,6 +61,11 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     assert.notEqual(missingValue.code, 0);
     assert.match(missingValue.logs, /Missing value for --repeat/);
     assert.equal(requests, 3);
+    for (const args of [["--repeats", "2"], ["--repeat", "2", "--repeat", "3"], ["--case", "missing"]]) {
+      const invalid = await run(args);
+      assert.notEqual(invalid.code, 0, invalid.logs);
+      assert.equal(requests, 3, "invalid selection must not incur a model request");
+    }
     await writeFile(path, JSON.stringify([JSON.parse(matrix)[0], JSON.parse(matrix)[0]]));
     const duplicate = await run([]);
     assert.notEqual(duplicate.code, 0);

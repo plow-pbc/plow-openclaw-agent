@@ -9,6 +9,15 @@ import { personalitySchema, personalityInstructions } from "../boot/personality.
 import { assertsPhrase } from "./assertions.ts";
 
 const args = process.argv.slice(2);
+const options = new Set(["--credentials", "--cases", "--case", "--model", "--repeat", "--output"]);
+const seen = new Set<string>();
+for (let index = 0; index < args.length; index += 2) {
+  const name = args[index];
+  if (!options.has(name)) throw new Error(`Unknown evaluation option: ${name}`);
+  if (seen.has(name)) throw new Error(`Duplicate evaluation option: ${name}`);
+  seen.add(name);
+  if (!args[index + 1] || args[index + 1].startsWith("--")) throw new Error(`Missing value for ${name}`);
+}
 function option(name: string) {
   const index = args.indexOf(name);
   if (index < 0) return undefined;

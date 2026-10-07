@@ -15,7 +15,7 @@ npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-
 npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
 
-The original matrix contains 22 scenarios. `experience-cases.json` adds 43
+The original matrix contains 22 scenarios. `experience-cases.json` adds 45
 English scenarios with explicit qualitative review criteria. Run both matrices.
 The second matrix tests ordinary wording versus requested diagnostics, direct
 replies during pause, delayed versus unknown delivery, absent-owner approval,
@@ -28,6 +28,8 @@ each repetition is a fresh completion with the same supplied conversation.
 It does not continue the previous response. Expected paid requests are selected
 models multiplied by selected scenarios multiplied by repetitions, with at most
 one transport retry per completion. Use a separate output path for each process.
+Unknown options, duplicate options, missing values and invalid selections fail
+before a model request; a typo must not silently expand a paid run.
 Reports preserve repetition numbers and SHA-256 hashes of the base, persona,
 scenario file and rendered prompt. Changed instructions require a fresh run;
 never relabel an old report as evidence for a new prompt.
