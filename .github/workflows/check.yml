@@ -13,7 +13,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.live_eval && 35 || 20 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,11 +47,17 @@ jobs:
           chmod 777 reports
           docker run --rm -e PLOW_API_BASE -e PLOW_AGENT_TOKEN \
             -v "$PWD/reports:/reports" plow-openclaw:test \
-            node /opt/plow/eval/run.ts --output /reports/eval-results.json
+            sh -c '
+              original_status=0
+              node /opt/plow/eval/run.ts --output /reports/eval-results.json || original_status=$?
+              experience_status=0
+              node /opt/plow/eval/run.ts --cases /opt/plow/eval/experience-cases.json --output /reports/experience-results.json || experience_status=$?
+              test "$original_status" -eq 0 && test "$experience_status" -eq 0
+            '
       - name: Preserve model evaluation results
         if: always() && github.event_name == 'workflow_dispatch' && inputs.live_eval
         uses: actions/upload-artifact@v4
         with:
           name: model-dialogues
-          path: reports/eval-results.json
+          path: reports/*.json
           if-no-files-found: error
