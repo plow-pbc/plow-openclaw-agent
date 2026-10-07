@@ -18,6 +18,14 @@ Review and merge from the bottom upward.
 | 10 | [Verify native gateway effects and recovery](https://github.com/plow-pbc/plow-openclaw-agent/pull/72) | Review tests/gateway-acceptance.ts and the existing Caddy-based preview before running the fixtures. |
 | 11 | [Add opt-in model dialogue evaluation](https://github.com/plow-pbc/plow-openclaw-agent/pull/76) | Review the human rubric, synthetic cases, literal assertion limits and explicitly paid workflow. |
 | 12 | [Builder SOPs, starters, and prebuilt default](https://github.com/plow-pbc/plow-openclaw-agent/pull/64) | Teaching material, release procedures, starter personas, and shared/default prompt clarity |
+| 13 | [Add strict repeatable model evaluation controls](https://github.com/plow-pbc/plow-openclaw-agent/pull/81) | Evaluator options, strict validation, reporting, retries and opt-in CI. |
+| 14 | [Retain connected-service context in compact default guidance](https://github.com/plow-pbc/plow-openclaw-agent/pull/82) | Default prompt compaction, full Latch headroom fixture and budget documentation. |
+| 15 | [Add English experience scenarios and qualitative validation SOP](https://github.com/plow-pbc/plow-openclaw-agent/pull/83) | Consolidated scenario decisions, duplicate-risk assertion regression and isolated acceptance SOP. |
+| 16 | [Run isolated dashboard ports through the trusted development proxy](https://github.com/plow-pbc/plow-openclaw-agent/pull/79) | Compose port isolation, Caddy origin ordering and spoofed-header fixtures. |
+| 17 | [Report notification gates without leaking recovery internals](https://github.com/plow-pbc/plow-openclaw-agent/pull/80) | Effective delivery gates, scheduler uncertainty and explicitly requested recovery diagnostics. |
+| 18 | Separate mailbox transport from available chat drafting | Verified capability context on every turn, missing-mailbox receipts and sender identity. |
+
+The three focused quality layers replace the broader [closed PR #78](https://github.com/plow-pbc/plow-openclaw-agent/pull/78). Its review and historical evidence remain available. The follow-up layers are drafts while qualitative and isolated live acceptance remain open. Their attached recordings state the captured source and whether they show an evidence page, a fixture or a real installation.
 
 ## Review each layer
 
