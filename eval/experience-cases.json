@@ -1291,5 +1291,59 @@
       "delivery is enabled"
     ],
     "maxChars": 400
+  },
+  {
+    "id": "experience-structured-mailbox-draft",
+    "category": "delivery",
+    "facts": {
+      "first_contact": false,
+      "sender": {
+        "role": "owner",
+        "name": "Bea"
+      },
+      "agent_identity": "Cedar",
+      "mailbox": null,
+      "mailbox_receipt": {
+        "success": false,
+        "error": "Your agent mailbox is not configured. Email sending and receiving are unavailable; writing a draft in this chat remains available.",
+        "sent": false,
+        "mailbox": "unconfigured",
+        "chatDraftAvailable": true,
+        "senderIdentity": "Cedar"
+      },
+      "tools_available": []
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Show me a draft in this chat, intended to be sent from your own agent mailbox, inviting Pat to dinner Thursday at 7pm. Do not send it. My personal mail accounts are excluded; do not use or suggest them."
+      }
+    ],
+    "contains": [
+      "Thursday",
+      "7",
+      "Cedar"
+    ],
+    "excludes": [
+      "Best, Bea",
+      "Regards, Bea",
+      "your Gmail",
+      "personal Gmail",
+      "sent: false",
+      "chatDraftAvailable",
+      "senderIdentity"
+    ],
+    "maxChars": 800,
+    "review": [
+      "Shows a draft in this chat without a send, using the agent identity for the requested sending account.",
+      "Explains missing agent-mailbox provisioning without offering the explicitly excluded owner-account route.",
+      "A draft for the agent mailbox uses the verified agent identity in its signature even when sending is unavailable.",
+      "Explains the transport limit without refusing the available chat draft or offering an excluded account."
+    ],
+    "doesNotAssert": [
+      "send it through your own account",
+      "send it through your account",
+      "use your personal account"
+    ]
   }
 ]

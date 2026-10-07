@@ -440,7 +440,11 @@ export default defineChannelPluginEntry({
         if (!cfg) return refuse("Plow configuration is unavailable.");
         const phone = plugin.config.resolveAccount(cfg, "chat");
         const mailbox = { ...phone, accountId: "email" };
-        if (!phone.emailLineUid) return refuse("You have no mailbox.");
+        const senderIdentity = persona || cfg.agents?.entries?.[context.agentId ?? "main"]?.identity?.name;
+        if (!phone.emailLineUid) return refuse("Your agent mailbox is not configured. Email sending and receiving are unavailable; writing a draft in this chat remains available.", {
+          sent: false, mailbox: "unconfigured", chatDraftAvailable: true,
+          ...(senderIdentity ? { senderIdentity } : {}),
+        });
         const chatUid = conversationUid(context);
         if (context.messageChannel !== "plow" || !context.sessionKey || !chatUid || !context.requesterSenderId
           || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")) return refuse("Sending email requires an active Plow message.");
@@ -502,7 +506,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. A requested chat draft is text, not a send; do not call this tool for it. Missing mailbox provisioning blocks sending and receiving, not drafting. Use the requested sender identity and respect excluded accounts. Mail in the owner's own name needs their requested account and approval in chat. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {

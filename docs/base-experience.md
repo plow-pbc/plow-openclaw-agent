@@ -177,6 +177,15 @@ or private owner DM. Mail has no history backfill. The owner's personal accounts
 must use their connected tools, with clear attribution rather than the agent's
 mailbox identity. Owner resources remain unavailable when the Mac is disconnected.
 
+An unconfigured agent mailbox blocks email transport, not text composition. A
+requested draft is written in the current chat with the requested sender's
+identity; it does not need a mailbox or authorize a send. The mailbox tool reports
+`sent: false`, `mailbox: "unconfigured"` and `chatDraftAvailable: true` without
+contacting Plow. It includes the configured agent identity when known. This
+receipt does not provision a mailbox or promise a later send. Never switch to an
+excluded owner account. Validate actual sending/receiving separately once the
+deployment has an agent mailbox and an owned test recipient.
+
 Inbound phone images support JPEG, PNG, GIF and WebP, at most four attachments and
 8 MiB each. Download is bounded to 15 seconds and refuses redirects. Native image
 understanding uses the configured image model, initially Sonnet, while GLM remains

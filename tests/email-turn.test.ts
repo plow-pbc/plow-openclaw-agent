@@ -103,6 +103,28 @@ async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
   if (prepared) await dispatch.delivery.deliver(prepared);
 }
 
+for (const action of ["list", "send"] as const) test(`unconfigured mailbox preserves chat drafting without network effects: ${action}`, async t => {
+  let requests = 0;
+  t.mock.method(globalThis, "fetch", async () => { requests++; throw new Error("Unexpected mailbox request"); });
+  const factories: ((context: object) => Tool)[] = [];
+  toolEntry.register({ registrationMode: "full", runtime: {}, logger: { info() {} }, on() {}, registerChannel() {},
+    registerTool(factory: (context: object) => Tool) { factories.push(toolFactory(factory)); },
+  });
+  const tool = factories.map(factory => factory({
+    config: { channels: { plow: { lineUid: "line" } }, agents: { entries: { main: { identity: { name: "Cedar" } } } } },
+    agentId: "main", agentAccountId: "chat", messageChannel: "plow", sessionKey: "agent:main:main",
+    nativeChannelId: "home", requesterSenderId: "plow-owner", senderIsOwner: true,
+  })).find(value => value.name === "plow_send_email")!;
+  const result = await tool.execute("mailbox-capability", { action, to: ["recipient@example.invalid"], subject: "Draft", body: "Text only" });
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    success: false,
+    error: "Your agent mailbox is not configured. Email sending and receiving are unavailable; writing a draft in this chat remains available.",
+    sent: false, mailbox: "unconfigured", chatDraftAvailable: true, senderIdentity: "Cedar",
+  });
+  assert.equal(requests, 0, "no listing, send or owner-account fallback is attempted");
+});
+
 for (const sender of [owner, outsider]) test(`email reminders cannot create undeliverable scheduled jobs: ${sender.role}`, async t => {
   const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CgrEQaD6.mjs");
   const { contexts } = await run(t, "email", [{ chat: "thread", sender }], async dispatch => {
