@@ -20,6 +20,7 @@ Choose the document that matches your task:
 | Review a base release's coverage and remaining acceptance work | [Readiness checklist](readiness.md) |
 | Review or maintain the dependent PRs | [Review stack](review-stack.md) |
 | Judge dialogue outputs and model-dependent behavior | [Evaluation rubric](../eval/README.md#human-release-review) |
+| Validate responses and a real isolated installation | [Experience validation SOP](experience-validation.md) |
 
 The tutorial uses local images and an isolated test line. The release procedures
 use immutable public image digests. A successful build establishes neither

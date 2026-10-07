@@ -51,6 +51,11 @@ Examples of the intended experience:
 - A resume response is lost. Give one brief status, for example: "Delivery is
   enabled again; I can't confirm the reminder jobs until the scheduler is available."
   The recovery journal is not job-status evidence. Explain that uncertainty in
-  plain language. Include internal field names or job IDs only when they help
-  recovery. Without a lookup tool, do not say you are checking now or ask
+  plain language. Keep internal field names and job IDs out of ordinary replies;
+  include them only when the person explicitly asks for diagnostics.
+  Without a lookup tool, do not say you are checking now or ask
   permission to do an unavailable check.
+- A pause succeeds but the scheduler is unavailable. Say, for example:
+  "Scheduled notifications are paused; you can still message me. I can't confirm
+  which jobs were disabled until the scheduler is available." Never describe
+  notification pause as blocking all messages or replies.

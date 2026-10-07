@@ -11,7 +11,26 @@ covered separately by the pinned gateway and runtime tests.
 ```sh
 npm run eval -- --credentials /PRIVATE/test-credentials --output /TMP/dialogues.json
 npm run eval -- --credentials /PRIVATE/test-credentials --case ambient-human-group
+npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-cases.json --output /TMP/experience.json
+npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
+
+The original matrix contains 22 scenarios. `experience-cases.json` adds 43
+English scenarios with explicit qualitative review criteria. Run both matrices.
+The second matrix tests ordinary wording versus requested diagnostics, direct
+replies during pause, delayed versus unknown delivery, absent-owner approval,
+bounded agent collaboration, missing scheduling tools, unsupported attachments,
+and the distinction between recorded deadlines and scheduled execution.
+
+`--model` selects one configured model ID, such as `z-ai/glm-5.2` or
+`anthropic/claude-sonnet-5`. Omit it to run both. `--repeat` accepts 1 through 5;
+each repetition is a fresh completion with the same supplied conversation.
+It does not continue the previous response. Expected paid requests are selected
+models multiplied by selected scenarios multiplied by repetitions, with at most
+one transport retry per completion. Use a separate output path for each process.
+Reports preserve repetition numbers and SHA-256 hashes of the base, persona,
+scenario file and rendered prompt. Changed instructions require a fresh run;
+never relabel an old report as evidence for a new prompt.
 
 Use a dedicated test credential. Reports contain synthetic inputs, model outputs,
 assertions, scenario facts, model settings, latency, usage and estimated cost,
@@ -57,3 +76,8 @@ implementation or invalid assertion as appropriate; rerun affected cases and
 the full suite when shared instructions change. Do not relax an assertion merely
 to accept a false claim. Follow with the isolated installation checks listed in
 [base experience](../docs/base-experience.md#operations-and-release-evidence).
+
+Record whether a review was performed by a person or assisted by a model. A model
+can help identify contradictions and poor wording, but its review is not human
+approval. The [experience validation SOP](../docs/experience-validation.md)
+connects the dialogue rubric to real installation checks and fault tests.

@@ -347,6 +347,11 @@
       "can't"
     ],
     "maxChars": 500,
+    "excludes": [
+      "nothing will reach you",
+      "no messages will reach you",
+      "all messages are paused"
+    ],
     "doesNotAssert": [
       "All jobs are stopped",
       "All reminders are stopped",
@@ -378,6 +383,10 @@
       "unconfirmed",
       "scheduler",
       "journal"
+    ],
+    "excludes": [
+      "suspendedJobs",
+      "synthetic-job-1"
     ],
     "doesNotAssert": [
       "All reminders are restored",
