@@ -15,7 +15,7 @@ npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-
 npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
 
-The original matrix contains 22 scenarios. `experience-cases.json` adds 46
+The original matrix contains 22 scenarios. `experience-cases.json` adds 43
 English scenarios with explicit qualitative review criteria. Run both matrices.
 Scenario and message objects reject unknown fields before any paid request.
 For example, `contain` and `maxCharacters` are invalid; use `contains` and
@@ -102,3 +102,9 @@ in those original cases, so there is one maintained definition per decision.
 Historical evaluation reports retain the earlier inputs and outputs. Duplicate
 risk is a required explanation of unknown delivery; naming that risk is not an
 offer to repeat a send. Specific resend-offer assertions remain in both matrices.
+
+Likewise, disconnected-Mac, unsupported-voice and missing-worker-input decisions
+live in `mac-offline`, `unsupported-media` and
+`worker-needs-input-through-coordinator`. Those original messages, facts and
+negative assertions are preserved, with the extended cases' review metadata
+and tighter limits. The deleted paraphrases remain in frozen historical reports.
