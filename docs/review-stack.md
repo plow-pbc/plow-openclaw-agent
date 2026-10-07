@@ -23,7 +23,7 @@ Review and merge from the bottom upward.
 | 15 | [Add English experience scenarios and qualitative validation SOP](https://github.com/plow-pbc/plow-openclaw-agent/pull/83) | Consolidated scenario decisions, duplicate-risk assertion regression and isolated acceptance SOP. |
 | 16 | [Run isolated dashboard ports through the trusted development proxy](https://github.com/plow-pbc/plow-openclaw-agent/pull/79) | Compose port isolation, Caddy origin ordering and spoofed-header fixtures. |
 | 17 | [Report notification gates without leaking recovery internals](https://github.com/plow-pbc/plow-openclaw-agent/pull/80) | Effective delivery gates, scheduler uncertainty and explicitly requested recovery diagnostics. |
-| 18 | Separate mailbox transport from available chat drafting | Verified capability context on every turn, missing-mailbox receipts and sender identity. |
+| 18 | [Separate mailbox transport from available chat drafting](https://github.com/plow-pbc/plow-openclaw-agent/pull/84) | Verified capability context on every turn, missing-mailbox receipts and sender identity. |
 
 The three focused quality layers replace the broader [closed PR #78](https://github.com/plow-pbc/plow-openclaw-agent/pull/78). Its review and historical evidence remain available. The follow-up layers are drafts while qualitative and isolated live acceptance remain open. Their attached recordings state the captured source and whether they show an evidence page, a fixture or a real installation.
 
