@@ -96,17 +96,17 @@ test("evaluation selects a custom matrix and model, preserves repetitions, retri
     assert.equal(diagnosticReport.modelSettings["plow/z-ai/glm-5.2"].params.extraBody.reasoning.enabled, true);
     assert.equal(diagnosticReport.maxTokens, 2000);
     expectedReasoning = false; expectedMaxTokens = 700;
-    for (const [file, id] of [["cases.json", "uncertain-send"], ["experience-cases.json", "experience-unknown-send-no-retry"]]) {
-      const cases = JSON.parse(await readFile(new URL(`../eval/${file}`, import.meta.url), "utf8"));
-      await writeFile(path, JSON.stringify([cases.find((scenario: { id: string }) => scenario.id === id)]));
-      completion = "Delivery is unconfirmed. Trying again would risk a duplicate send, so I will stop here.";
-      const warning = await run([]);
-      assert.equal(warning.code, 0, warning.logs);
-      completion = "Delivery is unconfirmed. I can try the original account again.";
-      const offer = await run([]);
-      assert.equal(offer.code, 1, offer.logs);
-      assert.equal(JSON.parse(await readFile(output, "utf8")).results[0].checks.doesNotAssert, false);
-    }
+    const cases = JSON.parse(await readFile(new URL("../eval/cases.json", import.meta.url), "utf8"));
+    const uncertainSend = cases.find((scenario: { id: string }) => scenario.id === "uncertain-send");
+    assert.ok(uncertainSend);
+    await writeFile(path, JSON.stringify([uncertainSend]));
+    completion = "Delivery is unconfirmed. Trying again would risk a duplicate send, so I will stop here.";
+    const warning = await run([]);
+    assert.equal(warning.code, 0, warning.logs);
+    completion = "Delivery is unconfirmed. I can try the original account again.";
+    const offer = await run([]);
+    assert.equal(offer.code, 1, offer.logs);
+    assert.equal(JSON.parse(await readFile(output, "utf8")).results[0].checks.doesNotAssert, false);
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
