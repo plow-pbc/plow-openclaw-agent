@@ -91,6 +91,14 @@ Inspect provider receipts for uncertain effects before authorizing another
 attempt. Retained memory protects the current process; preserve the state and
 repair storage before an operator restart.
 
+For the local Compose install, use `docker compose restart agent`. Its dashboard
+shares the agent's network namespace, so Compose also restarts `dev-dashboard`
+to attach it to the new namespace. Then verify agent health and reload the page.
+Restarting only the agent through raw `docker stop`/`docker start` does not apply
+that Compose dependency; reconnect the proxy with
+`docker compose restart dev-dashboard`. For backups, stop and start the complete
+project as shown below.
+
 ## SOP 3: Back up complete state
 
 **Outcome:** a stopped-state archive and its matching image reference.

@@ -2,24 +2,22 @@
 set -eo pipefail
 cd "$(dirname "$0")/.."
 image=${1:-plow-openclaw:test}
-backend= proxy=
+backend= proxy= restart_project= fixture_dir=
 cleanup() {
+  if [ -n "$restart_project" ]; then docker compose -p "$restart_project" -f "$fixture_dir/restart.json" down >/dev/null 2>&1 || true; fi
   if [ -n "$proxy" ]; then docker rm -f "$proxy" >/dev/null 2>&1 || true; fi
   if [ -n "$backend" ]; then docker rm -f "$backend" >/dev/null 2>&1 || true; fi
+  if [ -n "$fixture_dir" ]; then rm -rf "$fixture_dir"; fi
 }
 trap cleanup EXIT
 
-backend=$(docker run -d --network none "$image" node --input-type=module -e '
+backend_script='
   import {createServer} from "node:http";
   createServer((req,res)=>{res.setHeader("Content-Type","application/json");res.end(JSON.stringify(req.headers))}).listen(3000,"127.0.0.1");
-')
-for port in 3001 3016; do
-  env_args=()
-  if [ "$port" != 3001 ]; then env_args=(-e "PLOW_DEV_PORT=$port"); fi
-  proxy=$(docker run -d --network "container:$backend" "${env_args[@]}" \
-    -v "$PWD/dev/Caddyfile:/etc/caddy/Caddyfile:ro" \
-    caddy:2@sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f)
-  docker exec -i "$backend" node --input-type=module - "$port" <<'JS'
+'
+backend=$(docker run -d --network none "$image" node --input-type=module -e "$backend_script")
+probe_proxy() {
+  docker exec -i "$1" node --input-type=module - "$2" <<'JS'
 import assert from "node:assert/strict";
 import {setTimeout} from "node:timers/promises";
 const port=process.argv[2],url="http://127.0.0.1:3001/";
@@ -45,6 +43,39 @@ for(const origin of ["https://example.invalid",`http://127.0.0.1:${port=== "3001
 }
 console.log(`PASS development proxy port ${port}: accepted origins, foreign origins and spoofed headers`);
 JS
+}
+for port in 3001 3016; do
+  env_args=()
+  if [ "$port" != 3001 ]; then env_args=(-e "PLOW_DEV_PORT=$port"); fi
+  proxy=$(docker run -d --network "container:$backend" "${env_args[@]}" \
+    -v "$PWD/dev/Caddyfile:/etc/caddy/Caddyfile:ro" \
+    caddy:2@sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f)
+  probe_proxy "$backend" "$port"
   docker rm -f "$proxy" >/dev/null
   proxy=
 done
+
+fixture_dir=$(mktemp -d)
+cp compose.yml "$fixture_dir/compose.yml"
+mkdir "$fixture_dir/dev"
+cp dev/Caddyfile "$fixture_dir/dev/Caddyfile"
+printf 'AGENT_ID=\n' > "$fixture_dir/plow-credentials"
+PLOW_DEV_PORT=3016 docker compose -f "$fixture_dir/compose.yml" config --format json \
+  | docker run --rm --network none -i "$image" node -e '
+    let input="";
+    process.stdin.on("data",chunk=>input+=chunk);
+    process.stdin.on("end",()=>{
+      const source=JSON.parse(input);
+      console.log(JSON.stringify({services:{
+        agent:{image:process.argv[1],network_mode:"none",entrypoint:["node","--input-type=module","-e",process.argv[2]]},
+        "dev-dashboard":source.services["dev-dashboard"]
+      }}));
+    });
+  ' "$image" "$backend_script" > "$fixture_dir/restart.json"
+restart_project="plow-proxy-restart-$$"
+docker compose -p "$restart_project" -f "$fixture_dir/restart.json" up --no-build -d
+restart_backend=$(docker compose -p "$restart_project" -f "$fixture_dir/restart.json" ps -q agent)
+probe_proxy "$restart_backend" 3016
+docker compose -p "$restart_project" -f "$fixture_dir/restart.json" restart agent
+probe_proxy "$restart_backend" 3016
+printf 'PASS development proxy follows a Compose agent restart\n'

@@ -135,7 +135,7 @@ declaring a send successful solely because the model says it succeeded.
 | Email draft | Ask for a draft | Draft stays in the requesting chat; no email is sent |
 | Email send | Authorize mail to an owned test mailbox | Correct mailbox, thread, subject, identity and receipt; no duplicate final |
 | Email guest request | Request an effect beyond available guest tools | Approval request reaches the owner privately; no private data enters the email thread |
-| Restart | Restart during idle and synthetic traffic | Preferences, notes and controls persist; adopted sources do not repeat effects |
+| Restart | Restart during idle and synthetic traffic; locally run `docker compose restart agent` and reload the dashboard | Preferences, notes and controls persist; adopted sources do not repeat effects; the local proxy reconnects |
 | Full restore | Stop, archive complete state, restore into an empty volume | Same API root, line and chats retain scoped state and checkpoints |
 
 Use a controlled test participant for groups. Record whether it is a person or
