@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 import fs, { mkdir, readFile, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, invalidateContextualizedHistory, type Account, type Chat, type Message } from "../plugin/transport.ts";
+import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, invalidateContextualizedHistory, postMessage, isSilent, type Account, type Chat, type Message } from "../plugin/transport.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat" } as Account;
 const message = (uid: string) => ({ uid }) as Message;
@@ -965,4 +965,41 @@ test("only the phone listener records when the agent first listened", async t =>
   const phone = abortAfter(200);
   await listen({ ...account, apiBase, lineUid: "line" }, phone.signal, () => {}, async () => "completed");
   assert.ok(Number.isFinite(Date.parse(await readFile(`${root}/plow-listening-since`, "utf8"))));
+});
+
+test("a reply ending in NO_REPLY is never posted, and heartbeat sends say what they are", async t => {
+  process.env.PLOW_AGENT_TOKEN = "test-token";
+  const posts: { url: string; kind: string | null; body: unknown }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    posts.push({ url, kind: new Headers(init.headers).get("Plow-Message-Kind"), body: JSON.parse(String(init.body)) });
+    return Response.json({ uid: "msg_1" });
+  });
+  for (const silent of ["No active subagents, nothing pending.\n\nNO_REPLY", "NO_REPLY", "Done here.\n\n*NO_REPLY*", "All clear.\n.NO_REPLY\n"]) {
+    assert.deepEqual(await postMessage(account, "chat", silent), { channel: "plow", messageId: "", outcome: "not_sent" });
+  }
+  assert.equal(posts.length, 0, "silence reaches no one");
+  assert.deepEqual(await postMessage(account, "chat", "I'll reply with a bare NO_REPLY when there's nothing new."), { channel: "plow", messageId: "msg_1" });
+  assert.deepEqual(await postMessage(account, "chat", "1. You: hi\n2. Me: NO_REPLY\n3. You: test"), { channel: "plow", messageId: "msg_1" }, "a transcript quoting the marker still sends");
+  await postMessage(account, "chat", "Your recap is ready.", [], "heartbeat");
+  assert.deepEqual(posts.map(p => p.kind), [null, null, "heartbeat"]);
+  assert.deepEqual(posts[2], { url: "http://fixture/v1/chats/chat/messages", kind: "heartbeat", body: { body: "Your recap is ready.", attachment_uids: [] } });
+});
+
+// Shared verbatim with hermes-plugin-plow (tests/test_adapter.py) and Plow's server-side guard. Keep the
+// three lists identical.
+const SILENCE_MARKER_CASES: [string, boolean][] = [
+  ["No active subagents, nothing pending.\n\nNO_REPLY", true],
+  ["NO_REPLY", true],
+  ["*NO_REPLY*", true],
+  [".NO_REPLY", true],
+  ["`NO_REPLY`", true],
+  ["Done here.\n\n_NO_REPLY_\n", true],
+  ["NO_REPLY!", false],
+  ["I'll reply with a bare NO_REPLY when there's nothing new.", false],
+  ["1. You: hi\n2. Me: NO_REPLY\n3. You: test", false],
+  ["", false],
+];
+
+test("the silence marker follows Hermes' grammar, case for case", () => {
+  for (const [text, silent] of SILENCE_MARKER_CASES) assert.equal(isSilent(text), silent, JSON.stringify(text));
 });
