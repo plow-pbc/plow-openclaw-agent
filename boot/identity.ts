@@ -25,7 +25,15 @@ export async function identityFromApi(base: string, token: string): Promise<Iden
       continue;
     }
     if (response.ok) {
-      const identity = await response.json() as Identity;
+      let identity: Identity;
+      try {
+        identity = await response.json() as Identity;
+      } catch (error) {
+        // A body that arrived but is not JSON is a real answer; a body cut off in transit is not.
+        if (error instanceof SyntaxError) throw error;
+        await retry(`response body failed: ${describe(error)}`);
+        continue;
+      }
       if (!identity.line.uid) throw new Error("Identity is missing line uid");
       return identity;
     }
