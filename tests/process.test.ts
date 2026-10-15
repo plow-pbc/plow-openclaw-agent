@@ -6,26 +6,38 @@ import { setImmediate } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { startGateway } from "../boot/process.ts";
 
-for (const ending of ["bridge", "signal", "startup-failure", "restart-shutdown"] as const) test(`supervisor handles child exit: ${ending}`, async t => {
-  const previousCode = process.exitCode;
+type FakeChild = EventEmitter & { args: string[]; kill: (signal: string) => void; signals: string[] };
+
+function fakeSupervisor(t: TestContext, { bridgeFailsToStart = false } = {}) {
   const listeners = process.listenerCount("SIGTERM");
-  const children: (EventEmitter & { kill: (signal: string) => void; signals: string[] })[] = [];
+  const previousCode = process.exitCode;
+  const bridgeToken = process.env.PLOW_MCP_BRIDGE_TOKEN;
+  process.env.PLOW_MCP_BRIDGE_TOKEN = "supervisor-fixture-secret";
+  const children: FakeChild[] = [];
   const options: SpawnOptions[] = [];
-  t.mock.method(console, "error", () => {});
+  const errors: string[] = [];
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  t.mock.method(console, "error", (line: unknown) => { errors.push(String(line)); });
   t.mock.method(childProcess, "spawn", (_command: string, args: string[], opts: SpawnOptions) => {
-    const child = Object.assign(new EventEmitter(), { signals: [] as string[], kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); } });
+    const child = Object.assign(new EventEmitter(), { args, signals: [] as string[], kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); } });
     children.push(child); options.push(opts);
-    if (args[0].endsWith("mcp-bridge.js")) queueMicrotask(() => ending === "startup-failure" && children.length === 1 ? (child.emit("error", new Error("spawn failed")), child.emit("close", -2, null)) : child.emit("message", "ready"));
+    if (args[0].endsWith("mcp-bridge.js")) queueMicrotask(() => bridgeFailsToStart && children.length === 1 ? (child.emit("error", new Error("spawn failed")), child.emit("close", -2, null)) : child.emit("message", "ready"));
     return child;
   });
   syncBuiltinESMExports();
-  t.after(() => { process.emit("SIGTERM"); t.mock.restoreAll(); syncBuiltinESMExports(); process.exitCode = previousCode; });
-  const bridgeToken = process.env.PLOW_MCP_BRIDGE_TOKEN;
-  process.env.PLOW_MCP_BRIDGE_TOKEN = "supervisor-fixture-secret";
   t.after(() => {
+    process.emit("SIGTERM");
+    t.mock.timers.reset(); t.mock.restoreAll(); syncBuiltinESMExports();
+    process.exitCode = previousCode;
     if (bridgeToken === undefined) delete process.env.PLOW_MCP_BRIDGE_TOKEN;
     else process.env.PLOW_MCP_BRIDGE_TOKEN = bridgeToken;
   });
+  const gateways = () => children.filter(child => child.args[0] === "/app/openclaw.mjs");
+  return { children, options, errors, gateways, listeners, previousCode };
+}
+
+for (const ending of ["bridge", "signal", "startup-failure", "restart-shutdown"] as const) test(`supervisor handles child exit: ${ending}`, async t => {
+  const { children, options, listeners, previousCode } = fakeSupervisor(t, { bridgeFailsToStart: ending === "startup-failure" });
   const starting = startGateway(true, "https://relay/mcp");
   assert.equal(children.length, 1, "gateway waits for bridge readiness");
   assert.equal(await starting, children[1]);
@@ -34,7 +46,7 @@ for (const ending of ["bridge", "signal", "startup-failure", "restart-shutdown"]
   if (ending === "bridge" || ending === "startup-failure") {
     if (ending === "bridge") children[0].emit("close", null, "SIGKILL");
     assert.deepEqual(children[1].signals, [], "bridge death must not stop the gateway");
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    t.mock.timers.tick(1_000);
     assert.equal(options[2].env!.PLOW_MCP_BRIDGE_TOKEN, "supervisor-fixture-secret");
     assert.equal(children.length, 3, "boot restarts the bridge");
     assert.deepEqual(children[1].signals, [], "gateway survives the restart");
@@ -44,7 +56,8 @@ for (const ending of ["bridge", "signal", "startup-failure", "restart-shutdown"]
   } else if (ending === "restart-shutdown") {
     children[0].emit("close", 1, null);
     process.emit("SIGTERM");
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    t.mock.timers.tick(1_000);
+    await setImmediate();
     assert.equal(children.length, 2, "shutdown cancels a pending bridge restart");
     assert.deepEqual(children[1].signals, ["SIGTERM"]);
   } else {
@@ -55,26 +68,6 @@ for (const ending of ["bridge", "signal", "startup-failure", "restart-shutdown"]
   assert.equal(process.listenerCount("SIGTERM"), listeners);
   assert.equal(process.exitCode, previousCode);
 });
-
-type FakeChild = EventEmitter & { args: string[]; kill: (signal: string) => void; signals: string[] };
-
-function fakeSupervisor(t: TestContext) {
-  const listeners = process.listenerCount("SIGTERM");
-  const children: FakeChild[] = [];
-  const errors: string[] = [];
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
-  t.mock.method(console, "error", (line: unknown) => { errors.push(String(line)); });
-  t.mock.method(childProcess, "spawn", (_command: string, args: string[]) => {
-    const child = Object.assign(new EventEmitter(), { args, signals: [] as string[], kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); } });
-    children.push(child);
-    if (args[0].endsWith("mcp-bridge.js")) queueMicrotask(() => child.emit("message", "ready"));
-    return child;
-  });
-  syncBuiltinESMExports();
-  t.after(() => { process.emit("SIGTERM"); t.mock.timers.reset(); t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const gateways = () => children.filter(child => child.args[0] === "/app/openclaw.mjs");
-  return { children, errors, gateways, listeners };
-}
 
 for (const [code, signal] of [[0, null], [1, null], [null, "SIGKILL"]] as const) test(`supervisor restarts a gateway that exits code=${code} signal=${signal}`, async t => {
   const { children, errors, gateways } = fakeSupervisor(t);
