@@ -115,9 +115,11 @@ Workspace `BOOTSTRAP.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` are also boot-
 and removed at every startup; `AGENTS.md` is boot-rendered.
 Do not store durable agent state in these workspace files.
 
-The gateway starts after one bounded identity lookup, even before the owner has a
-chat. Identity lookup tolerates 401/403 for 120 seconds and retries network/429/5xx
-failures ten times. Invalid identity or exhausted boot retries leave the
+The gateway starts after the identity lookup, even before the owner has a
+chat. Identity lookup tolerates 401/403 for 120 seconds and retries network
+failures, interrupted response bodies, 429 and 5xx for as long as they last,
+backing off from 3 seconds to a minute and logging each cause. A 401/403 past
+the 120 seconds, a 404 or other 4xx, or an invalid identity leaves the
 container running with a diagnostic error. The plugin subscribes before listing
 chats, discovers the active owner DM from its roster, and buffers messages during
 baseline recovery. Multiple owner DMs among the received listing and live chats
