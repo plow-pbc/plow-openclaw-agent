@@ -3,10 +3,10 @@ import childProcess, { type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import { setImmediate } from "node:timers/promises";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { startGateway } from "../boot/process.ts";
 
-for (const ending of ["gateway", "bridge", "signal", "startup-failure", "restart-shutdown"] as const) test(`supervisor handles child exit: ${ending}`, async t => {
+for (const ending of ["bridge", "signal", "startup-failure", "restart-shutdown"] as const) test(`supervisor handles child exit: ${ending}`, async t => {
   const previousCode = process.exitCode;
   const listeners = process.listenerCount("SIGTERM");
   const children: (EventEmitter & { kill: (signal: string) => void; signals: string[] })[] = [];
@@ -48,11 +48,81 @@ for (const ending of ["gateway", "bridge", "signal", "startup-failure", "restart
     assert.equal(children.length, 2, "shutdown cancels a pending bridge restart");
     assert.deepEqual(children[1].signals, ["SIGTERM"]);
   } else {
-    if (ending === "signal") process.emit("SIGTERM");
-    else children[1].emit("close", 0, null);
+    process.emit("SIGTERM");
     await setImmediate();
-    assert.ok(children[ending === "gateway" ? 0 : 1].signals.includes("SIGTERM"));
+    assert.ok(children[1].signals.includes("SIGTERM"));
   }
   assert.equal(process.listenerCount("SIGTERM"), listeners);
   assert.equal(process.exitCode, previousCode);
+});
+
+type FakeChild = EventEmitter & { args: string[]; kill: (signal: string) => void; signals: string[] };
+
+function fakeSupervisor(t: TestContext) {
+  const listeners = process.listenerCount("SIGTERM");
+  const children: FakeChild[] = [];
+  const errors: string[] = [];
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  t.mock.method(console, "error", (line: unknown) => { errors.push(String(line)); });
+  t.mock.method(childProcess, "spawn", (_command: string, args: string[]) => {
+    const child = Object.assign(new EventEmitter(), { args, signals: [] as string[], kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); } });
+    children.push(child);
+    if (args[0].endsWith("mcp-bridge.js")) queueMicrotask(() => child.emit("message", "ready"));
+    return child;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { process.emit("SIGTERM"); t.mock.timers.reset(); t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const gateways = () => children.filter(child => child.args[0] === "/app/openclaw.mjs");
+  return { children, errors, gateways, listeners };
+}
+
+for (const [code, signal] of [[0, null], [1, null], [null, "SIGKILL"]] as const) test(`supervisor restarts a gateway that exits code=${code} signal=${signal}`, async t => {
+  const { children, errors, gateways } = fakeSupervisor(t);
+  await startGateway(true, "https://relay/mcp");
+  gateways()[0].emit("close", code, signal);
+  assert.equal(errors.at(-1), `plow-boot: gateway exited code=${code} signal=${signal}; restarting in 1s`);
+  t.mock.timers.tick(999);
+  assert.equal(gateways().length, 1);
+  t.mock.timers.tick(1);
+  assert.equal(gateways().length, 2, "the gateway comes back");
+  assert.deepEqual(children[0].signals, [], "the bridge keeps running");
+});
+
+test("supervisor backs off gateway restarts to a minute, and resets after a healthy run", async t => {
+  const { errors, gateways } = fakeSupervisor(t);
+  await startGateway(true, "https://relay/mcp");
+  const delays: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    gateways().at(-1)!.emit("close", null, "SIGKILL");
+    delays.push(errors.at(-1)!.split("restarting in ")[1]);
+    t.mock.timers.tick(60_000);
+  }
+  assert.deepEqual(delays, ["1s", "2s", "4s", "8s", "16s", "32s", "60s", "60s"]);
+  assert.equal(gateways().length, 9);
+  t.mock.timers.tick(5 * 60_000);
+  gateways().at(-1)!.emit("close", null, "SIGKILL");
+  assert.match(errors.at(-1)!, /restarting in 1s$/);
+});
+
+test("supervisor shutdown cancels a pending gateway restart", async t => {
+  const { errors, gateways, listeners } = fakeSupervisor(t);
+  await startGateway(true);
+  gateways()[0].emit("close", 1, null);
+  process.emit("SIGTERM");
+  t.mock.timers.tick(60_000);
+  assert.equal(gateways().length, 1, "no gateway after shutdown");
+  assert.equal(process.listenerCount("SIGTERM"), listeners);
+  assert.equal(errors.length, 1);
+});
+
+test("supervisor logs a gateway exit during shutdown and does not restart it", async t => {
+  const { children, errors, gateways, listeners } = fakeSupervisor(t);
+  await startGateway(true, "https://relay/mcp");
+  process.emit("SIGTERM");
+  await setImmediate();
+  assert.deepEqual(children.map(child => child.signals), [["SIGTERM"], ["SIGTERM"]]);
+  assert.deepEqual(errors, ["plow-boot: gateway exited code=null signal=SIGTERM"]);
+  t.mock.timers.tick(60_000);
+  assert.equal(gateways().length, 1);
+  assert.equal(process.listenerCount("SIGTERM"), listeners);
 });
