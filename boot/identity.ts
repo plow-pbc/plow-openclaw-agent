@@ -1,18 +1,27 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Identity } from "./config.ts";
 
+const RETRY_MS = 3_000;
+const RETRY_MAX_MS = 60_000;
+
+// A network failure, 429 or 5xx is retried for as long as it lasts: nothing restarts boot after it gives up.
+// Only an answer about the credential itself (401/403 past the grace period, 404, other 4xx) ends boot.
 export async function identityFromApi(base: string, token: string): Promise<Identity> {
   const authDeadline = Date.now() + 120_000;
-  let failures = 0;
+  let delay = RETRY_MS;
+  const retry = async (reason: string) => {
+    console.log(`plow-boot: identity ${reason}; retrying in ${delay / 1000}s`);
+    await sleep(delay);
+    delay = Math.min(delay * 2, RETRY_MAX_MS);
+  };
   for (;;) {
     let response: Response;
     try {
       response = await fetch(`${base}/v1/agents/me`, {
         headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
       });
-    } catch {
-      if (++failures === 10) throw new Error("Identity request failed after 10 attempts");
-      await sleep(3_000);
+    } catch (error) {
+      await retry(`request failed: ${describe(error)}`);
       continue;
     }
     if (response.ok) {
@@ -26,8 +35,17 @@ export async function identityFromApi(base: string, token: string): Promise<Iden
       continue;
     }
     if (response.status === 429 || response.status >= 500) {
-      if (++failures < 10) { await sleep(3_000); continue; }
+      await retry(`HTTP ${response.status}`);
+      continue;
     }
     throw new Error(`Identity request refused: HTTP ${response.status}`);
   }
+}
+
+// fetch reports every network failure as "fetch failed"; the cause says which (DNS, refused, reset, timeout).
+function describe(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause as (Error & { code?: string }) | undefined;
+  if (!(cause instanceof Error)) return error.message;
+  return `${error.message} (${[cause.code, cause.message].filter(Boolean).join(": ")})`;
 }
