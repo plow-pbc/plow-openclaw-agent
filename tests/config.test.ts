@@ -84,6 +84,8 @@ test("GLM falls back to Sonnet on the Plow provider with explicit capacity and p
     cost: { input: 2.00, output: 10.00 },
   }]);
   assert.equal(config.agents.defaults.timeoutSeconds, 600);
+  // plow#2347: no heartbeat polls billed to an owner who isn't texting.
+  assert.deepEqual(config.agents.defaults.heartbeat, { every: "0m" });
 });
 
 test("the configured Plow provider permits an operator-controlled private endpoint", () => {
@@ -191,6 +193,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.messages.inbound = { debounceMs: 800, byChannel: { plow: 1, signal: 500 } };
   old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
+  delete old.agents.defaults.heartbeat; // rendered before plow#2347, on OpenClaw's 30-minute default
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
@@ -204,6 +207,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
+  assert.deepEqual(JSON5.parse(await readFile(owner.agents.defaults.heartbeat.$include, "utf8")), { every: "0m" });
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
   assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });

@@ -46,6 +46,11 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
       // A phone turn, not OpenClaw's 48-hour default: a stuck run blocks its chat.
       timeoutSeconds: 600,
+      // Off. OpenClaw's default heartbeat polls every 30 minutes with the whole
+      // conversation, uncached, for a NO_REPLY nobody sees, billed to the owner:
+      // about $90 a day across idle agents (plow#2347). "0m" is its off switch;
+      // reminders and crons run on OpenClaw's cron path, not this one.
+      heartbeat: { every: "0m" },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
       // Model params must not become a legacy model-selection allowlist.
       modelPolicy: {},
@@ -86,6 +91,7 @@ const ownedPaths = [
   ["inbound-debounce", ["messages", "inbound", "byChannel", "plow"]],
   ["identity", ["agents", "entries", "main", "identity"]],
   ["run-timeout", ["agents", "defaults", "timeoutSeconds"]],
+  ["heartbeat", ["agents", "defaults", "heartbeat"]],
   ["session", ["session"]],
   ["memory", ["memory"]],
 ] as const;
