@@ -297,6 +297,10 @@ See [development checks and pinned source contracts](docs/development.md).
 
 When bumping the base image:
 
+- Pin the latest OpenClaw extended-stable release (`YYYY.M.33`, cut roughly
+  monthly), not the newest regular release.
+- Remap the tests' hashed `/app/dist/*.mjs` imports: chunk names and minified
+  export aliases change every release.
 - Run the in-image checks and offline gateway probe.
 - Live-check a tool returning `details: { silent: true }` on the local stack:
   its run must send no automatic final reply, explicit tool sends must still
