@@ -37,4 +37,6 @@ child.stderr!.on("data", chunk => { process.stderr.write(chunk); observe(chunk);
 child.on("exit", code => {
   clearTimeout(timeout);
   if (!succeeded || code !== 0) process.exitCode = 1;
+  // The supervisor would restart a gateway that died before ready; stop it so the probe fails now.
+  if (!succeeded && !timedOut) process.kill(process.pid, "SIGTERM");
 });
