@@ -5,12 +5,12 @@ import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 // Exercise custody and restart recovery in the pinned runtime, including its SQLite queue.
-const { t: createEmptyPluginRegistry } = await import("/app/dist/registry-empty--vb91VWS.mjs");
-const { w: setActivePluginRegistry, r: clearActivePluginRegistry } = await import("/app/dist/runtime-B0mfNCRA.mjs");
-const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-CJZlG1Ii.mjs");
-const { T: setReplyPayloadMetadata } = await import("/app/dist/reply-payload-B2ZQhznY.mjs");
-const { h: replaceSessionEntry, s: loadSessionEntry } = await import("/app/dist/session-accessor.sqlite-entry-UCl9kr-O.mjs");
-const { recoverRestartAbortedMainSessions } = await import("/app/dist/main-session-restart-recovery-CZEAhJMd.mjs");
+const { t: createEmptyPluginRegistry } = await import("/app/dist/registry-empty-BTjzcMW2.mjs");
+const { w: setActivePluginRegistry, r: clearActivePluginRegistry } = await import("/app/dist/runtime-DdNO4Cej.mjs");
+const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-JZaEXZnM.mjs");
+const { T: setReplyPayloadMetadata } = await import("/app/dist/reply-payload-DBtQZ6PK.mjs");
+const { m: replaceSessionEntry, s: loadSessionEntry } = await import("/app/dist/session-accessor.sqlite-entry-BAKLOSLy.mjs");
+const { recoverRestartAbortedMainSessions } = await import("/app/dist/main-session-restart-recovery-C_P7oqUn.mjs");
 
 test("an overlapping turn after the outbound row does not owe a delivery notice", async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
