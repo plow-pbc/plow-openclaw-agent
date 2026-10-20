@@ -3,7 +3,7 @@
 The image pins the runtime and SDK. CI type-checks boot, plugin and build sources,
 runs all Node tests against that image, and boots the real offline gateway probe.
 Tests use local fixtures and need no Plow credentials. Type checking uses the
-published OpenClaw 2026.9.6 declarations because the runtime image omits them;
+published OpenClaw 2026.9.33 declarations because the runtime image omits them;
 runtime tests use the SDK shipped in the pinned image. The plugin is an npm
 workspace: CI and the image use the root lock, with development, peer and optional
 dependencies omitted from the image install.
@@ -20,19 +20,19 @@ docker run --rm --network none plow-openclaw:test /opt/plow/probe
 
 ## Pinned OpenClaw contracts
 
-The Dockerfile pins OpenClaw `2026.9.6` by image digest. These source links target
-its release commit `eb377ac59e6c9fd6c7705028034812becf00271b`.
+The Dockerfile pins OpenClaw `2026.9.33` by image digest. These source links target
+its release commit `5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82`.
 
 | Contract | Source |
 | --- | --- |
-| Non-root runtime and foreground launcher | [Dockerfile](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/Dockerfile) |
-| Config environment references | [Environment substitution](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/env-substitution.ts) |
-| Private provider endpoint opt-in | [Provider transport](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/agents/provider-transport-fetch.ts) |
-| Channel registration and inbound dispatch | [Plugin entry](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/plugin-sdk/core.ts), [turn contract](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/channels/turn/types.ts) |
-| Session isolation and owner binding | [Routing schema](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/zod-schema.agents.ts) |
-| Tool registration, requester and deny policy | [Tool API](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/plugins/plugin-api.types.ts), [hook context](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/plugins/hook-types.ts), [policy schema](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/zod-schema.agent-runtime.ts) |
-| MCP configuration | [MCP server type](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/config/types.mcp.ts) |
-| Native MCP catalog omits server instructions | [Catalog construction](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/src/agents/agent-bundle-mcp-runtime.ts) |
+| Non-root runtime and foreground launcher | [Dockerfile](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/Dockerfile) |
+| Config environment references | [Environment substitution](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/env-substitution.ts) |
+| Private provider endpoint opt-in | [Provider transport](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/agents/provider-transport-fetch.ts) |
+| Channel registration and inbound dispatch | [Plugin entry](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/plugin-sdk/core.ts), [turn contract](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/channels/turn/types.ts) |
+| Session isolation and owner binding | [Routing schema](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/zod-schema.agents.ts) |
+| Tool registration, requester and deny policy | [Tool API](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/plugins/plugin-api.types.ts), [hook context](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/plugins/hook-types.ts), [policy schema](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/zod-schema.agent-runtime.ts) |
+| MCP configuration | [MCP server type](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/types.mcp.ts) |
+| Native MCP catalog omits server instructions | [Catalog construction](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/agents/agent-bundle-mcp-runtime.ts) |
 
 ## Defaults we inherit
 
@@ -52,8 +52,8 @@ owner-authored model-selection policy instead.
 
 Plow prepares messages in arrival order within each chat, releasing the chat lane
 at the dispatch call rather than model completion, and sets the global queue mode
-to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/bot-core.ts#L257)
-also orders ordinary messages using [conversation keys](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/sequential-key.ts#L250).
+to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/extensions/telegram/src/bot-core.ts#L257)
+also orders ordinary messages using [conversation keys](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/extensions/telegram/src/sequential-key.ts#L250).
 Before dispatch, Plow waits 2 seconds for same-sender text bubbles in a chat
 (`messages.inbound.byChannel.plow`). A speaker change, command or media message
 flushes the pending burst immediately; chat trust is refreshed before dispatch.
@@ -81,7 +81,7 @@ deferred sources remain pending until the host adopts them. Terminal commands
 without model runs acknowledge at completion. Uncertain delivery is not blindly
 replayed, but later explicit model sends are allowed. There is no run-wide latch.
 
-A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
+A state database already opened by 2026.9.33 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local
 profiles, sessions and memory); do not attempt an in-place database downgrade.
 Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-checkpoints`,

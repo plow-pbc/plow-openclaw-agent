@@ -3,10 +3,10 @@ import { test } from "node:test";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-const { t: createEmptyPluginRegistry } = await import("/app/dist/registry-empty--vb91VWS.mjs");
-const { w: setActivePluginRegistry, r: clearActivePluginRegistry } = await import("/app/dist/runtime-B0mfNCRA.mjs");
-const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-CJZlG1Ii.mjs");
-const { t: createHookRunner } = await import("/app/dist/hooks-CKanWLsK.mjs");
+const { t: createEmptyPluginRegistry } = await import("/app/dist/registry-empty-BTjzcMW2.mjs");
+const { w: setActivePluginRegistry, r: clearActivePluginRegistry } = await import("/app/dist/runtime-DdNO4Cej.mjs");
+const { n: dispatchAssembledChannelTurn } = await import("/app/dist/lifecycle-JZaEXZnM.mjs");
+const { t: createHookRunner } = await import("/app/dist/hooks-BLmOByfb.mjs");
 const { default: discoveryEntry } = await import("../plugin/index.ts?discovery");
 
 for (const runIdSource of ["event", "context"]) for (const outcome of ["silent", "cleared", "silenced-again"]) test(`tool silence via ${runIdSource}: ${outcome}, with explicit sends, overlapping runs, and the next turn`, async t => {

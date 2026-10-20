@@ -103,7 +103,7 @@ async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
 }
 
 for (const sender of [owner, outsider]) test(`email reminders cannot create undeliverable scheduled jobs: ${sender.role}`, async t => {
-  const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CgrEQaD6.mjs");
+  const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CUjWTbS4.mjs");
   const { contexts } = await run(t, "email", [{ chat: "thread", sender }], async dispatch => {
     await final(dispatch, { text: "Ask for the reminder in a phone conversation." });
   });

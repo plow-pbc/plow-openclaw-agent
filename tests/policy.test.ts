@@ -7,8 +7,8 @@ import { renderConfig } from "../boot/config.ts";
 import { probeIdentity } from "../boot/probe-fixture.ts";
 
 test("the messaging agent can schedule durable reminders with the native scheduler", async () => {
-  const { resolveToolProfilePolicy, mergeAlsoAllowPolicy } = await import("/app/dist/tool-policy-BFtbULCH.mjs");
-  const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CgrEQaD6.mjs");
+  const { resolveToolProfilePolicy, mergeAlsoAllowPolicy } = await import("/app/dist/tool-policy-WAMgDI9G.mjs");
+  const { filterToolsByPolicy } = await import("/app/dist/tool-policy-match-CUjWTbS4.mjs");
   const { tools } = renderConfig(probeIdentity, "http://fixture");
   const profile = mergeAlsoAllowPolicy(resolveToolProfilePolicy(tools.profile), tools.alsoAllow);
   const available = filterToolsByPolicy([{ name: "automations" }, { name: "message" }, { name: "ask_user" }], {

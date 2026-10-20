@@ -5,7 +5,7 @@
   "devDependencies": {
     "@types/node": "26.6.2",
     "@types/ws": "8.18.1",
-    "openclaw": "2026.9.6",
+    "openclaw": "2026.9.33",
     "typescript": "6.0.3"
   },
   "workspaces": [
