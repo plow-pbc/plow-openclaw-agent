@@ -11,6 +11,7 @@ function mockClock(t: TestContext) {
 
 for (const status of [401, 403, 429, 503, "network"]) test(`identity retries temporary failure: ${status}`, async t => {
   mockClock(t);
+  t.mock.method(console, "log", () => {});
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => {
     if (++calls > 1) return Response.json({ line: { uid: "line" }, chats: [] });
@@ -24,32 +25,71 @@ for (const status of [401, 403, 429, 503, "network"]) test(`identity retries tem
   assert.equal(calls, 2);
 });
 
-test("identity stops retrying unauthorized credentials at 120 seconds", async t => {
+for (const status of [401, 403]) test(`identity parks on HTTP ${status} after 120 seconds, even after transient failures`, async t => {
   mockClock(t);
-  t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 401 }));
-  const result = assert.rejects(identityFromApi("http://fixture", "test-token"), /HTTP 401/);
-  for (let i = 0; i <= 40; i++) {
-    await new Promise(resolve => setImmediate(resolve));
-    t.mock.timers.tick(3_000);
-  }
-  await result;
-});
-
-for (const status of [429, 503, "network"]) test(`identity bounds transient retries: ${status}`, async t => {
-  mockClock(t);
+  t.mock.method(console, "log", () => {});
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => {
-    calls++;
-    if (status === "network") throw new TypeError("fetch failed");
+    if (++calls <= 3) throw new TypeError("fetch failed");
     return new Response(null, { status });
   });
-  const result = assert.rejects(identityFromApi("http://fixture", "test-token"));
-  for (let i = 0; i < 10; i++) {
+  const result = assert.rejects(identityFromApi("http://fixture", "test-token"), new RegExp(`refused: HTTP ${status}`));
+  for (let i = 0; i <= 60; i++) {
     await new Promise(resolve => setImmediate(resolve));
     t.mock.timers.tick(3_000);
   }
   await result;
-  assert.equal(calls, 10);
+  const parkedAt = calls;
+  t.mock.timers.tick(10 * 60_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, parkedAt, "a parked boot stops asking");
+});
+
+test("identity parks on HTTP 404 at once", async t => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return new Response(null, { status: 404 }); });
+  await assert.rejects(identityFromApi("http://fixture", "test-token"), /refused: HTTP 404/);
+  assert.equal(calls, 1);
+});
+
+for (const status of [429, 503, "network"]) test(`identity keeps retrying a transient failure, backing off to a minute: ${status}`, async t => {
+  mockClock(t);
+  const logs: string[] = [];
+  t.mock.method(console, "log", (line: string) => { logs.push(line); });
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    if (++calls > 30) return Response.json({ line: { uid: "line" }, chats: [] });
+    if (status === "network") throw new TypeError("fetch failed", { cause: Object.assign(new Error("getaddrinfo ENOTFOUND fixture"), { code: "ENOTFOUND" }) });
+    return new Response(null, { status });
+  });
+  const result = identityFromApi("http://fixture", "test-token");
+  for (let i = 0; i < 30; i++) {
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.tick(60_000);
+  }
+  assert.equal((await result).line.uid, "line");
+  assert.equal(calls, 31);
+  assert.deepEqual(logs.slice(0, 7).map(line => line.split("retrying in ")[1]), ["3s", "6s", "12s", "24s", "48s", "60s", "60s"]);
+  const why = status === "network" ? "request failed: fetch failed (ENOTFOUND: getaddrinfo ENOTFOUND fixture)" : `HTTP ${status}`;
+  assert.equal(logs[0], `plow-boot: identity ${why}; retrying in 3s`, "each retry says why");
+});
+
+test("identity retries a 200 whose body is cut off in transit", async t => {
+  mockClock(t);
+  const logs: string[] = [];
+  t.mock.method(console, "log", (line: string) => { logs.push(line); });
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    if (++calls > 1) return Response.json({ line: { uid: "line" }, chats: [] });
+    const reset = new TypeError("terminated", { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
+    return new Response(new ReadableStream({ start(controller) { controller.error(reset); } }));
+  });
+  const result = identityFromApi("http://fixture", "test-token");
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(3_000);
+  assert.equal((await result).line.uid, "line");
+  assert.equal(calls, 2);
+  assert.deepEqual(logs, ["plow-boot: identity response body failed: terminated (UND_ERR_SOCKET: other side closed); retrying in 3s"]);
 });
 
 test("identity does not swallow malformed JSON", async t => {
