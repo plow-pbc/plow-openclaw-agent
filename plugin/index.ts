@@ -1,7 +1,7 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import { defineChannelPluginEntry, buildChannelOutboundSessionRoute, stripChannelTargetPrefix, stripTargetKindPrefix, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // @ts-expect-error The pinned SDK ships this runtime entry without type declarations.
@@ -295,6 +295,18 @@ const plugin: ChannelPlugin<Account> = {
     inferTargetChatType: ({ to }) => to === "plow-owner" ? "direct" : undefined,
     normalizeTarget: raw => raw.trim().replace(/^plow:/i, ""),
     targetResolver: { looksLikeId: (raw, normalized) => (normalized ?? raw.trim().replace(/^plow:/i, "")) === "plow-owner" || /^cht_[A-Za-z0-9_-]+$/.test(normalized ?? raw.trim().replace(/^plow:/i, "")), hint: "Use a Plow chat uid (cht_…)." },
+    resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, resolvedTarget }) => {
+      const to = stripTargetKindPrefix(stripChannelTargetPrefix(target, "plow"));
+      const owner = to === "plow-owner";
+      const kind = owner || resolvedTarget?.kind === "user" ? "direct" : resolvedTarget?.kind === "channel" ? "channel" : "group";
+      // Exact owner routing applies the same session binding as inbound DMs.
+      return buildChannelOutboundSessionRoute({
+        cfg, agentId, channel: "plow", accountId, recipientSessionExact: owner,
+        peer: { kind, id: to }, chatType: kind,
+        from: kind === "direct" ? `plow:${to}` : `plow:${kind}:${to}`,
+        to: `${kind === "direct" ? "user" : "channel"}:${to}`,
+      });
+    },
   },
   gateway: {
     startAccount: async ctx => {
