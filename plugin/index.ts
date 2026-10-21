@@ -19,6 +19,9 @@ const silentRuns = globalState[silenceKey] ??= new Map<string, boolean>();
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
+// Plow's per-attachment cap (plow api/plow/chat/media.py), so whatever Plow serves is kept. OpenClaw's
+// store default is 5 MB, which failed the turn for a typical photo or scanned PDF.
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 // Linq's content types (plow api/plow/chat/routers/chats.py), where OpenClaw's audio/wav is audio/x-wav.
 const LINQ_CONTENT_TYPES: Record<string, string> = { "audio/wav": "audio/x-wav", "audio/wave": "audio/x-wav", "audio/vnd.wave": "audio/x-wav" };
 
@@ -135,15 +138,18 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
+  const unavailable: string[] = [];
   if (account.accountId === "chat") {
     for (const attachment of message.attachments) {
+      // Named, so the agent can say it didn't get the file instead of the turn failing on it.
+      if (!attachment.url) { unavailable.push(`[Attachment not available: ${attachment.filename || attachment.content_type}]`); continue; }
       const response = await fetch(new URL(attachment.url, account.apiBase));
       if (!response.ok) throw new Error(`Inbound attachment HTTP ${response.status}`);
-      const saved = await runtime.channel.media.saveMediaBuffer(Buffer.from(await response.arrayBuffer()), attachment.content_type, "inbound", undefined, attachment.filename);
+      const saved = await runtime.channel.media.saveMediaBuffer(Buffer.from(await response.arrayBuffer()), attachment.content_type, "inbound", MAX_ATTACHMENT_BYTES, attachment.filename);
       media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
     }
   }
-  const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
+  const body = [message.body, ...unavailable].filter(Boolean).join("\n") || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
