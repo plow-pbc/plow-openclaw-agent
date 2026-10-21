@@ -99,12 +99,12 @@ volume, so a rebuilt container keeps one install rather than registering a secon
 Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw.json` belongs to the owner. Changes made through the Control UI or
 `openclaw config set` to other channels, model providers, plugins, agent defaults
-(except `agents.defaults.timeoutSeconds`), skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
+(except `agents.defaults.timeoutSeconds` and `agents.defaults.heartbeat`), skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
 identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, the agent run timeout
-(`agents.defaults.timeoutSeconds`), and cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
+(`agents.defaults.timeoutSeconds`), the heartbeat (`agents.defaults.heartbeat`, off: plow#2347), and cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
 An existing volume with a fully rendered config is converted on its next boot.
@@ -115,9 +115,11 @@ Workspace `BOOTSTRAP.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` are also boot-
 and removed at every startup; `AGENTS.md` is boot-rendered.
 Do not store durable agent state in these workspace files.
 
-The gateway starts after one bounded identity lookup, even before the owner has a
-chat. Identity lookup tolerates 401/403 for 120 seconds and retries network/429/5xx
-failures ten times. Invalid identity or exhausted boot retries leave the
+The gateway starts after the identity lookup, even before the owner has a
+chat. Identity lookup tolerates 401/403 for 120 seconds and retries network
+failures, interrupted response bodies, 429 and 5xx for as long as they last,
+backing off from 3 seconds to a minute and logging each cause. A 401/403 past
+the 120 seconds, a 404 or other 4xx, or an invalid identity leaves the
 container running with a diagnostic error. The plugin subscribes before listing
 chats, discovers the active owner DM from its roster, and buffers messages during
 baseline recovery. Multiple owner DMs among the received listing and live chats
@@ -295,6 +297,10 @@ See [development checks and pinned source contracts](docs/development.md).
 
 When bumping the base image:
 
+- Pin the latest OpenClaw extended-stable release (`YYYY.M.33`, cut roughly
+  monthly), not the newest regular release.
+- Remap the tests' hashed `/app/dist/*.mjs` imports: chunk names and minified
+  export aliases change every release.
 - Run the in-image checks and offline gateway probe.
 - Live-check a tool returning `details: { silent: true }` on the local stack:
   its run must send no automatic final reply, explicit tool sends must still

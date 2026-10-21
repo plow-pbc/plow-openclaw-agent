@@ -6,10 +6,10 @@ import { probeIdentity } from "../boot/probe-fixture.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
 // Exercise the pinned host's context builder, profile resolution, and layered policy pipeline.
-const { t: buildContext } = await import("/app/dist/context-BigCXBTA.mjs");
-const { t: resolveProfile } = await import("/app/dist/conversation-capability-profile-EUPtpcbI.mjs");
-const { i: resolvePolicies, t: buildSteps } = await import("/app/dist/conversation-tool-policy-pipeline-lj6t0cRI.mjs");
-const { t: applyPipeline } = await import("/app/dist/tool-policy-pipeline-BjUxseTY.mjs");
+const { t: buildContext } = await import("/app/dist/context-Rg9rxP3v.mjs");
+const { t: resolveProfile } = await import("/app/dist/conversation-capability-profile-CqRlL1Ko.mjs");
+const { i: resolvePolicies, t: buildSteps } = await import("/app/dist/conversation-tool-policy-pipeline-C_54HY8i.mjs");
+const { t: applyPipeline } = await import("/app/dist/tool-policy-pipeline-D74b29TM.mjs");
 const catalog = ["message", "read", "write", "edit", "exec", "automations", "plow_send_email", "guest_view", "guest_pick", "guest_admin", "ask_user"];
 
 const rosterCases = ["group", "direct", "email"].flatMap(kind => ["owner", "member"].flatMap(role => [false, true].flatMap(trusted =>
