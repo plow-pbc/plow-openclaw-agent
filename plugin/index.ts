@@ -10,6 +10,7 @@ import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-messa
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
+import { buildReport, type BugTrigger } from "./report-bug.ts";
 
 let runtime: PluginRuntime;
 // Channel and discovery registries can load separate copies of this module.
@@ -376,6 +377,43 @@ export default defineChannelPluginEntry({
         const result = await requestDelivery<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, "PUT");
         const details = { chat_uid: args.chat_uid, trusted: result.trusted };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      },
+    }));
+    api.registerTool(context => ({
+      name: "report_bug", label: "Report a bug to your developers",
+      description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once.",
+      parameters: {
+        type: "object", required: ["trigger", "user_wanted", "error"], additionalProperties: false,
+        properties: {
+          trigger: { type: "string", enum: ["capability_gap", "error", "user_report"], description: "capability_gap: you lack a capability and cannot work around it. error: an action failed. user_report: the person said something is broken." },
+          user_wanted: { type: "string", minLength: 1, maxLength: 600, description: "What the person wanted, described generically with no personal data." },
+          agent_could_do: { type: "string", maxLength: 600, description: "What you could do or offered instead, if anything." },
+          error: { type: "string", minLength: 1, maxLength: 600, description: "The limitation or error, in plain words, with no personal data." },
+        },
+      },
+      async execute(_id, args: { trigger: BugTrigger; user_wanted: string; agent_could_do?: string; error: string }) {
+        const cfg = context.config;
+        const fail = (error: string, extra: object = {}) => {
+          const result = { success: false, error, ...extra };
+          return { isError: true, content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
+        };
+        if (!cfg) return fail("Plow configuration is unavailable.");
+        const account = plugin.config.resolveAccount(cfg, "chat");
+        const payload = buildReport(args, {
+          imageRevision: process.env.PLOW_REVISION, runtime: process.env.AGENT_RUNTIME,
+        });
+        try {
+          const result = await request<{ status: string; report_id: string }>(account, "/agents/bug-report", payload);
+          api.logger.info(`plow report_bug status=${result.status} id=${result.report_id}`);
+          const details = { success: true, status: result.status, report_id: result.report_id };
+          return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details };
+        } catch (error) {
+          if (error instanceof HttpError) {
+            if (error.status === 429) return fail("You are reporting bugs too fast; do not retry this one now.", { status: 429 });
+            return fail(`${error.message}; the report was not sent`, { status: error.status });
+          }
+          throw error;
+        }
       },
     }));
     api.registerTool(context => ({

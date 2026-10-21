@@ -25,7 +25,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
     registerTool(factory: (context: object) => { name: string }) { names.push(factory({}).name); },
     on(name: string) { hooks.push(name); },
   });
-  assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
+  assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "report_bug", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
   assert.ok(!hooks.includes("before_tool_call"));

@@ -48,6 +48,9 @@ RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scrip
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.
 ENV AGENT_RUNTIME=OpenClaw
+# Surface the image revision to the runtime so report_bug can name the build a
+# report came from. It is otherwise only an image label, unreadable by a tool.
+ENV PLOW_REVISION=$PLOW_REVISION
 ENV OPENCLAW_STATE_DIR=/var/lib/plow OPENCLAW_CONFIG_PATH=/var/lib/plow/openclaw.json OPENCLAW_INCLUDE_ROOTS=/etc/plow/openclaw OPENCLAW_NO_RESPAWN=1 NODE_DISABLE_COMPILE_CACHE=1
 # The inherited healthcheck loads config and can race the boot state lock.
 HEALTHCHECK NONE
