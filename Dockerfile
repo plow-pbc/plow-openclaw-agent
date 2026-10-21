@@ -2,6 +2,13 @@ FROM ghcr.io/openclaw/openclaw:2026.9.33@sha256:ced9bfaf2514f9ec6bb2172616149076
 ARG PLOW_REVISION
 LABEL org.opencontainers.image.revision=$PLOW_REVISION co.plow.probe=/opt/plow/probe
 USER root
+# iPhone photos are HEIC. OpenClaw's image library decodes HEIC only through a native
+# tool, and the base image ships none, so a texted photo reached the model as
+# "[Image attachment could not be analyzed]". Debian's ImageMagick reads it through
+# libheif. These are images strangers text the agent, so imagemagick-policy.xml
+# limits ImageMagick to that one job.
+RUN apt-get update && apt-get install -y --no-install-recommends imagemagick && rm -rf /var/lib/apt/lists/*
+COPY imagemagick-policy.xml /etc/ImageMagick-6/policy.xml
 RUN mkdir -p /opt/plow/skills /var/lib/plow /etc/plow/openclaw && chown node:node /var/lib/plow /etc/plow/openclaw
 COPY boot /opt/plow/boot
 COPY boot/gateway-password.sh /etc/profile.d/plow-openclaw.sh
