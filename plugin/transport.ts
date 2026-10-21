@@ -19,7 +19,8 @@ export type Agent = { type: "agent"; relationship: string; line: { uid: string; 
 export type Chat = { uid: string; status: string; trusted: boolean; display_name?: string; participants: (RosterMember | Agent)[] };
 export type Message = {
   uid: string; direction: string; body: string; sender: Member | Agent; created_at: string;
-  attachments: { url: string; content_type: string; filename: string }[];
+  // Plow serves no url for media it marked failed: over its 100 MiB cap, or never stored.
+  attachments: { url: string | null; content_type: string; filename: string }[];
   // Plow wraps the replied-to message with the part being answered.
   reply_to?: { part_index: number | null; message: Message };
 };
