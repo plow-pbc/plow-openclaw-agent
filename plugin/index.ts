@@ -19,9 +19,7 @@ const silentRuns = globalState[silenceKey] ??= new Map<string, boolean>();
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
-// Plow's outbound limits (plow api/plow/chat/routers/chats.py): four attachments a message,
-// and Linq's content types, where OpenClaw's audio/wav is audio/x-wav.
-const ATTACHMENTS_PER_MESSAGE = 4;
+// Linq's content types (plow api/plow/chat/routers/chats.py), where OpenClaw's audio/wav is audio/x-wav.
 const LINQ_CONTENT_TYPES: Record<string, string> = { "audio/wav": "audio/x-wav", "audio/wave": "audio/x-wav", "audio/vnd.wave": "audio/x-wav" };
 
 // A file that could not be uploaded, before anything in its message was posted.
@@ -67,7 +65,8 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   }
   const attachments: string[] = [];
   for (const url of mediaUrls) {
-    let fileName = url.split("/").at(-1) ?? "attachment";
+    // The path's last segment: a remote URL's query can carry a credential, and this name reaches the chat.
+    let fileName = url.split(/[?#]/, 1)[0].split("/").at(-1) || "attachment";
     try {
       const media = await loadWebMedia(url);
       fileName = media.fileName ?? fileName;
@@ -88,12 +87,10 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
       throw new AttachmentError(fileName, error);
     }
   }
-  // Plow takes four attachments a message; the text goes with the first four.
+  // One attachment a message, the text with the first: a WhatsApp chat takes no more (iMessage takes four).
   const kind = heartbeat ? "heartbeat" : undefined;
-  const sent = await postMessage(account, to, text, attachments.slice(0, ATTACHMENTS_PER_MESSAGE), kind);
-  for (let next = ATTACHMENTS_PER_MESSAGE; next < attachments.length; next += ATTACHMENTS_PER_MESSAGE) {
-    await postMessage(account, to, "", attachments.slice(next, next + ATTACHMENTS_PER_MESSAGE), kind);
-  }
+  const sent = await postMessage(account, to, text, attachments.slice(0, 1), kind);
+  for (const uid of attachments.slice(1)) await postMessage(account, to, "", [uid], kind);
   return sent;
 }
 

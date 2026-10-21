@@ -10,7 +10,7 @@ type Channel = {
   outbound: { sendMedia: (ctx: object) => Promise<unknown> };
 };
 
-// A fake Plow with its outbound checks: Linq's content types (here, the ones these files use) and four attachments a message.
+// A fake Plow with its outbound checks: Linq's content types (here, the ones these files use), and a WhatsApp chat's one attachment a message.
 async function plow(t: Parameters<Parameters<typeof test>[1]>[0], finals: Payload[]) {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
@@ -33,8 +33,9 @@ async function plow(t: Parameters<Parameters<typeof test>[1]>[0], finals: Payloa
       return Response.json({ uid: `att_${declared.length}`, upload_url: `https://upload.fixture/${declared.length}`, upload_headers: {} }, { status: 201 });
     }
     if (path.startsWith("https://upload.fixture/")) return new Response(null, { status: 200 });
+    if (path.startsWith("https://files.invalid/")) return new Response("", { status: 404 });
     if (path.endsWith("/chats/chat/messages") && init?.method === "POST") {
-      if (body.attachment_uids.length > 4) return Response.json({}, { status: 422 });
+      if (body.attachment_uids.length > 1) return Response.json({}, { status: 422 });
       posted.push(body);
       return Response.json({ uid: `msg_${posted.length}` }, { status: 201 });
     }
@@ -67,15 +68,15 @@ async function plow(t: Parameters<Parameters<typeof test>[1]>[0], finals: Payloa
   };
 }
 
-test("outbound attachments: a WAV goes as Linq's audio/x-wav, and past four they continue in a second message", async t => {
+test("outbound attachments: a WAV goes as Linq's audio/x-wav, and each file is its own message, the text with the first", async t => {
   const finals: Payload[] = [];
   const fixture = await plow(t, finals);
   finals.push({ text: "All five", mediaUrls: ["one", "two", "three", "four"].map(name => `${fixture.workspace}/${name}.png`).concat(`${fixture.workspace}/memo.wav`) });
   await fixture.run();
   assert.deepEqual(fixture.declared.map(d => d.content_type), ["image/png", "image/png", "image/png", "image/png", "audio/x-wav"]);
   assert.deepEqual(fixture.posted, [
-    { body: "All five", attachment_uids: ["att_1", "att_2", "att_3", "att_4"] },
-    { body: "", attachment_uids: ["att_5"] },
+    { body: "All five", attachment_uids: ["att_1"] },
+    ...["att_2", "att_3", "att_4", "att_5"].map(uid => ({ body: "", attachment_uids: [uid] })),
   ]);
 });
 
@@ -83,8 +84,14 @@ test("a file Plow won't take: the message tool is told why, and a final reply st
   const finals: Payload[] = [];
   const fixture = await plow(t, finals);
   finals.push({ text: "Here are the notes", mediaUrls: [`${fixture.workspace}/notes.yaml`] });
+  // A remote file that can't be fetched: its name reaches the chat, its query (a credential) must not.
+  finals.push({ text: "And the report", mediaUrls: ["https://files.invalid/report.pdf?token=SECRET#page=2"] });
   await fixture.run();
-  assert.deepEqual(fixture.posted, [{ body: "Here are the notes\n\n(I couldn't attach notes.yaml.)", attachment_uids: [] }]);
+  assert.deepEqual(fixture.posted, [
+    { body: "Here are the notes\n\n(I couldn't attach notes.yaml.)", attachment_uids: [] },
+    { body: "And the report\n\n(I couldn't attach report.pdf.)", attachment_uids: [] },
+  ]);
+  assert.ok(!fixture.logs.some(line => line.includes("SECRET")), "the token stays out of the logs");
   assert.ok(fixture.logs.some(line => line.includes("Couldn't attach notes.yaml: Plow can't send application/yaml files; sending the text alone")));
   await assert.rejects(fixture.sendMedia(`${fixture.workspace}/notes.yaml`), /^Error: Couldn't attach notes\.yaml: Plow can't send application\/yaml files$/);
 });
