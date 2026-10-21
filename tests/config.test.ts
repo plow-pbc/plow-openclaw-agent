@@ -84,8 +84,9 @@ test("GLM falls back to Sonnet on the Plow provider with explicit capacity and p
     cost: { input: 2.00, output: 10.00 },
   }]);
   assert.equal(config.agents.defaults.timeoutSeconds, 600);
-  // plow#2347: no heartbeat polls billed to an owner who isn't texting.
-  assert.deepEqual(config.agents.defaults.heartbeat, { every: "0m" });
+  // plow#2347: no heartbeat polls billed to an owner who isn't texting. Turned back on, its
+  // notes reach the owner through an alias their sends are marked by.
+  assert.deepEqual(config.agents.defaults.heartbeat, { every: "0m", target: "plow", to: "plow-heartbeat", accountId: "chat" });
 });
 
 test("the configured Plow provider permits an operator-controlled private endpoint", () => {
@@ -207,7 +208,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
-  assert.deepEqual(JSON5.parse(await readFile(owner.agents.defaults.heartbeat.$include, "utf8")), { every: "0m" });
+  assert.deepEqual(JSON5.parse(await readFile(owner.agents.defaults.heartbeat.$include, "utf8")), { every: "0m", target: "plow", to: "plow-heartbeat", accountId: "chat" });
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.bindings.length, 2);
   assert.deepEqual(owner.bindings[0], { $include: join(includes, "binding.json5") });

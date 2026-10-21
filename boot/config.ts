@@ -49,8 +49,9 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       // Off. OpenClaw's default heartbeat polls every 30 minutes with the whole
       // conversation, uncached, for a NO_REPLY nobody sees, billed to the owner:
       // about $90 a day across idle agents (plow#2347). "0m" is its off switch;
-      // reminders and crons run on OpenClaw's cron path, not this one.
-      heartbeat: { every: "0m" },
+      // reminders and crons run on OpenClaw's cron path, not this one. Turned back on for an
+      // agent, its notes go to the owner through an alias their sends are marked by.
+      heartbeat: { every: "0m", target: "plow", to: "plow-heartbeat", accountId: "chat" },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
       // Model params must not become a legacy model-selection allowlist.
       modelPolicy: {},
