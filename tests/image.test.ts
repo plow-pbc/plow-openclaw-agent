@@ -29,6 +29,10 @@ test("a texted iPhone photo (HEIC) converts to JPEG, so the model can be shown i
 
 test("ImageMagick, there for HEIC, refuses any other format a stranger could send", async () => {
   const dir = await mkdtemp(`${tmpdir()}/plow-magick-`);
+  // SVG would go out to a delegate; PPM is a coder ImageMagick reads itself.
   await writeFile(`${dir}/image.svg`, '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>');
-  assert.throws(() => execFileSync("convert", [`${dir}/image.svg`, `${dir}/out.png`], { stdio: "pipe" }), /not authorized/);
+  await writeFile(`${dir}/image.ppm`, "P3\n1 1\n255\n255 0 0\n");
+  for (const image of ["image.svg", "image.ppm"]) {
+    assert.throws(() => execFileSync("convert", [`${dir}/${image}`, `${dir}/out.png`], { stdio: "pipe" }), /not authorized|not allowed by the security policy/, image);
+  }
 });
