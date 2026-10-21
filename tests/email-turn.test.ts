@@ -154,6 +154,7 @@ test("a runtime error notice on an email turn goes to the owner, never to the th
     await final(dispatch, { text: "Something went wrong.", isError: true });
   });
   assert.deepEqual(posts.map(post => post.path), ["/chats/home/messages"]);
+  assert.equal(posts[0].body.body, `Email "Booking" from "owner@example.com":\nSorry, I couldn't finish that just now. Some actions may have completed; check before retrying.`);
 });
 
 test("on a non-owner email turn, message sends nothing anywhere, and the final still reaches the owner", async t => {

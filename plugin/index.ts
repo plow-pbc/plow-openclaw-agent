@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 // @ts-expect-error The pinned SDK ships this runtime entry without type declarations.
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
@@ -213,10 +214,11 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       observeMessageSent: true,
       preparePayload: (payload, info) => {
         if (activeRunId !== undefined) suppressFinal = silentRuns.get(activeRunId) === true;
-        if (suppressFinal && info.kind === "final") return null;
-        if (payload.isFallbackNotice) { silent ||= email; return null; }
+        if (!payload.isError && suppressFinal && info.kind === "final") return null;
+        if (!payload.isError && payload.isFallbackNotice) { silent ||= email; return null; }
         if (email && info.kind !== "final") { log(`dropped ${info.kind} chat=${chat.uid} message=${message.uid}`); return null; }
-        if (!email && observedReplyDelivery && info.kind === "final") return null;
+        if (!payload.isError && !email && observedReplyDelivery && info.kind === "final") return null;
+        if (payload.isError) payload = { ...payload, text: "Sorry, I couldn't finish that just now. Some actions may have completed; check before retrying." };
         // Plow sends unquoted replies; implicit quote targets would bypass durable delivery.
         return email ? payload : { ...payload, replyToId: undefined, replyToCurrent: false };
       },
@@ -318,11 +320,36 @@ export default defineChannelPluginEntry({
     if (api.registrationMode === "full") api.logger.info("plow channel registered");
   },
   registerCapabilities(api) {
+    api.on("before_tool_call", (event, ctx) => {
+      if (event.toolName !== "message" || event.params.action !== "send") return;
+      const params = event.params;
+      const nonempty = (value: unknown) => typeof value === "string" && Boolean(value.trim());
+      // These are the native message tool's media sources, including structured attachments.
+      const source = (value: Record<string, unknown>, keys: string[]) => keys.some(key => nonempty(value[key])
+        || nonempty(value[key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)]));
+      const media = source(params, ["media", "mediaUrl", "path", "filePath", "fileUrl", "image", "buffer"])
+        || (Array.isArray(params.mediaUrls) && params.mediaUrls.some(nonempty))
+        || (Array.isArray(params.attachments) && params.attachments.some(item => item && typeof item === "object"
+          && source(item, ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"])));
+      const missing = [
+        !ctx.requester && !nonempty(params.target) && !(Array.isArray(params.targets) && params.targets.some(nonempty)) ? "target (the destination chat uid)" : "",
+        !nonempty(params.message) && !media ? "message (the text to send) or media" : "",
+      ].filter(Boolean);
+      if (missing.length) return { block: true, blockReason: `This send has no ${missing.join(" and no ")}. Call message again with a target and text or media, or send nothing and end the turn.` };
+    });
     api.on("after_tool_call", (event, ctx) => {
       // Set this before any await: the hook runner does not wait before final delivery.
       const runId = event.runId ?? ctx.runId;
       const silent = (event.result as any)?.details?.silent;
       if (runId !== undefined && silentRuns.has(runId) && typeof silent === "boolean") silentRuns.set(runId, silent);
+    });
+    api.on("agent_end", (event, ctx) => {
+      const runId = event.runId ?? ctx.runId;
+      if (runId === undefined || !silentRuns.has(runId) || !event.success) return;
+      const assistant = event.messages.findLast((message: any) => message?.role === "assistant") as any;
+      const text = typeof assistant?.content === "string" ? assistant.content : Array.isArray(assistant?.content)
+        ? assistant.content.filter((block: any) => block?.type === "text" && typeof block.text === "string").map((block: any) => block.text).join("\n") : "";
+      if (isSilentReplyText(text)) silentRuns.set(runId, true);
     });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
