@@ -10,7 +10,8 @@ type Channel = {
   outbound: { sendMedia: (ctx: object) => Promise<unknown> };
 };
 
-// A fake Plow with its outbound checks: Linq's content types (here, the ones these files use), and a WhatsApp chat's one attachment a message.
+// A fake Plow with its outbound checks: Linq's content types (here, the ones these files use), and a WhatsApp chat's
+// one attachment a message, which refuses text beside an audio file (the plugin sends files without text).
 async function plow(t: Parameters<Parameters<typeof test>[1]>[0], finals: Payload[]) {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
@@ -36,6 +37,7 @@ async function plow(t: Parameters<Parameters<typeof test>[1]>[0], finals: Payloa
     if (path.startsWith("https://files.invalid/")) return new Response("", { status: 404 });
     if (path.endsWith("/chats/chat/messages") && init?.method === "POST") {
       if (body.attachment_uids.length > 1) return Response.json({}, { status: 422 });
+      if (body.attachment_uids.length && body.body) return Response.json({}, { status: 400 });
       posted.push(body);
       return Response.json({ uid: `msg_${posted.length}` }, { status: 201 });
     }
@@ -68,15 +70,15 @@ async function plow(t: Parameters<Parameters<typeof test>[1]>[0], finals: Payloa
   };
 }
 
-test("outbound attachments: a WAV goes as Linq's audio/x-wav, and each file is its own message, the text with the first", async t => {
+test("outbound attachments: a WAV goes as Linq's audio/x-wav, and the text and each file are their own messages", async t => {
   const finals: Payload[] = [];
   const fixture = await plow(t, finals);
-  finals.push({ text: "All five", mediaUrls: ["one", "two", "three", "four"].map(name => `${fixture.workspace}/${name}.png`).concat(`${fixture.workspace}/memo.wav`) });
+  finals.push({ text: "All five", mediaUrls: [`${fixture.workspace}/memo.wav`, ...["one", "two", "three", "four"].map(name => `${fixture.workspace}/${name}.png`)] });
   await fixture.run();
-  assert.deepEqual(fixture.declared.map(d => d.content_type), ["image/png", "image/png", "image/png", "image/png", "audio/x-wav"]);
+  assert.deepEqual(fixture.declared.map(d => d.content_type), ["audio/x-wav", "image/png", "image/png", "image/png", "image/png"]);
   assert.deepEqual(fixture.posted, [
-    { body: "All five", attachment_uids: ["att_1"] },
-    ...["att_2", "att_3", "att_4", "att_5"].map(uid => ({ body: "", attachment_uids: [uid] })),
+    { body: "All five", attachment_uids: [] },
+    ...["att_1", "att_2", "att_3", "att_4", "att_5"].map(uid => ({ body: "", attachment_uids: [uid] })),
   ]);
 });
 

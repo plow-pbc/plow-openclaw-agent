@@ -87,11 +87,12 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
       throw new AttachmentError(fileName, error);
     }
   }
-  // One attachment a message, the text with the first: a WhatsApp chat takes no more (iMessage takes four).
+  // The text alone, then each file in its own message: a WhatsApp chat takes one attachment a message,
+  // and text beside it only as a photo, video or document caption of up to 1024 characters.
   const kind = heartbeat ? "heartbeat" : undefined;
-  const sent = await postMessage(account, to, text, attachments.slice(0, 1), kind);
-  for (const uid of attachments.slice(1)) await postMessage(account, to, "", [uid], kind);
-  return sent;
+  const posts = text || !attachments.length ? [await postMessage(account, to, text, [], kind)] : [];
+  for (const uid of attachments) posts.push(await postMessage(account, to, "", [uid], kind));
+  return posts.find(post => !("outcome" in post)) ?? posts[0];
 }
 
 
