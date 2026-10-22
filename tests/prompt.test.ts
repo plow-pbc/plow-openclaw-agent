@@ -100,3 +100,10 @@ test("the prompt treats offered tools as the owner's trust grant", () => {
   assert.match(prompt, /requests beyond those guest tools cannot be approved here/i);
   assert.doesNotMatch(prompt, /In the owner's own conversation, act\./);
 });
+
+test("the prompt allows saying a bug was reported only with the id report_bug returned", () => {
+  assert.match(prompt, /asks you to tell\s+your developers about something, call report_bug/i);
+  assert.match(prompt, /Only say you reported something after report_bug has returned success in this\s+turn, and give the person the report_id it returned/);
+  assert.match(prompt, /Status duplicate means the same report was\s+already sent earlier: say so, without quoting an id/);
+  assert.match(prompt, /If the call failed, say\s+you could not confirm the report was sent/);
+});
