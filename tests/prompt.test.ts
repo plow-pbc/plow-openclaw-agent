@@ -45,9 +45,12 @@ test("the prompt sends thanks, praise and ideas as report_bug feedback", () => {
 
 test("the prompt puts Latch's tools and the Mac's skills before improvising", () => {
   const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("Before any task on the owner's Mac, use Latch's own tools and the skill that covers the task first (plow_list_skills, then plow_read_skill)."));
-  assert.ok(flat.includes("For web browsing that is plow_browser as the camoufox-browsing skill describes, with its documented fallbacks, such as its Safari recipe"));
-  assert.ok(flat.includes("Improvise (capture the screen, script another app's interface) only when no Latch tool can do the job, and then tell the person what you are doing and why"));
+  assert.ok(flat.includes("Before any task on the owner's Mac, use Latch's own tools and the skill that covers the task first (plow_list_skills, then plow_read_skill), and follow that skill's recipe in this turn."));
+  // #104: the agent browsed without reading camoufox-browsing, so the rule now names the moment it must happen.
+  assert.ok(flat.includes("read that skill before your first plow_browser call, even when the site looks simple"));
+  assert.ok(flat.includes("so you never improvise one."));
+  assert.ok(flat.includes("Never drive Safari or another app through plow_run_applescript UI scripting as a way around a page."));
+  assert.ok(flat.includes("Improvise (capture the screen, script another app's interface) only when no Latch tool and no skill fallback can do the job, and then tell the person what you are doing and why"));
 });
 
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
