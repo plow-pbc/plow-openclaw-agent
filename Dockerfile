@@ -71,6 +71,6 @@ RUN OPENCLAW_GATEWAY_WARM_RECORD=/opt/plow/openclaw-warm-modules.txt NODE_OPTION
  && chmod 0644 /opt/plow/openclaw-warm-modules.txt \
  && find /var/lib/plow /etc/plow/openclaw -mindepth 1 -delete \
  && rm -rf /tmp/openclaw* /root/.openclaw \
- && test -z "$(ls -A /var/lib/plow /etc/plow/openclaw)"
+ && test -z "$(find /var/lib/plow /etc/plow/openclaw -mindepth 1)"
 USER node
 CMD ["node", "/opt/plow/boot/main.js"]
