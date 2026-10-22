@@ -23,6 +23,22 @@ docker run --rm --network none plow-openclaw:test /opt/plow/probe
 The Dockerfile pins OpenClaw `2026.9.33` by image digest. These source links target
 its release commit `5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82`.
 
+### Which OpenClaw release we track
+
+The base pins one OpenClaw **extended-stable** release (`YYYY.M.33`, OpenClaw's
+LTS-equivalent line, roughly monthly) by image digest. It never tracks `latest`,
+and it is not a fork: our changes live in this repository's plugin, boot and
+prompt, on top of an unmodified upstream image (plow-pbc/plow#2468).
+
+To move to the next extended-stable release:
+
+1. Bump the `FROM` digest in `Dockerfile` and `openclaw` in both `package.json`
+   files and the lock, and retarget the source links below to that release's commit.
+2. Run the checks above, fixing any contract this table lists that the release moved.
+3. Merge, build the base with plow's "Build agent image" workflow at the merge
+   commit, and test that exact digest on a line before promoting it.
+4. Promotion changes new agents only; running agents move when redeployed.
+
 | Contract | Source |
 | --- | --- |
 | Non-root runtime and foreground launcher | [Dockerfile](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/Dockerfile) |
