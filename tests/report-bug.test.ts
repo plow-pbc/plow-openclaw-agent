@@ -60,3 +60,23 @@ test("report_bug returns the report id to quote, and a failed call as an error",
   assert.equal(failed.isError, true);
   assert.equal(failed.details.report_id, undefined);
 });
+
+test("report_bug kind feedback posts the feedback to its own route and returns its id", async t => {
+  const factory = reportBugTool();
+  const config = { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } };
+  process.env.PLOW_AGENT_TOKEN = "test-token";
+  const sent: { url: string; body: unknown }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: { body: string }) => {
+    sent.push({ url, body: JSON.parse(init.body) });
+    return Response.json({ status: "accepted", report_id: "fedcba9876543210" });
+  });
+  const result = await factory({ config }).execute("call", { kind: "feedback", feedback: "  the owner says thanks: the update fixed reminders  " });
+  assert.deepEqual(result.details, { success: true, status: "accepted", report_id: "fedcba9876543210" });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "http://fixture/v1/agents/feedback");
+  assert.equal((sent[0].body as { feedback: string }).feedback, "the owner says thanks: the update fixed reminders");
+  // A kind without its fields is refused before any request.
+  assert.equal((await factory({ config }).execute("call", { kind: "feedback" })).isError, true);
+  assert.equal((await factory({ config }).execute("call", { user_wanted: "x" })).isError, true);
+  assert.equal(sent.length, 1);
+});

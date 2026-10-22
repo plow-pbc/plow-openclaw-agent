@@ -38,6 +38,11 @@ test("dashboard address comes from agent identity, including absence", async () 
   assert.match(base, /You have no dashboard. Say so when asked for its URL/);
 });
 
+test("the prompt sends thanks, praise and ideas as report_bug feedback", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.ok(flat.includes("Thanks, praise or an idea the person asks you to pass to your developers is feedback, not a problem: call report_bug with kind feedback"));
+});
+
 test("the prompt puts Latch's tools and the Mac's skills before improvising", () => {
   const flat = prompt.replace(/\s+/g, " ");
   assert.ok(flat.includes("Before any task on the owner's Mac, use Latch's own tools and the skill that covers the task first (plow_list_skills, then plow_read_skill)."));
