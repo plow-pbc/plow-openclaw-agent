@@ -20,6 +20,12 @@ for (const [mode, expected] of [
   if (mode !== "ask") assert.doesNotMatch(rendered, /ask the owner whether the group should have full trust/i);
 });
 
+// plow#2366: narration texted to a phone is noise and costs tokens.
+test("the prompt asks for results, not a running narration", () => {
+  assert.match(prompt, /Text results, not a running narration of the work\./);
+  assert.match(prompt, /no progress notes between steps/);
+});
+
 test("invalid thread trust mode fails at boot", async () => {
   await assert.rejects(renderPrompt(prompt, null, "test-token", "unknown"), /PLOW_THREAD_TRUST/);
 });
