@@ -98,5 +98,6 @@ test("the prompt treats offered tools as the owner's trust grant", () => {
 test("the prompt allows saying a bug was reported only with the id report_bug returned", () => {
   assert.match(prompt, /asks you to tell\s+your developers about something, call report_bug/i);
   assert.match(prompt, /Only say you reported something after report_bug has returned success in this\s+turn, and give the person the report_id it returned/);
-  assert.match(prompt, /If the call failed, say the report was not\s+sent/);
+  assert.match(prompt, /Status duplicate means the same report was\s+already sent earlier: say so, without quoting an id/);
+  assert.match(prompt, /If the call failed, say\s+you could not confirm the report was sent/);
 });

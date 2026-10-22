@@ -45,8 +45,8 @@ function reportBugTool(): (context: object) => Tool {
 }
 
 // A reply may say "reported" only with the id this returns (#102): the tool must hand one back on
-// success, and on failure say plainly that nothing was sent.
-test("report_bug returns the report id to quote, or says the report was not sent", async t => {
+// success, and a failed call must come back as an error, never as a receipt.
+test("report_bug returns the report id to quote, and a failed call as an error", async t => {
   const factory = reportBugTool();
   const config = { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } };
   const args = { trigger: "capability_gap", user_wanted: "place a phone call", error: "no calling tool" };
@@ -58,5 +58,5 @@ test("report_bug returns the report id to quote, or says the report was not sent
   t.mock.method(globalThis, "fetch", async () => new Response("", { status: 502 }));
   const failed = await factory({ config }).execute("call", args);
   assert.equal(failed.isError, true);
-  assert.match(String(failed.details.error), /the report was not sent/);
+  assert.equal(failed.details.report_id, undefined);
 });
