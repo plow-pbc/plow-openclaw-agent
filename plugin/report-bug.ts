@@ -36,6 +36,26 @@ function field(text: string | undefined): string {
   return (text ?? "").trim().slice(0, MAX_FIELD);
 }
 
+// Matches the API's feedback cap (MAX_TOTAL in api/plow/routes/bug_report.py).
+export const MAX_FEEDBACK = 1500;
+
+export type FeedbackPayload = {
+  feedback: string;
+  image_revision: string | null;
+  runtime: string | null;
+  occurred_at: string;
+};
+
+/** Feedback (thanks, praise, an idea) for POST /v1/agents/feedback, trimmed and capped. */
+export function buildFeedback(feedback: string, identity: BugReportIdentity, now: Date = new Date()): FeedbackPayload {
+  return {
+    feedback: feedback.trim().slice(0, MAX_FEEDBACK),
+    image_revision: identity.imageRevision ?? null,
+    runtime: identity.runtime ?? null,
+    occurred_at: now.toISOString(),
+  };
+}
+
 /** Assemble the report into the API payload, fields trimmed and length-capped. */
 export function buildReport(
   args: { trigger: BugTrigger; user_wanted: string; agent_could_do?: string; error: string },

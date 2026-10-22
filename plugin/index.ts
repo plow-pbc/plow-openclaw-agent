@@ -10,7 +10,7 @@ import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-messa
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
-import { buildReport, type BugTrigger } from "./report-bug.ts";
+import { buildFeedback, buildReport, type BugTrigger } from "./report-bug.ts";
 
 let runtime: PluginRuntime;
 // Channel and discovery registries can load separate copies of this module.
@@ -424,15 +424,17 @@ export default defineChannelPluginEntry({
       name: "report_bug", label: "Report a bug to your developers",
       description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once. Only tell the person it was reported after this returns success, and give them the report_id it returns; status duplicate means it was already reported earlier, so say that without quoting an id.",
       parameters: {
-        type: "object", required: ["trigger", "user_wanted", "error"], additionalProperties: false,
+        type: "object", required: [], additionalProperties: false,
         properties: {
+          kind: { type: "string", enum: ["problem", "feedback"], description: "problem (the default): a limitation or breakage; fill trigger, user_wanted and error. feedback: thanks, praise or an idea the person asked you to pass to your developers; fill feedback only. Neither carries personal data." },
+          feedback: { type: "string", maxLength: 1500, description: "kind feedback only: what the person wants your developers to hear, in plain words, with no personal data." },
           trigger: { type: "string", enum: ["capability_gap", "error", "user_report"], description: "capability_gap: you lack a capability and cannot work around it. error: an action failed. user_report: the person said something is broken." },
           user_wanted: { type: "string", minLength: 1, maxLength: 600, description: "What the person wanted, described generically with no personal data." },
           agent_could_do: { type: "string", maxLength: 600, description: "What you could do or offered instead, if anything." },
           error: { type: "string", minLength: 1, maxLength: 600, description: "The limitation or error, in plain words, with no personal data." },
         },
       },
-      async execute(_id, args: { trigger: BugTrigger; user_wanted: string; agent_could_do?: string; error: string }) {
+      async execute(_id, args: { kind?: "problem" | "feedback"; feedback?: string; trigger?: BugTrigger; user_wanted?: string; agent_could_do?: string; error?: string }) {
         const cfg = context.config;
         const fail = (error: string, extra: object = {}) => {
           const result = { success: false, error, ...extra };
@@ -440,12 +442,17 @@ export default defineChannelPluginEntry({
         };
         if (!cfg) return fail("Plow configuration is unavailable.");
         const account = plugin.config.resolveAccount(cfg, "chat");
-        const payload = buildReport(args, {
-          imageRevision: process.env.PLOW_REVISION, runtime: process.env.AGENT_RUNTIME,
-        });
+        const identity = { imageRevision: process.env.PLOW_REVISION, runtime: process.env.AGENT_RUNTIME };
+        const feedback = args.kind === "feedback";
+        if (feedback ? !args.feedback?.trim() : !args.trigger || !args.user_wanted?.trim() || !args.error?.trim()) {
+          return fail(feedback ? "Feedback needs the feedback text." : "A problem report needs trigger, user_wanted and error.");
+        }
+        const [path, payload] = feedback
+          ? ["/agents/feedback", buildFeedback(args.feedback!, identity)]
+          : ["/agents/bug-report", buildReport({ trigger: args.trigger!, user_wanted: args.user_wanted!, agent_could_do: args.agent_could_do, error: args.error! }, identity)];
         try {
-          const result = await request<{ status: string; report_id: string }>(account, "/agents/bug-report", payload);
-          api.logger.info(`plow report_bug status=${result.status} id=${result.report_id}`);
+          const result = await request<{ status: string; report_id: string }>(account, path, payload);
+          api.logger.info(`plow report_bug kind=${feedback ? "feedback" : "problem"} status=${result.status} id=${result.report_id}`);
           const details = { success: true, status: result.status, report_id: result.report_id };
           return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details };
         } catch (error) {
