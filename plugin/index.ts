@@ -451,9 +451,14 @@ export default defineChannelPluginEntry({
           ? ["/agents/feedback", buildFeedback(args.feedback!, identity)]
           : ["/agents/bug-report", buildReport({ trigger: args.trigger!, user_wanted: args.user_wanted!, agent_could_do: args.agent_could_do, error: args.error! }, identity)];
         try {
-          const result = await request<{ status: string; report_id: string }>(account, path, payload);
+          const result = await request<{ status: string; report_id: string; delivered?: boolean }>(account, path, payload);
           api.logger.info(`plow report_bug kind=${feedback ? "feedback" : "problem"} status=${result.status} id=${result.report_id}`);
-          const details = { success: true, status: result.status, report_id: result.report_id };
+          // Plow took it but had nowhere to post it (no webhook set): "passed on" would be false.
+          // Only an explicit false counts; an API without the field means delivered, as before.
+          const details = result.delivered === false
+            ? { success: true, status: result.status, report_id: result.report_id, delivered: false,
+              say: "Saved for your developers but not delivered to them yet. Say that; never say you passed it on or reported it." }
+            : { success: true, status: result.status, report_id: result.report_id };
           return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details };
         } catch (error) {
           if (error instanceof HttpError) {
