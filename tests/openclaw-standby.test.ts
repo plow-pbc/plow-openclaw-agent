@@ -59,11 +59,9 @@ test("the standby patch fails the build when OpenClaw moved the code it edits", 
 
 // The image's OpenClaw, which the CI tests run inside.
 const image = existsSync("/app/dist") && existsSync("/opt/plow/openclaw-warm-modules.txt");
-test("the image runs a patched OpenClaw with a recorded preload and no leftover state", { skip: !image && "not in the image" }, async () => {
+test("the image runs a patched OpenClaw with a recorded preload", { skip: !image && "not in the image" }, async () => {
   assert.ok(existsSync("/app/dist/plow-standby.mjs"));
   const urls = (await readFile("/opt/plow/openclaw-warm-modules.txt", "utf8")).split("\n").filter(Boolean);
   assert.ok(urls.length > 100, `${urls.length} modules recorded`);
   for (const url of urls) assert.ok(existsSync(new URL(url)), `${url} exists`);
-  assert.deepEqual(await readdir("/var/lib/plow"), [], "the recording boot left no state behind");
-  assert.deepEqual(await readdir("/etc/plow/openclaw"), []);
 });

@@ -119,6 +119,7 @@ test("a standby gateway takes over the same state with no lost message and a sho
   const env: Record<string, string> = {
     HOME: join(root, "home"), OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: join(root, "openclaw.json"), OPENCLAW_INCLUDE_ROOTS: join(root, "include"),
     OPENCLAW_NO_RESPAWN: "1", NODE_DISABLE_COMPILE_CACHE: "1", PLOW_AGENT_TOKEN: "takeover-fixture", OPENCLAW_GATEWAY_PASSWORD: "takeover-fixture-password",
+    OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     // The first gateway records the modules the standby preloads, as the image build does.
     OPENCLAW_GATEWAY_WARM_RECORD: join(root, "warm-modules.txt"), NODE_OPTIONS: `--import ${new URL("../boot/warm-record.ts", import.meta.url).href}`,
   };
@@ -140,8 +141,10 @@ test("a standby gateway takes over the same state with no lost message and a sho
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   });
 
+  const booted = performance.now();
   await startGateway(true, undefined, chunk => { output += chunk; }, { frontPort: front, ports: [first, second], entry: join(openclaw, "openclaw.mjs"), warmModules: join(root, "warm-modules.txt") });
   await until("the first gateway to connect to Plow", () => connected() === 1 && plow.sockets.size === 1);
+  const coldBoot = performance.now() - booted;
   delete process.env.NODE_OPTIONS;
   delete process.env.OPENCLAW_GATEWAY_WARM_RECORD;
   plow.send("m1: remember the number 47");
@@ -161,7 +164,10 @@ test("a standby gateway takes over the same state with no lost message and a sho
   plow.send("m3: what number did I ask you to remember?");
   await until("m3's reply", () => plow.posted.includes("ack m3"));
 
-  t.diagnostic(`takeover gap (old gateway told to stop -> new gateway connected to Plow): ${Math.round(gap)} ms`);
+  t.diagnostic(`takeover gap (old gateway told to stop -> new gateway connected to Plow): ${Math.round(gap)} ms; the first gateway's cold boot, recording its preload list: ${Math.round(coldBoot)} ms`);
+  // What the new gateway still does after it takes the lock (OPENCLAW_GATEWAY_STARTUP_TRACE).
+  const afterLock = output.slice(output.lastIndexOf("state ownership acquired")).replace(/\x1b\[[0-9;]*m/g, "");
+  t.diagnostic("after the lock: " + [...afterLock.matchAll(/startup trace: (\S+) ([0-9.]+)ms/g)].filter(([, name, ms]) => Number(ms) >= 150 && !name.startsWith("process.")).map(([, name, ms]) => `${name} ${Math.round(Number(ms))}`).join(", "));
   t.diagnostic(output.split("\n").find(line => line.includes("standby: preloaded"))?.replace(/\x1b\[[0-9;]*m/g, "").trim() ?? "no preload line");
   assert.deepEqual(plow.posted.filter(body => /^ack m\d$/.test(body)).sort(), ["ack m1", "ack m2", "ack m3"], "one reply each, none lost or doubled");
   assert.ok(plow.turns.at(-1)!.some(user => user.includes("remember the number 47")), "the new gateway continues the same session");
