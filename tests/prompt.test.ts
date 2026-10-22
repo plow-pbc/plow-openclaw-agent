@@ -32,10 +32,11 @@ test("dashboard address comes from agent identity, including absence", async () 
   assert.match(base, /You have no dashboard. Say so when asked for its URL/);
 });
 
-test("the prompt routes Mac browsing through its skill and never captures the screen", () => {
-  assert.match(prompt, /read the skill that covers a task before starting it\s+\(plow_list_skills, then plow_read_skill\): for any web browsing, the\s+camoufox-browsing skill/);
-  assert.match(prompt, /Never capture\s+the owner's screen or script another app's interface/);
-  assert.match(prompt, /To look at a page, use the browser's own screenshot/);
+test("the prompt puts Latch's tools and the Mac's skills before improvising", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.ok(flat.includes("Before any task on the owner's Mac, use Latch's own tools and the skill that covers the task first (plow_list_skills, then plow_read_skill)."));
+  assert.ok(flat.includes("For web browsing that is plow_browser as the camoufox-browsing skill describes, with its documented fallbacks, such as its Safari recipe"));
+  assert.ok(flat.includes("Improvise (capture the screen, script another app's interface) only when no Latch tool can do the job, and then tell the person what you are doing and why"));
 });
 
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
