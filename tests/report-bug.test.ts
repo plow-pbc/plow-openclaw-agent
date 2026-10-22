@@ -55,6 +55,11 @@ test("report_bug returns the report id to quote, and a failed call as an error",
   t.mock.method(globalThis, "fetch", async () => Response.json({ status: "accepted", report_id: "0123456789abcdef" }));
   assert.deepEqual((await factory({ config }).execute("call", args)).details,
     { success: true, status: "accepted", report_id: "0123456789abcdef" });
+  // Taken but posted nowhere (no webhook yet): the receipt says so, so "passed on" can't follow.
+  t.mock.method(globalThis, "fetch", async () => Response.json({ status: "accepted_not_delivered", report_id: "0123456789abcdef", delivered: false }));
+  const saved = (await factory({ config }).execute("call", args)).details;
+  assert.equal(saved.delivered, false);
+  assert.match(String(saved.say), /not delivered to them yet.*never say you passed it on/);
   t.mock.method(globalThis, "fetch", async () => new Response("", { status: 502 }));
   const failed = await factory({ config }).execute("call", args);
   assert.equal(failed.isError, true);

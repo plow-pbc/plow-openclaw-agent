@@ -118,6 +118,7 @@ test("the prompt allows saying a bug was reported only with the id report_bug re
   assert.match(prompt, /asks you to tell\s+your developers about something, call report_bug/i);
   assert.ok(flat.includes("Only say you reported something after that success in this turn: saying you reported it without that call is a false claim."));
   assert.ok(flat.includes("Status duplicate means the same report was already sent earlier: say so, without quoting an id."));
+  assert.ok(flat.includes("Delivered false means it was saved but has not reached your developers yet: say that in the one short line, never that you passed it on or reported it."));
   assert.ok(flat.includes("If the call failed, say you could not confirm the report was sent."));
 });
 
