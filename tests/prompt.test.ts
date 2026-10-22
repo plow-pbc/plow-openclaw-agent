@@ -102,8 +102,15 @@ test("the prompt treats offered tools as the owner's trust grant", () => {
 });
 
 test("the prompt allows saying a bug was reported only with the id report_bug returned", () => {
+  const flat = prompt.replace(/\s+/g, " ");
   assert.match(prompt, /asks you to tell\s+your developers about something, call report_bug/i);
-  assert.match(prompt, /Only say you reported something after report_bug has returned success in this\s+turn, and give the person the report_id it returned/);
-  assert.match(prompt, /Status duplicate means the same report was\s+already sent earlier: say so, without quoting an id/);
-  assert.match(prompt, /If the call failed, say\s+you could not confirm the report was sent/);
+  assert.ok(flat.includes("Only say you reported something after that success in this turn: saying you reported it without that call is a false claim."));
+  assert.ok(flat.includes("Status duplicate means the same report was already sent earlier: say so, without quoting an id."));
+  assert.ok(flat.includes("If the call failed, say you could not confirm the report was sent."));
+});
+
+// Cedar filed a report and said nothing until asked (#106): the acknowledgement comes first.
+test("the prompt has the agent tell the person right after report_bug succeeds, with the id", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.ok(flat.includes("As soon as report_bug returns success, tell the person in one short line that you reported it, with the report_id it returned, before anything else in your reply."));
 });
