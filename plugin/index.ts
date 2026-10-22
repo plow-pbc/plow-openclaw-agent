@@ -23,6 +23,17 @@ const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply."
 // Plow's per-attachment cap (plow api/plow/chat/media.py), so whatever Plow serves is kept. OpenClaw's
 // store default is 5 MB, which failed the turn for a typical photo or scanned PDF.
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+// Linq's content types (plow api/plow/chat/routers/chats.py), where OpenClaw's audio/wav is audio/x-wav.
+const LINQ_CONTENT_TYPES: Record<string, string> = { "audio/wav": "audio/x-wav", "audio/wave": "audio/x-wav", "audio/vnd.wave": "audio/x-wav" };
+
+// A file that could not be uploaded, before anything in its message was posted.
+class AttachmentError extends Error {
+  fileName: string;
+  constructor(fileName: string, cause: unknown) {
+    super(`Couldn't attach ${fileName}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.fileName = fileName;
+  }
+}
 
 function normalizedHandle(handle: string): string {
   const compact = handle.trim().replace(/[\s().-]/g, "");
@@ -58,15 +69,34 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   }
   const attachments: string[] = [];
   for (const url of mediaUrls) {
-    const media = await loadWebMedia(url);
-    const upload = await request<{ uid: string; upload_url: string; upload_headers: Record<string, string> }>(account, `/chats/${to}/attachments`, {
-      filename: media.fileName ?? "attachment", content_type: media.contentType, size_bytes: media.buffer.length,
-    });
-    const response = await fetch(upload.upload_url, { method: "PUT", headers: upload.upload_headers, body: media.buffer });
-    if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
-    attachments.push(upload.uid);
+    // The path's last segment: a remote URL's query can carry a credential, and this name reaches the chat.
+    let fileName = url.split(/[?#]/, 1)[0].split("/").at(-1) || "attachment";
+    try {
+      const media = await loadWebMedia(url);
+      fileName = media.fileName ?? fileName;
+      const contentType = media.contentType && (LINQ_CONTENT_TYPES[media.contentType] ?? media.contentType);
+      const upload = await request<{ uid: string; upload_url: string; upload_headers: Record<string, string> }>(account, `/chats/${to}/attachments`, {
+        filename: fileName, content_type: contentType, size_bytes: media.buffer.length,
+      }).catch(error => {
+        // 415 is a type Linq won't carry; 422 without a type is a file OpenClaw couldn't name.
+        if (error instanceof HttpError && (error.status === 415 || (error.status === 422 && !contentType))) {
+          throw new Error(`Plow can't send ${contentType ?? "this kind of"} files`);
+        }
+        throw error;
+      });
+      const response = await fetch(upload.upload_url, { method: "PUT", headers: upload.upload_headers, body: media.buffer });
+      if (!response.ok) throw new Error(`Attachment upload HTTP ${response.status}`);
+      attachments.push(upload.uid);
+    } catch (error) {
+      throw new AttachmentError(fileName, error);
+    }
   }
-  return await postMessage(account, to, text, attachments, heartbeat ? "heartbeat" : undefined);
+  // The text alone, then each file in its own message: a WhatsApp chat takes one attachment a message,
+  // and text beside it only as a photo, video or document caption of up to 1024 characters.
+  const kind = heartbeat ? "heartbeat" : undefined;
+  const posts = text || !attachments.length ? [await postMessage(account, to, text, [], kind)] : [];
+  for (const uid of attachments) posts.push(await postMessage(account, to, "", [uid], kind));
+  return posts.find(post => !("outcome" in post)) ?? posts[0];
 }
 
 
@@ -257,7 +287,12 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
           log(`delivered chat=${chat.uid} to=${target.uid} message=${sent}`);
           return { messageIds: [sent] };
         }
-        const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []));
+        // A file Plow won't take must not cost the reply: nothing was posted yet, so the text goes alone.
+        const sent = await send(account, chat.uid, payload.text ?? "", payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : [])).catch(async error => {
+          if (!(error instanceof AttachmentError)) throw error;
+          log(`attachment failed chat=${chat.uid} message=${message.uid}: ${error.message}; sending the text alone`);
+          return await send(account, chat.uid, `${payload.text ?? ""}\n\n(I couldn't attach ${error.fileName}.)`.trim());
+        });
         if ("outcome" in sent && sent.outcome === "not_sent") {
           log(`silent chat=${chat.uid} message=${message.uid}`);
           silent = true;
