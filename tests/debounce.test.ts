@@ -5,7 +5,7 @@ import { test } from "node:test";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "abort", "group-speakers", "revoked"] as const) test(`inbound debounce: ${scenario}`, async t => {
+for (const scenario of ["burst", "tagged-burst", "reply-burst", "speaker", "slash", "media", "abort", "group-speakers", "revoked"] as const) test(`inbound debounce: ${scenario}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(6000);
   const sender = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
@@ -13,8 +13,11 @@ for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "a
   const chat = { uid: "chat", status: "active", trusted: true, participants: [sender, guest, { type: "agent", relationship: "self", line: { uid: "line" } }] };
   const first = { uid: "first", direction: "inbound", sender: scenario === "revoked" ? guest : sender, body: "pitch him this:", attachments: [], created_at: new Date().toISOString(),
     // plow-agents#83: the tag on the first text of a burst still invokes the agent for the combined turn.
-    ...(scenario === "tagged-burst" ? { mentions: [{ handle: "+15550000002", is_me: true }] } : {}) };
-  const second = { ...first, uid: "second", mentions: undefined, sender: scenario === "speaker" || scenario === "group-speakers" ? guest : first.sender,
+    ...(scenario === "tagged-burst" ? { mentions: [{ handle: "+15550000002", is_me: true }] } : {}),
+    // ...and so does a reply to the agent, even when a later text in the burst quotes someone else.
+    ...(scenario === "reply-burst" ? { reply_to: { part_index: 0, message: { uid: "agent", body: "Dinner at 8?", sender: chat.participants[2], direction: "outbound", attachments: [], created_at: new Date().toISOString() } } } : {}) };
+  const second = { ...first, uid: "second", mentions: undefined,
+    reply_to: scenario === "reply-burst" ? { part_index: 0, message: { uid: "guest", body: "Or 9?", sender: guest, direction: "inbound", attachments: [], created_at: new Date().toISOString() } } : undefined, sender: scenario === "speaker" || scenario === "group-speakers" ? guest : first.sender,
     body: scenario === "slash" ? "/status" : scenario === "media" ? "photo" : "https://notion.so/example",
     attachments: scenario === "media" ? [{ url: "/photo", content_type: "image/png", filename: "photo.png" }] : [] };
   t.mock.method(globalThis, "fetch", async (url: string | URL) => String(url).endsWith("/photo") ? new Response("image") : Response.json(
@@ -22,7 +25,7 @@ for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "a
     String(url).includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
   const third = { ...first, uid: "third", body: "one more thought" };
   server.on("connection", socket => {
-    const send = (message: typeof first) => socket.send(JSON.stringify({ event_type: "message_received", chat_id: "chat", data: { message } }));
+    const send = (message: object) => socket.send(JSON.stringify({ event_type: "message_received", chat_id: "chat", data: { message } }));
     send(first);
     void delay(20).then(() => {
       if (scenario === "revoked") chat.trusted = false;
@@ -33,7 +36,7 @@ for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "a
   const contexts: { messageId: string; message: { rawBody: string; inboundEventKind?: string }; sender: { id: string } }[] = [];
   const times: number[] = [];
   const toolsDisabled: (boolean | undefined)[] = [];
-  const combined = scenario === "burst" || scenario === "tagged-burst" || scenario === "revoked";
+  const combined = scenario === "burst" || scenario === "tagged-burst" || scenario === "reply-burst" || scenario === "revoked";
   const sourceIds = scenario === "group-speakers" ? ["first", "second", "third"] : ["first", "second"];
   let channel: { gateway: { startAccount: (ctx: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
@@ -56,7 +59,7 @@ for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "a
     } },
   });
   const started = Date.now();
-  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: 300 } }, ...(scenario === "tagged-burst" ? { groupChat: { unmentionedInbound: "room_event" } } : {}) } }, abortSignal: controller.signal, log: { info() {} } });
+  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: 300 } }, ...(scenario === "tagged-burst" || scenario === "reply-burst" ? { groupChat: { unmentionedInbound: "room_event" } } : {}) } }, abortSignal: controller.signal, log: { info() {} } });
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
   if (scenario === "abort") {
     assert.deepEqual(contexts, []);
@@ -68,7 +71,7 @@ for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "a
   assert.deepEqual(contexts.map(c => c.message.rawBody), combined ? [`${first.body}\n${second.body}`] : scenario === "group-speakers" ? [first.body, second.body, third.body] : [first.body, second.body]);
   assert.equal(contexts.at(-1)!.messageId, sourceIds.at(-1));
   if (scenario === "revoked") assert.deepEqual(toolsDisabled, [true]);
-  if (scenario === "tagged-burst") assert.equal(contexts[0].message.inboundEventKind, "user_request");
+  if (scenario === "tagged-burst" || scenario === "reply-burst") assert.equal(contexts[0].message.inboundEventKind, "user_request");
   if (scenario === "speaker") assert.deepEqual(contexts.map(c => c.sender.id), ["plow-owner", guest.provider_key]);
   if (scenario === "slash" || scenario === "media") assert.ok(times[1] - started < 250, `immediate turn waited ${times[1] - started} ms`);
   const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));
