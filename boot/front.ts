@@ -17,8 +17,8 @@ export async function startFront(port: number, target: () => number, holdMs = 30
       const socket = net.connect(target(), host);
       socket.once("connect", () => {
         upstream = socket;
+        // A gateway that closes ends the client through pipe(), once its queued reply is written.
         socket.on("error", () => client.destroy());
-        socket.on("close", () => client.destroy());
         client.pipe(socket).pipe(client);
         client.resume();
       });

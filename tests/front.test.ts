@@ -61,3 +61,32 @@ test("the front drops a waiting connection when no gateway comes back in time", 
   await once(socket, "close");
   assert.ok(Date.now() - started >= 150, "it waited before giving up");
 });
+
+test("a reply the gateway sent before closing reaches a slow client in full", async t => {
+  const chunk = Buffer.alloc(16 << 10, "x");
+  let size = 16 << 20;
+  const gateway = net.createServer(socket => {
+    socket.on("error", () => {});
+    for (let sent = 0; sent < size; sent += chunk.length) socket.write(chunk.subarray(0, size - sent));
+    socket.end();
+  });
+  await new Promise<void>(resolve => gateway.listen(0, "127.0.0.1", resolve));
+  t.after(() => gateway.close());
+  const server = await startFront(0, () => (gateway.address() as net.AddressInfo).port);
+  t.after(() => server.close());
+  let toClient!: net.Socket;
+  server.on("connection", socket => { toClient = socket; });
+  const port = (server.address() as net.AddressInfo).port;
+  // What the front can hand to a paused client's connection...
+  const first = net.connect(port, "127.0.0.1").pause();
+  await new Promise(resolve => setTimeout(resolve, 300));
+  size = toClient.bytesWritten - toClient.writableLength + (32 << 10);
+  first.destroy();
+  // ...and a reply 32 KiB past it, which the front still has queued when the gateway closes.
+  const socket = net.connect(port, "127.0.0.1").pause();
+  await new Promise(resolve => setTimeout(resolve, 300));
+  let received = 0;
+  socket.on("data", data => { received += data.length; }).resume();
+  await once(socket, "close");
+  assert.equal(received, size);
+});

@@ -194,7 +194,7 @@ that has already swapped `/app` and `/opt/plow`:
    skips OpenClaw's refusal of a second gateway, admits its config (read-only),
    preloads the modules a gateway loads after it takes the state lock
    (recorded at image build into `/opt/plow/openclaw-warm-modules.txt`), and
-   prints `standby: warm`. A config repair, which `openclaw doctor` wants the
+   tells the boot process it is warm, over IPC. A config repair, which `openclaw doctor` wants the
    gateway stopped for, waits for the old gateway to exit.
 3. Only then is the running gateway stopped. The front sends new connections to
    the standby and holds each one, for up to 30 s, until it listens. The

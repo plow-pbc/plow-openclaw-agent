@@ -6,7 +6,7 @@ import { setImmediate } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { startGateway } from "../boot/process.ts";
 
-type FakeChild = EventEmitter & { args: string[]; kill: (signal: string) => void; signals: string[]; stdout: EventEmitter };
+type FakeChild = EventEmitter & { args: string[]; kill: (signal: string) => void; signals: string[] };
 
 function fakeSupervisor(t: TestContext, { bridgeFailsToStart = false } = {}) {
   const listeners = process.listenerCount("SIGTERM");
@@ -22,7 +22,7 @@ function fakeSupervisor(t: TestContext, { bridgeFailsToStart = false } = {}) {
   process.report.reportOnSignal = false;
   t.mock.method(console, "error", (line: unknown) => { errors.push(String(line)); });
   t.mock.method(childProcess, "spawn", (_command: string, args: string[], opts: SpawnOptions) => {
-    const child = Object.assign(new EventEmitter(), { args, stdout: new EventEmitter(), signals: [] as string[], kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); } });
+    const child = Object.assign(new EventEmitter(), { args, signals: [] as string[], kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); } });
     children.push(child); options.push(opts);
     if (args[0].endsWith("mcp-bridge.js")) queueMicrotask(() => bridgeFailsToStart && children.length === 1 ? (child.emit("error", new Error("spawn failed")), child.emit("close", -2, null)) : child.emit("message", "ready"));
     return child;
@@ -124,7 +124,7 @@ test("supervisor logs a gateway exit during shutdown and does not restart it", a
   assert.equal(process.listenerCount("SIGTERM"), listeners);
 });
 
-const warm = (child: FakeChild) => child.stdout.emit("data", Buffer.from("[gateway] standby: warm; waiting for gateway state ownership\n"));
+const warm = (child: FakeChild) => child.emit("message", "warm");
 const takeoverOptions = (prepare = async () => {}) => ({ frontPort: 0, ports: [4101, 4102] as [number, number], warmModules: "/opt/plow/openclaw-warm-modules.txt", prepare });
 
 test("SIGUSR2 starts a standby beside the gateway and stops the gateway only once the standby is warm", async t => {
@@ -140,6 +140,7 @@ test("SIGUSR2 starts a standby beside the gateway and stops the gateway only onc
   assert.deepEqual(standby.args, ["/app/openclaw.mjs", "gateway", "--port", "4102"]);
   assert.equal(options.at(-1)!.env!.OPENCLAW_GATEWAY_STANDBY, "1");
   assert.equal(options.at(-1)!.env!.OPENCLAW_GATEWAY_WARM_MODULES, "/opt/plow/openclaw-warm-modules.txt");
+  assert.equal(options.at(-1)!.stdio![3], "ipc", "the standby says it is warm over IPC");
   assert.equal(options[0].env!.OPENCLAW_GATEWAY_STANDBY, undefined, "the running gateway is not a standby");
   process.emit("SIGUSR2");
   await setImmediate();
@@ -174,7 +175,7 @@ test("a standby that exits or is not warm in time leaves the running gateway ser
   await setImmediate();
   assert.deepEqual(first.signals, []);
   warm(gateways()[2]);
-  assert.deepEqual(first.signals, [], "a late warm line from a stopped standby changes nothing");
+  assert.deepEqual(first.signals, [], "a late warm message from a stopped standby changes nothing");
 });
 
 test("a gateway that took over and then dies is restarted on its own port", async t => {

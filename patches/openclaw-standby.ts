@@ -1,7 +1,7 @@
 // A standby gateway for in-place upgrades (#110). Started with OPENCLAW_GATEWAY_STANDBY=1 beside the
 // live gateway on the same state, it reads and admits its config (read-only, as OpenClaw's own
-// admission is), preloads the modules a gateway loads after taking the state lock, prints
-// "standby: warm", then waits on the lock and starts the moment the old gateway exits.
+// admission is), preloads the modules a gateway loads after taking the state lock, tells plow-boot
+// it is warm, then waits on the lock and starts the moment the old gateway exits.
 //
 // OpenClaw refuses a second gateway outright (exit 78, before its lock wait), and once it holds the
 // lock a boot still loads most of its modules. This edits OpenClaw's built files in the image. Each
@@ -22,11 +22,12 @@ let warmed;
 export function warm() {
 	return warmed ??= (async () => {
 		const started = performance.now();
-		let urls = [];
-		try { urls = readFileSync(process.env.OPENCLAW_GATEWAY_WARM_MODULES ?? "", "utf8").split("\\n").filter(Boolean); } catch {}
+		const urls = readFileSync(process.env.OPENCLAW_GATEWAY_WARM_MODULES, "utf8").split("\\n").filter(Boolean);
 		const loaded = (await Promise.allSettled(urls.map((url) => import(url)))).filter((result) => result.status === "fulfilled").length;
-		console.log(\`[gateway] standby: preloaded \${loaded}/\${urls.length} modules in \${Math.round(performance.now() - started)} ms\`);
-		console.log("[gateway] standby: warm; waiting for gateway state ownership");
+		console.log(\`[gateway] standby: warm (preloaded \${loaded}/\${urls.length} modules in \${Math.round(performance.now() - started)} ms); waiting for gateway state ownership\`);
+		// plow-boot stops the old gateway on this, then the channel closes: the gateway that takes over
+		// runs as one started without it.
+		process.send?.("warm", () => process.connected && process.disconnect());
 	})();
 }
 /** Hold a write OpenClaw guards only by its live-owner refusal until that owner has exited. */

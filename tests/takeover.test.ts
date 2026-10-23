@@ -168,9 +168,11 @@ test("a standby gateway takes over the same state with no lost message and a sho
   // What the new gateway still does after it takes the lock (OPENCLAW_GATEWAY_STARTUP_TRACE).
   const afterLock = output.slice(output.lastIndexOf("state ownership acquired")).replace(/\x1b\[[0-9;]*m/g, "");
   t.diagnostic("after the lock: " + [...afterLock.matchAll(/startup trace: (\S+) ([0-9.]+)ms/g)].filter(([, name, ms]) => Number(ms) >= 150 && !name.startsWith("process.")).map(([, name, ms]) => `${name} ${Math.round(Number(ms))}`).join(", "));
-  t.diagnostic(output.split("\n").find(line => line.includes("standby: preloaded"))?.replace(/\x1b\[[0-9;]*m/g, "").trim() ?? "no preload line");
+  t.diagnostic(output.split("\n").find(line => line.includes("standby: warm"))?.replace(/\x1b\[[0-9;]*m/g, "").trim() ?? "no preload line");
   assert.deepEqual(plow.posted.filter(body => /^ack m\d$/.test(body)).sort(), ["ack m1", "ack m2", "ack m3"], "one reply each, none lost or doubled");
   assert.ok(plow.turns.at(-1)!.some(user => user.includes("remember the number 47")), "the new gateway continues the same session");
   assert.ok(events.some(event => /replaced gateway exited code=0/.test(event.line)), "the old gateway stopped cleanly");
   assert.ok(gap < 30_000, `takeover took ${Math.round(gap)} ms`);
+  process.emit("SIGTERM");
+  await until("the new gateway, started with an IPC channel, to stop cleanly", () => events.some(event => /^plow-boot: gateway exited code=0/.test(event.line)));
 });

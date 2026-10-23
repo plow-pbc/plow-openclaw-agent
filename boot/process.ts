@@ -116,8 +116,8 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
     if (stopping) return;
     const next = port === ports[0] ? ports[1] : ports[0];
     const child = standby = launch("standby", gatewayArgs(next), {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, OPENCLAW_GATEWAY_STANDBY: "1", ...options.warmModules ? { OPENCLAW_GATEWAY_WARM_MODULES: options.warmModules } : {} },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      env: { ...process.env, OPENCLAW_GATEWAY_STANDBY: "1", OPENCLAW_GATEWAY_WARM_MODULES: options.warmModules },
     });
     console.error(`plow-boot: standby gateway starting on :${next}`);
     const notWarm = setTimeout(() => {
@@ -125,14 +125,8 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
       child.kill("SIGTERM");
     }, STANDBY_WARM_MS);
     child.once("close", () => clearTimeout(notWarm));
-    let output = "";
-    let warm = false;
-    // Stays attached: it is what keeps a captured standby's stdout flowing.
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (warm) return;
-      output = (output + chunk).slice(-4096);
-      if (!output.includes("standby: warm")) return;
-      warm = true;
+    // Sent once by the patched OpenClaw as it starts waiting on the state lock.
+    child.once("message", () => {
       clearTimeout(notWarm);
       if (stopping || standby !== child) return;
       // From here new connections wait in the front for the standby, which takes the state lock
