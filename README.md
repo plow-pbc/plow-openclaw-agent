@@ -44,7 +44,10 @@ docker compose up --build
 Open <http://localhost:3001>.
 
 The gateway always serves the Control UI on loopback port 3000. No dashboard
-origin environment variable is needed. Compose publishes the local dashboard
+origin environment variable is needed. Port 3000 is the boot process's own
+front, a plain TCP relay to the gateway on loopback port 18801 or 18802, so an
+upgrade can replace the gateway without the port going away (see Upgrading in
+place). Compose publishes the local dashboard
 through a loopback-only proxy on port 3001; it does not publish port 3000.
 
 Plow reaches it through the private `https://<vm>.exe.xyz:3000` ingress, which
@@ -176,6 +179,34 @@ Mac provides its tools and instructions. Mac unavailability does not prevent
 texting. Long-running MCP responses stream without a fixed bridge timeout;
 client disconnects cancel the upstream request. A bridge crash restarts the
 bridge while the gateway continues.
+
+## Upgrading in place
+
+`SIGUSR2` to the boot process (`pkill -USR2 -xf 'node /opt/plow/boot/main.js'`)
+hands the agent to a new gateway without a cold boot in between, for an upgrade
+that has already swapped `/app` and `/opt/plow`:
+
+1. `main.js --prepare` (the new image's boot code) rewrites the config and
+   `AGENTS.md`, keeping this boot's gateway password.
+2. A standby gateway starts on the other loopback port with
+   `OPENCLAW_GATEWAY_STANDBY=1`, beside the running one, on the same state. The
+   image patches OpenClaw for this (`patches/openclaw-standby.ts`): the standby
+   skips OpenClaw's refusal of a second gateway, admits its config (read-only),
+   preloads the modules a gateway loads after it takes the state lock
+   (recorded at image build into `/opt/plow/openclaw-warm-modules.txt`), and
+   tells the boot process it is warm, over IPC. A config repair, which `openclaw doctor` wants the
+   gateway stopped for, waits for the old gateway to exit.
+3. Only then is the running gateway stopped. The front sends new connections to
+   the standby and holds each one, for up to 30 s, until it listens. The
+   standby takes the state lock the moment the old gateway exits, then boots
+   the state-bound rest (schema checks, startup maintenance, sessions), and
+   reconnects to Plow, replaying texts sent in between from its chat
+   checkpoints.
+
+If the standby exits or is not warm within 3 minutes, it is stopped and the
+running gateway keeps serving. If it dies after taking over, it restarts like
+any gateway. A change to the boot process itself (`main.js`, `process.js`,
+`front.js`) still needs a restart.
 
 ## Building a variant image
 

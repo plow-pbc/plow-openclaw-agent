@@ -9,6 +9,9 @@ USER root
 # limits ImageMagick to that one job.
 RUN apt-get update && apt-get install -y --no-install-recommends imagemagick && rm -rf /var/lib/apt/lists/*
 COPY imagemagick-policy.xml /etc/ImageMagick-6/policy.xml
+# A standby gateway for in-place upgrades (#110): see patches/openclaw-standby.ts.
+COPY patches /opt/plow/patches
+RUN node /opt/plow/patches/openclaw-standby.ts /app
 RUN mkdir -p /opt/plow/skills /var/lib/plow /etc/plow/openclaw && chown node:node /var/lib/plow /etc/plow/openclaw
 COPY boot /opt/plow/boot
 COPY boot/gateway-password.sh /etc/profile.d/plow-openclaw.sh
@@ -61,5 +64,13 @@ ENV PLOW_REVISION=$PLOW_REVISION
 ENV OPENCLAW_STATE_DIR=/var/lib/plow OPENCLAW_CONFIG_PATH=/var/lib/plow/openclaw.json OPENCLAW_INCLUDE_ROOTS=/etc/plow/openclaw OPENCLAW_NO_RESPAWN=1 NODE_DISABLE_COMPILE_CACHE=1
 # The inherited healthcheck loads config and can race the boot state lock.
 HEALTHCHECK NONE
+# The modules a gateway loads after it takes the state lock, which a standby preloads: recorded from
+# one offline boot of this image (the probe), whose state is then removed.
+RUN OPENCLAW_GATEWAY_WARM_RECORD=/opt/plow/openclaw-warm-modules.txt NODE_OPTIONS="--import /opt/plow/boot/warm-record.js" /opt/plow/probe \
+ && test -s /opt/plow/openclaw-warm-modules.txt \
+ && chmod 0644 /opt/plow/openclaw-warm-modules.txt \
+ && find /var/lib/plow /etc/plow/openclaw -mindepth 1 -delete \
+ && rm -rf /tmp/openclaw* /root/.openclaw \
+ && test -z "$(find /var/lib/plow /etc/plow/openclaw -mindepth 1)"
 USER node
 CMD ["node", "/opt/plow/boot/main.js"]
