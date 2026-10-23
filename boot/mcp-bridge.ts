@@ -47,6 +47,23 @@ async function saveToolFiles(body: string) {
   return JSON.stringify({ ...rpc, result: { ...rpc.result, content: blocks } });
 }
 
+// Each event's data is one JSON-RPC message; an event with no file in it stays byte for byte.
+async function saveEventFiles(body: string) {
+  const parts = body.split(/(\r?\n\r?\n)/);
+  for (const [i, event] of parts.entries()) {
+    if (i % 2) continue;
+    const lines = event.split(/\r?\n/);
+    const first = lines.findIndex(line => line.startsWith("data:"));
+    if (first < 0) continue;
+    const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
+    const saved = await saveToolFiles(data).catch(() => data);
+    if (saved === data) continue;
+    parts[i] = [...lines.slice(0, first), `data: ${saved}`, ...lines.slice(first).filter(line => !line.startsWith("data:"))]
+      .join(event.includes("\r\n") ? "\r\n" : "\n");
+  }
+  return parts.join("");
+}
+
 // Preserve each client's MCP session and HTTP result; never replay a request.
 createServer(async (request, response) => {
   if (request.headers.authorization !== `Bearer ${bridgeToken}`) {
@@ -73,9 +90,12 @@ createServer(async (request, response) => {
     }
     response.writeHead(upstream.status);
     response.flushHeaders();
-    if (upstream.headers.get("content-type")?.startsWith("application/json")) {
+    const type = upstream.headers.get("content-type") ?? "";
+    // The relay answers a POST in one buffered body: JSON, or (as it does live) server-sent events.
+    const events = request.method === "POST" && type.startsWith("text/event-stream");
+    if (type.startsWith("application/json") || events) {
       const body = await upstream.text();
-      response.end(await saveToolFiles(body).catch(() => body));
+      response.end(await (events ? saveEventFiles(body) : saveToolFiles(body)).catch(() => body));
     } else if (upstream.body) await pipeline(Readable.fromWeb(upstream.body), response);
     else response.end();
   } catch {

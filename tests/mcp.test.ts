@@ -108,7 +108,16 @@ for (const mode of ["stream", "slow-tool"] as const) test(`HTTP bridge preserves
   assert.equal(calls, 1, "no replay of the upstream action");
 });
 
-test("HTTP bridge saves a tool's screenshot and file where the agent can text them (#116)", async t => {
+// The live relay answers a POST as server-sent events (an agent's own curl of its bridge, 10-23), as
+// the MCP SDK frames them; the harness's JSON-only Latch is why the first fix missed that.
+const frame = (mode: "json" | "sse", rpc: string) => mode === "json" ? rpc : `event: message\nid: evt-1\ndata: ${rpc}\n\n`;
+const unframe = (mode: "json" | "sse", body: string) => {
+  if (mode === "json") return body;
+  assert.match(body, /^event: message\nid: evt-1\ndata: .*\n\n$/, "the event keeps its other lines");
+  return body.slice(body.indexOf("data: ") + 6, -2);
+};
+
+for (const mode of ["json", "sse"] as const) test(`HTTP bridge saves a tool's screenshot and file where the agent can text them (#116): ${mode}`, async t => {
   const files = await mkdtemp(join(tmpdir(), "plow-mcp-files-"));
   t.after(() => rm(files, { recursive: true, force: true }));
   // A full folder: the oldest files make room for the new ones.
@@ -120,13 +129,13 @@ test("HTTP bridge saves a tool's screenshot and file where the agent can text th
     let body = "";
     for await (const chunk of request) body += chunk;
     const rpc = JSON.parse(body);
-    response.writeHead(200, { "Content-Type": "application/json" });
-    if (rpc.id === 2) { response.end(text); return; }
-    response.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [
+    response.writeHead(200, { "Content-Type": mode === "json" ? "application/json" : "text/event-stream" });
+    if (rpc.id === 2) { response.end(frame(mode, text)); return; }
+    response.end(frame(mode, JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [
       { type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" },
       { type: "text", text: '{"title":"Registration received"}' },
       { type: "resource", resource: { uri: "file:///Users/owner/Plow/alder%20test.pdf", blob: pdf.toString("base64") } },
-    ] } }));
+    ] } })));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -142,7 +151,7 @@ test("HTTP bridge saves a tool's screenshot and file where the agent can text th
     method: "POST", headers: { Authorization: "Bearer bridge-secret", "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "plow_browser" } }),
   });
-  const { result } = await (await call(1)).json();
+  const { result } = JSON.parse(unframe(mode, await (await call(1)).text()));
   const [image, saved, title, savedFile] = result.content;
   assert.deepEqual(image, { type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" }, "a model that can see keeps the image");
   assert.deepEqual(title, { type: "text", text: '{"title":"Registration received"}' });
@@ -155,5 +164,5 @@ test("HTTP bridge saves a tool's screenshot and file where the agent can text th
   const kept = await readdir(files);
   assert.equal(kept.length, 100);
   assert.ok(!kept.includes("0000001000000-0") && !kept.includes("0000001000001-0") && kept.includes("0000001000002-0"), "the two oldest went");
-  assert.equal(await (await call(2)).text(), text, "a result with no image or file passes unchanged");
+  assert.equal(await (await call(2)).text(), frame(mode, text), "a result with no image or file passes unchanged");
 });
