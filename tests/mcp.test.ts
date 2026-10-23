@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 for (const mode of ["json", "sse", "failure", "expired", "redirect"] as const) test(`HTTP bridge forwards MCP without replay: ${mode}`, async t => {
@@ -103,4 +106,54 @@ for (const mode of ["stream", "slow-tool"] as const) test(`HTTP bridge preserves
     await upstreamClosed;
   } else assert.equal(await response.text(), '{"result":"completed-once"}');
   assert.equal(calls, 1, "no replay of the upstream action");
+});
+
+test("HTTP bridge saves a tool's screenshot and file where the agent can text them (#116)", async t => {
+  const files = await mkdtemp(join(tmpdir(), "plow-mcp-files-"));
+  t.after(() => rm(files, { recursive: true, force: true }));
+  // A full folder: the oldest files make room for the new ones.
+  for (let i = 0; i < 100; i++) await mkdir(join(files, `${String(1_000_000 + i).padStart(13, "0")}-0`));
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+  const pdf = Buffer.from("%PDF-1.4 not text \xff\xfe", "latin1");
+  const text = '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"no files here"}]}}';
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const rpc = JSON.parse(body);
+    response.writeHead(200, { "Content-Type": "application/json" });
+    if (rpc.id === 2) { response.end(text); return; }
+    response.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [
+      { type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" },
+      { type: "text", text: '{"title":"Registration received"}' },
+      { type: "resource", resource: { uri: "file:///Users/owner/Plow/alder%20test.pdf", blob: pdf.toString("base64") } },
+    ] } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const child = spawn(process.execPath, [new URL("../boot/mcp-bridge.ts", import.meta.url).pathname], {
+    env: { PLOW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`, PLOW_AGENT_TOKEN: "fixture-token", PLOW_MCP_BRIDGE_TOKEN: "bridge-secret", PLOW_MCP_FILES_DIR: files },
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  t.after(async () => { const closed = once(child, "close"); child.kill(); await closed; });
+  await once(child, "message");
+  const call = (id: number) => fetch("http://127.0.0.1:18790/mcp", {
+    method: "POST", headers: { Authorization: "Bearer bridge-secret", "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "plow_browser" } }),
+  });
+  const { result } = await (await call(1)).json();
+  const [image, saved, title, savedFile] = result.content;
+  assert.deepEqual(image, { type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" }, "a model that can see keeps the image");
+  assert.deepEqual(title, { type: "text", text: '{"title":"Registration received"}' });
+  const imagePath = saved.text.match(/^This image is saved on your machine\. To text it, attach this path: (\S+\/\d+-1\/screenshot\.jpg)$/)?.[1];
+  const filePath = savedFile.text.match(/^file:\/\/\/Users\/owner\/Plow\/alder%20test\.pdf is saved on your machine\. To text it, attach this path: (\S+\/\d+-2\/alder_test\.pdf)$/)?.[1];
+  assert.ok(imagePath?.startsWith(files + "/") && filePath?.startsWith(files + "/"), JSON.stringify([saved, savedFile]));
+  assert.equal(result.content.length, 4, "the file's bytes reach the agent as the saved file, not in the result");
+  assert.deepEqual(await readFile(imagePath), jpeg);
+  assert.deepEqual(await readFile(filePath), pdf);
+  const kept = await readdir(files);
+  assert.equal(kept.length, 100);
+  assert.ok(!kept.includes("0000001000000-0") && !kept.includes("0000001000001-0") && kept.includes("0000001000002-0"), "the two oldest went");
+  assert.equal(await (await call(2)).text(), text, "a result with no image or file passes unchanged");
 });
