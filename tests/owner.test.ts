@@ -48,7 +48,7 @@ for (const { kind, role, trusted, body, guestTools } of [
   let routingPeer: Peer | undefined;
   let toolsDisabled: boolean | undefined;
   let replyMode: string | undefined;
-  let context: { access?: { toolPolicy?: { allow?: string[]; deny?: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
+  let context: { access?: { toolPolicy?: { allow?: string[]; deny?: string[] }; commands?: { authorized?: boolean } }; command?: { kind: string; authorized: boolean; body: string }; from: string; reply: { to: string; originatingTo?: string }; sender: { id: string; name: string }; conversation: { id: string; routePeer: Peer }; message: { rawBody: string; inboundEventKind?: string }; supplemental: { channelStructuredContext: { payload: { trusted: boolean; participants: { role: string; name: string }[] } }[] } } | undefined;
   let channel: { gateway: { startAccount: (context: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", on() {}, registerTool() {}, logger: { info() {} },
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
@@ -75,13 +75,17 @@ for (const { kind, role, trusted, body, guestTools } of [
   assert.equal(context.sender.id, role === "owner" ? "plow-owner" : sender.provider_key);
   assert.equal(context.sender.name, sender.display_name);
   const restrictedPhone = kind !== "email" && !trusted && role === "member";
+  // A group text that is not a command is room activity; a guest's only way to answer it is the message tool.
+  const roomEvent = kind === "group" && body !== "/status";
+  assert.equal(context.message.inboundEventKind, roomEvent ? "room_event" : "user_request");
+  const phoneAllow = roomEvent ? [...new Set(["message", ...guestTools])] : guestTools;
   assert.deepEqual(context.access?.toolPolicy, kind === "email"
-    ? { deny: ["automations"], ...(role === "member" ? { allow: [...new Set(["plow_send_email", ...guestTools])] } : {}) } : restrictedPhone && guestTools.length ? { allow: guestTools } : undefined);
-  assert.equal(toolsDisabled, restrictedPhone && !guestTools.length ? true : undefined);
+    ? { deny: ["automations"], ...(role === "member" ? { allow: [...new Set(["plow_send_email", ...guestTools])] } : {}) } : restrictedPhone && phoneAllow.length ? { allow: phoneAllow } : undefined);
+  assert.equal(toolsDisabled, restrictedPhone && !phoneAllow.length ? true : undefined);
   const baseline = catalog.filter(name => !["guest_view", "guest_pick", "guest_admin", "ask_user"].includes(name) || guestTools.includes(name));
   assert.deepEqual(available, kind === "email"
     ? role === "member" ? catalog.filter(name => (name === "plow_send_email" || guestTools.includes(name)) && !["automations", "ask_user"].includes(name)) : baseline.filter(name => name !== "automations")
-    : restrictedPhone ? guestTools.filter(name => catalog.includes(name)) : baseline);
+    : restrictedPhone ? phoneAllow.filter(name => catalog.includes(name)) : baseline);
   const facts = context.supplemental.channelStructuredContext[0].payload;
   assert.equal(facts.trusted, trusted);
   assert.equal(facts.participants[0].role, role);

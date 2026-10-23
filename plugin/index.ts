@@ -7,6 +7,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // @ts-expect-error The pinned SDK ships this runtime entry without type declarations.
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
+import { classifyChannelInboundEvent, resolveUnmentionedGroupInboundPolicy } from "openclaw/plugin-sdk/channel-inbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
@@ -153,10 +154,21 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const body = [message.body, ...unavailable].filter(Boolean).join("\n") || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
+  // A group text is room activity the agent observes, not a request to it, unless it tags this line, replies
+  // to this agent's message or is a command: OpenClaw then says so, keeps the final text private, posts only
+  // through message(action="send") and ends a silent turn cleanly. Without it a group turn had to answer, so
+  // the model's NO_REPLY was retried into "⚠️ Agent couldn't generate a response" (plow-agents#83).
+  const invoked = message.mentions?.some(mention => mention.is_me) === true || (quoted?.sender.type === "agent" && quoted.sender.relationship === "self");
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind }, unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({ cfg, agentId: route.agentId }),
+    wasMentioned: invoked, hasControlCommand: command !== undefined,
+  });
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
+  // A guest's "replies only" is the message tool in a room event; its sends stay in this chat (crossContext is off).
+  const guestAllow = guestTools && inboundEventKind === "room_event" ? [...new Set(["message", ...guestTools])] : guestTools;
   const toolPolicy = email
     ? { deny: ["automations"], ...(!senderIsOwner ? { allow: [...new Set(["plow_send_email", ...account.guestTools ?? []])] } : {}) }
-    : guestTools?.length ? { allow: guestTools } : undefined;
+    : guestAllow?.length ? { allow: guestAllow } : undefined;
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
   const persona = (email && account.emailName) || selfName;
@@ -177,7 +189,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
-    })), rawBody: body },
+    })), rawBody: body, inboundEventKind },
     supplemental: {
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
@@ -225,7 +237,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
       },
       // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
-      ...(guestTools?.length === 0 ? { disableTools: true } : {}),
+      ...(guestAllow?.length === 0 ? { disableTools: true } : {}),
       sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
       onObservedReplyDelivery: () => { observedReplyDelivery = true; },
       onAgentRunTerminalOutcome: outcome => {

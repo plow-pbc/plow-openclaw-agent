@@ -142,7 +142,9 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  // plow-agents#83: a silent group turn is an answer, not a failure retried into an error notice.
+  assert.deepEqual(config.agents.defaults.silentReply, { group: "allow" });
   assert.deepEqual(config.meta, {});
 });
 

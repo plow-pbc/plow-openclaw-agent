@@ -46,6 +46,9 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
       // A phone turn, not OpenClaw's 48-hour default: a stuck run blocks its chat.
       timeoutSeconds: 600,
+      // OpenClaw's group default makes every group turn answer: a NO_REPLY is retried, then replaced
+      // by "⚠️ Agent couldn't generate a response" (plow-agents#83). Silence is an answer in a group.
+      silentReply: { group: "allow" },
       // Off. OpenClaw's default heartbeat polls every 30 minutes with the whole
       // conversation, uncached, for a NO_REPLY nobody sees, billed to the owner:
       // about $90 a day across idle agents (plow#2347). "0m" is its off switch;
@@ -62,7 +65,8 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
-    messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
+    // A group text that does not tag the agent is room activity it observes (plugin/index.ts receive).
+    messages: { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),

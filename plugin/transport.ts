@@ -23,6 +23,8 @@ export type Message = {
   attachments: { url: string | null; content_type: string; filename: string }[];
   // Plow wraps the replied-to message with the part being answered.
   reply_to?: { part_index: number | null; message: Message };
+  // Who the text tags, as the carrier reported it; null when it sent no mention data.
+  mentions?: { handle: string; is_me: boolean }[] | null;
 };
 export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; onAdopted: () => Promise<void> };
 export type TurnOutcome = "completed" | "incomplete" | "deferred";
