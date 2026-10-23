@@ -211,7 +211,9 @@ that has already swapped `/app` and `/opt/plow`:
 If the standby exits or is not warm within 3 minutes, it is stopped and the
 running gateway keeps serving. If it dies after taking over, it restarts like
 any gateway. A change to the boot process itself (`main.js`, `process.js`,
-`front.js`) still needs a restart.
+`front.js`) or to the MCP bridge (`mcp-bridge.js`), which a takeover leaves
+running, still needs a restart: an upgrade that adds the bridge's saving of
+Latch screenshots and files (#116) is one.
 
 ## Building a variant image
 
