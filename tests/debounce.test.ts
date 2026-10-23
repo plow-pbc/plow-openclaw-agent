@@ -5,14 +5,16 @@ import { test } from "node:test";
 import entry from "../plugin/index.ts";
 import { websocketFixture } from "./ws-fixture.ts";
 
-for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-speakers", "revoked"] as const) test(`inbound debounce: ${scenario}`, async t => {
+for (const scenario of ["burst", "tagged-burst", "speaker", "slash", "media", "abort", "group-speakers", "revoked"] as const) test(`inbound debounce: ${scenario}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter(6000);
   const sender = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
   const guest = { ...sender, uid: "guest", role: "member", display_name: "Guest", provider_key: "+15550000003" };
   const chat = { uid: "chat", status: "active", trusted: true, participants: [sender, guest, { type: "agent", relationship: "self", line: { uid: "line" } }] };
-  const first = { uid: "first", direction: "inbound", sender: scenario === "revoked" ? guest : sender, body: "pitch him this:", attachments: [], created_at: new Date().toISOString() };
-  const second = { ...first, uid: "second", sender: scenario === "speaker" || scenario === "group-speakers" ? guest : first.sender,
+  const first = { uid: "first", direction: "inbound", sender: scenario === "revoked" ? guest : sender, body: "pitch him this:", attachments: [], created_at: new Date().toISOString(),
+    // plow-agents#83: the tag on the first text of a burst still invokes the agent for the combined turn.
+    ...(scenario === "tagged-burst" ? { mentions: [{ handle: "+15550000002", is_me: true }] } : {}) };
+  const second = { ...first, uid: "second", mentions: undefined, sender: scenario === "speaker" || scenario === "group-speakers" ? guest : first.sender,
     body: scenario === "slash" ? "/status" : scenario === "media" ? "photo" : "https://notion.so/example",
     attachments: scenario === "media" ? [{ url: "/photo", content_type: "image/png", filename: "photo.png" }] : [] };
   t.mock.method(globalThis, "fetch", async (url: string | URL) => String(url).endsWith("/photo") ? new Response("image") : Response.json(
@@ -28,10 +30,10 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
     });
     if (scenario === "group-speakers") void delay(40).then(() => send(third));
   });
-  const contexts: { messageId: string; message: { rawBody: string }; sender: { id: string } }[] = [];
+  const contexts: { messageId: string; message: { rawBody: string; inboundEventKind?: string }; sender: { id: string } }[] = [];
   const times: number[] = [];
   const toolsDisabled: (boolean | undefined)[] = [];
-  const combined = scenario === "burst" || scenario === "revoked";
+  const combined = scenario === "burst" || scenario === "tagged-burst" || scenario === "revoked";
   const sourceIds = scenario === "group-speakers" ? ["first", "second", "third"] : ["first", "second"];
   let channel: { gateway: { startAccount: (ctx: object) => Promise<void> } } | undefined;
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
@@ -54,7 +56,7 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
     } },
   });
   const started = Date.now();
-  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: 300 } } } }, abortSignal: controller.signal, log: { info() {} } });
+  await channel!.gateway.startAccount({ account: { apiBase, accountId: "chat", lineUid: "line" }, cfg: { messages: { inbound: { byChannel: { plow: 300 } }, ...(scenario === "tagged-burst" ? { groupChat: { unmentionedInbound: "room_event" } } : {}) } }, abortSignal: controller.signal, log: { info() {} } });
   assert.notEqual(controller.signal.reason?.name, "TimeoutError");
   if (scenario === "abort") {
     assert.deepEqual(contexts, []);
@@ -66,6 +68,7 @@ for (const scenario of ["burst", "speaker", "slash", "media", "abort", "group-sp
   assert.deepEqual(contexts.map(c => c.message.rawBody), combined ? [`${first.body}\n${second.body}`] : scenario === "group-speakers" ? [first.body, second.body, third.body] : [first.body, second.body]);
   assert.equal(contexts.at(-1)!.messageId, sourceIds.at(-1));
   if (scenario === "revoked") assert.deepEqual(toolsDisabled, [true]);
+  if (scenario === "tagged-burst") assert.equal(contexts[0].message.inboundEventKind, "user_request");
   if (scenario === "speaker") assert.deepEqual(contexts.map(c => c.sender.id), ["plow-owner", guest.provider_key]);
   if (scenario === "slash" || scenario === "media") assert.ok(times[1] - started < 250, `immediate turn waited ${times[1] - started} ms`);
   const saved = JSON.parse(await readFile(`${root}/plow-checkpoints/chat`, "utf8"));

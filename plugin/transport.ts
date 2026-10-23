@@ -213,7 +213,9 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     discovered.set(chat.uid, chat);
     const owner = findOwnerChat(account, [...discovered.values()]);
-    const message = { ...last.message, body: items.map(item => item.message.body).join("\n") };
+    // A burst keeps every text's invocation: a tag or a reply in an earlier text still addresses the agent.
+    const message = { ...last.message, body: items.map(item => item.message.body).join("\n"),
+      mentions: items.flatMap(item => item.message.mentions ?? []), reply_to: items.findLast(item => item.message.reply_to)?.message.reply_to };
     let acknowledged: Promise<void> | undefined;
     const acknowledge = (stage: string) => acknowledged ??= (async () => {
       for (const item of items) {

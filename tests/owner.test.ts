@@ -24,9 +24,12 @@ const guestCases = [
   ["email", "member", false, ["plow_send_email", "guest_view", "automations", "ask_user", "missing_tool"]],
   ["email", "owner", false, ["guest_view"]],
 ] as const;
-for (const { kind, role, trusted, body, guestTools } of [
-  ...rosterCases, ...guestCases.map(([kind, role, trusted, guestTools]) => ({ kind, role, trusted, body: "hello", guestTools: [...guestTools] })),
-]) test(`roster identity scopes tools: ${kind}, ${role}, trusted=${trusted}, body=${body}, guestTools=${guestTools}`, async t => {
+// Tagging this line or replying to its message invokes the agent, so that group text is a request (plow-agents#83).
+const invocationCases = (["tagged", "reply"] as const).map(invocation => ({ kind: "group", role: "member", trusted: false, body: "hello", guestTools: [] as string[], invocation }));
+const cases: { kind: string; role: string; trusted: boolean; body: string; guestTools: string[]; invocation?: "tagged" | "reply" }[] = [
+  ...rosterCases, ...guestCases.map(([kind, role, trusted, guestTools]) => ({ kind, role, trusted, body: "hello", guestTools: [...guestTools] })), ...invocationCases,
+];
+for (const { kind, role, trusted, body, guestTools, invocation } of cases) test(`roster identity scopes tools: ${kind}, ${role}, trusted=${trusted}, body=${body}, guestTools=${guestTools}${invocation ? `, ${invocation}` : ""}`, async t => {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const previous = process.env.PLOW_GUEST_TOOLS;
@@ -43,7 +46,9 @@ for (const { kind, role, trusted, body, guestTools } of [
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(
     url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") ? chat :
     url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" }));
-  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender: { ...sender, role: "owner" }, body, attachments: [], created_at: new Date().toISOString() } } })));
+  const invocationFields = invocation === "tagged" ? { mentions: [{ handle: "+15550000002", is_me: true }] }
+    : invocation === "reply" ? { reply_to: { part_index: 0, message: { uid: "agent-message", body: "Dinner at 8?", sender: agent, direction: "outbound", attachments: [], created_at: new Date().toISOString() } } } : {};
+  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender: { ...sender, role: "owner" }, body, attachments: [], created_at: new Date().toISOString(), ...invocationFields } } })));
   type Peer = { kind: string; id: string };
   let routingPeer: Peer | undefined;
   let toolsDisabled: boolean | undefined;
@@ -76,7 +81,7 @@ for (const { kind, role, trusted, body, guestTools } of [
   assert.equal(context.sender.name, sender.display_name);
   const restrictedPhone = kind !== "email" && !trusted && role === "member";
   // A group text that is not a command is room activity; a guest's only way to answer it is the message tool.
-  const roomEvent = kind === "group" && body !== "/status";
+  const roomEvent = kind === "group" && body !== "/status" && !invocation;
   assert.equal(context.message.inboundEventKind, roomEvent ? "room_event" : "user_request");
   const phoneAllow = roomEvent ? [...new Set(["message", ...guestTools])] : guestTools;
   assert.deepEqual(context.access?.toolPolicy, kind === "email"
