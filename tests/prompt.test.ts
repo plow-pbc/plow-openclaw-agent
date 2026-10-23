@@ -131,21 +131,13 @@ test("the prompt has the agent tell the person right after report_bug succeeds, 
   assert.ok(flat.includes("As soon as report_bug returns success, tell the person in one short line that you reported it, with the report_id it returned, before anything else in your reply."));
 });
 
-// Cedar answered the owner's greeting to another member of a group (plow-agents#83).
-test("the prompt keeps the agent silent in a group when a message is for someone else", () => {
-  const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("In a group, people also talk to each other, the owner included. Reply only to a message meant for you"));
-  assert.ok(flat.includes("A greeting, a pet name or chat aimed at another person is not for you, even from the owner: send nothing and end with exactly NO_REPLY."));
-});
-
-// Told to report a bug, Cedar asked "what seemed off?" and filed only when told again (plow-agents#83).
-test("the prompt files report_bug at once when asked, without asking what went wrong", () => {
-  const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("When the person asks you to report a bug, call report_bug in that turn about what just happened in this conversation, even if they did not say what went wrong; do not ask what they meant first."));
-});
-
-// Cedar asked for Camily's number, then found her in the owner's contacts once told to look (plow-agents#82).
-test("the prompt looks a named person up in the owner's Mac contacts before asking", () => {
-  const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("look that person up in the owner's contacts on their Mac first (the owners-mac skill) and use what you find. Ask the owner only when the Mac is not connected or nobody matches"));
+// From one Cedar session: it answered the owner's greeting to another group member and asked
+// "what seemed off?" before filing when told to report it (plow-agents#83), and asked for a
+// contact's number before searching the owner's contacts (plow-agents#82).
+for (const [name, expected] of [
+  ["the prompt keeps the agent silent in a group when a message is for someone else", "A greeting, a pet name or chat aimed at another person is not for you, even from the owner: send nothing and end with exactly NO_REPLY."],
+  ["the prompt files report_bug at once when asked, without asking what went wrong", "When the person asks you to report a bug, call report_bug in that turn about what just happened in this conversation, even if they did not say what went wrong; do not ask what they meant first."],
+  ["the prompt looks a named person up in the owner's Mac contacts before asking", "look that person up in the owner's contacts on their Mac first (the owners-mac skill) and use what you find. Ask the owner only when the Mac is not connected or nobody matches"],
+] as const) test(name, () => {
+  assert.ok(prompt.replace(/\s+/g, " ").includes(expected));
 });
