@@ -362,7 +362,7 @@ export default defineChannelPluginEntry({
     });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email. When the owner names a person without a number or address, look them up in the owner's contacts on their Mac first (owners-mac skill); ask the owner only if nobody matches or the Mac is not connected, and ask which one if several match.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
@@ -422,7 +422,7 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "report_bug", label: "Report a bug to your developers",
-      description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once. Only tell the person it was reported after this returns success, and then do so at once, in one short line with the report_id it returns, before anything else; status duplicate means it was already reported earlier, so say that without quoting an id.",
+      description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. When the person asks you to report a bug, call this in that turn about what just happened in the conversation; do not ask them what went wrong first. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once. Only tell the person it was reported after this returns success, and then do so at once, in one short line with the report_id it returns, before anything else; status duplicate means it was already reported earlier, so say that without quoting an id.",
       parameters: {
         type: "object", required: [], additionalProperties: false,
         properties: {

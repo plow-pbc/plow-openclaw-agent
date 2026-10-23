@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import entry from "../plugin/index.ts";
 
-type Tool = { name: string; parameters?: object; execute: (id: string, args: object) => Promise<unknown> };
+type Tool = { name: string; description: string; parameters?: object; execute: (id: string, args: object) => Promise<unknown> };
 
 test("plow_start_thread takes phone numbers and iMessage emails as members, as Plow does", () => {
   let tool: Tool | undefined;
@@ -18,6 +18,8 @@ test("plow_start_thread takes phone numbers and iMessage emails as members, as P
   for (const member of ["5550000002", "joe", "joe@", "@icloud.com", "joe @icloud.com", "cht_home"]) {
     assert.throws(() => check([member]), /Validation failed/, member);
   }
+  // plow-agents#82: asked the owner for a number instead of searching their contacts.
+  assert.match(tool!.description, /names a person without a number or address, look them up in the owner's contacts on their Mac first/);
 });
 
 test("collected owner tools resolve the host delivery route and still refuse other callers or conversations", async t => {
