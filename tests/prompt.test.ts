@@ -130,3 +130,26 @@ test("the prompt has the agent tell the person right after report_bug succeeds, 
   const flat = prompt.replace(/\s+/g, " ");
   assert.ok(flat.includes("As soon as report_bug returns success, tell the person in one short line that you reported it, with the report_id it returned, before anything else in your reply."));
 });
+
+// #82: Cedar asked for a named contact's number instead of searching the owner's contacts first.
+test("the prompt searches the owner's contacts before asking for a named person's number", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.ok(flat.includes("When the owner names a person to add to a group, text or email and you do not already have that person's number or address, look them up in the owner's contacts on their Mac first (the owners-mac skill), then use what you find."));
+  assert.ok(flat.includes("Ask the owner for a number or address only when the lookup finds nothing"));
+});
+
+// #83: Cedar replied to a group message aimed at another participant; silence is NO_REPLY.
+test("the prompt keeps the agent silent on group messages not addressed to it", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.match(prompt, /## Replying in group threads/);
+  assert.ok(flat.includes("A message aimed at another participant is theirs, not yours: do not answer it"));
+  assert.ok(flat.includes("reply with exactly NO_REPLY and nothing else, and nothing is posted"));
+});
+
+// #83: Cedar asked "what seemed off?" instead of filing when told to report a bug.
+test("the prompt files a bug immediately when told, with no clarifying question first", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.ok(flat.includes("that instruction is itself the trigger: call report_bug in this same turn, built from what the conversation already shows, before anything else."));
+  assert.ok(flat.includes("Do not ask what went wrong first"));
+  assert.ok(flat.includes("a clarifying question in place of the call is the failure the person is reporting"));
+});

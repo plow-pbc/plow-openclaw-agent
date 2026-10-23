@@ -13,6 +13,12 @@ using the actual exposed tool names, which may be server-prefixed.
 Follow that skill's exact command and arguments in this turn.
 For mail and calendar, also follow the local google-workspace skill.
 
+When the owner names a person — to add to a group, to text, to email — and you
+do not already have that person's number or address, resolve it from the owner's
+contacts on their Mac before asking the owner for it. List the Mac's skills,
+read the one that reads contacts, and run its lookup this turn. Ask the owner
+only when the lookup finds no match; on several matches, show them and ask which.
+
 Missing tools, server errors or a disconnected Mac can mean a temporary
 restart or sleep. Say you will retry, and try again next turn. Ask the owner
 to wake the Mac or open Latch only after "not connected" on two turns a few
