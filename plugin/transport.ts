@@ -23,6 +23,8 @@ export type Message = {
   attachments: { url: string | null; content_type: string; filename: string }[];
   // Plow wraps the replied-to message with the part being answered.
   reply_to?: { part_index: number | null; message: Message };
+  // Who the text tags, as the carrier reported it; null when it sent no mention data.
+  mentions?: { handle: string; is_me: boolean }[] | null;
 };
 export type TurnIngress = { abortSignal: AbortSignal; onSubmitted: () => void; onAdopted: () => Promise<void> };
 export type TurnOutcome = "completed" | "incomplete" | "deferred";
@@ -211,7 +213,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     }
     discovered.set(chat.uid, chat);
     const owner = findOwnerChat(account, [...discovered.values()]);
-    const message = { ...last.message, body: items.map(item => item.message.body).join("\n") };
+    // A burst keeps every text's invocation: a tag or a reply to this agent in an earlier text still addresses it.
+    const quotes = items.flatMap(item => item.message.reply_to ? [item.message.reply_to] : []);
+    const message = { ...last.message, body: items.map(item => item.message.body).join("\n"), mentions: items.flatMap(item => item.message.mentions ?? []),
+      reply_to: quotes.findLast(quote => quote.message.sender.type === "agent" && quote.message.sender.relationship === "self") ?? quotes.at(-1) };
     let acknowledged: Promise<void> | undefined;
     const acknowledge = (stage: string) => acknowledged ??= (async () => {
       for (const item of items) {

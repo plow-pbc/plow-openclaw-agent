@@ -142,7 +142,9 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  // plow-agents#83: a silent group turn is an answer, not a failure retried into an error notice.
+  assert.deepEqual(config.agents.defaults.silentReply, { group: "allow" });
   assert.deepEqual(config.meta, {});
 });
 
@@ -195,6 +197,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   delete old.agents.defaults.heartbeat; // rendered before plow#2347, on OpenClaw's 30-minute default
+  delete old.agents.defaults.silentReply; // rendered before plow-agents#83, on OpenClaw's answer-every-group-turn default
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
@@ -202,7 +205,10 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
   assert.deepEqual(JSON5.parse(await readFile(join(includes, "message-queue.json5"), "utf8")), { mode: "collect" });
-  assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
+  // An upgraded agent gets the group-silence settings and keeps the owner's own group settings (plow-agents#83).
+  assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool", unmentionedInbound: { $include: join(includes, "group-unmentioned-inbound.json5") } });
+  assert.equal(JSON5.parse(await readFile(owner.messages.groupChat.unmentionedInbound.$include, "utf8")), "room_event");
+  assert.equal(JSON5.parse(await readFile(owner.agents.defaults.silentReply.group.$include, "utf8")), "allow");
   assert.equal(owner.messages.inbound.debounceMs, 800);
   assert.equal(owner.messages.inbound.byChannel.signal, 500);
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
@@ -222,7 +228,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(again.gateway, { $include: join(includes, "gateway.json5") });
   assert.deepEqual(again.channels.plow, { $include: join(includes, "plow-channel.json5") });
   assert.deepEqual(again.channels.telegram, { enabled: true });
-  assert.deepEqual(again.messages.groupChat, { visibleReplies: "message_tool" });
+  assert.deepEqual(again.messages.groupChat, { visibleReplies: "message_tool", unmentionedInbound: { $include: join(includes, "group-unmentioned-inbound.json5") } });
   assert.equal(again.agents.defaults.model.primary, "extra/model");
 });
 

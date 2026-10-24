@@ -51,6 +51,8 @@ test("report_bug returns the report id to quote, and a failed call as an error",
   const config = { channels: { plow: { apiBase: "http://fixture", lineUid: "line" } } };
   const args = { trigger: "capability_gap", user_wanted: "place a phone call", error: "no calling tool" };
   assert.match(factory({ config }).description, /only tell the person it was reported after this returns success.*report_id/i);
+  // plow-agents#83: asked "what seemed off?" instead of filing when told to report.
+  assert.match(factory({ config }).description, /asks you to report a bug, call this in that turn.*do not ask them what went wrong first/i);
   process.env.PLOW_AGENT_TOKEN = "test-token";
   t.mock.method(globalThis, "fetch", async () => Response.json({ status: "accepted", report_id: "0123456789abcdef" }));
   assert.deepEqual((await factory({ config }).execute("call", args)).details,
