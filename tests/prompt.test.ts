@@ -53,6 +53,14 @@ test("the prompt puts Latch's tools and the Mac's skills before improvising", ()
   assert.ok(flat.includes("Improvise (capture the screen, script another app's interface) only when no Latch tool and no skill fallback can do the job, and then tell the person what you are doing and why"));
 });
 
+test("the prompt attaches files from the agent's machine, never a path on the Mac", () => {
+  const flat = prompt.replace(/\s+/g, " ");
+  // #116: the agent wrote a PDF on the Mac, then tried to text that Mac path (path-not-allowed).
+  assert.ok(flat.includes("A text can attach only a file on your own machine, never a path on the owner's Mac."));
+  assert.ok(flat.includes("A screenshot or file a Latch tool returns is saved on your machine for you, and the result gives its path: attach that path to text it."));
+  assert.ok(flat.includes("Make a file you mean to send in your workspace, not on the Mac."));
+});
+
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
   test(`Latch initialize instructions: ${format}`, async () => {
     let requests = 0;

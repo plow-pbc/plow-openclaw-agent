@@ -178,7 +178,12 @@ Clarifications are ordinary replies. When connected through Latch, the owner's
 Mac provides its tools and instructions. Mac unavailability does not prevent
 texting. Long-running MCP responses stream without a fixed bridge timeout;
 client disconnects cancel the upstream request. A bridge crash restarts the
-bridge while the gateway continues.
+bridge while the gateway continues. A screenshot or file a Latch tool returns
+(an image block, or an embedded resource such as a PDF from `plow_read_file`)
+is saved by the bridge in `/var/lib/plow/workspace/latch`, which keeps the
+newest 100, and the result tells the agent that path so it can text the file.
+OpenClaw itself would show a text-only model no image and keep only a
+resource's path on the Mac.
 
 ## Upgrading in place
 
@@ -206,7 +211,9 @@ that has already swapped `/app` and `/opt/plow`:
 If the standby exits or is not warm within 3 minutes, it is stopped and the
 running gateway keeps serving. If it dies after taking over, it restarts like
 any gateway. A change to the boot process itself (`main.js`, `process.js`,
-`front.js`) still needs a restart.
+`front.js`) or to the MCP bridge (`mcp-bridge.js`), which a takeover leaves
+running, still needs a restart: an upgrade that adds the bridge's saving of
+Latch screenshots and files (#116) is one.
 
 ## Building a variant image
 
