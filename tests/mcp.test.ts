@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
+
+// The bridge under test, relaying to a fixture upstream on a free port; returns once it is ready.
+async function startBridge(t: TestContext, upstream: Server, env: Record<string, string> = {}) {
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const child = spawn(process.execPath, [new URL("../boot/mcp-bridge.ts", import.meta.url).pathname], {
+    env: { PLOW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`, PLOW_AGENT_TOKEN: "fixture-token", PLOW_MCP_BRIDGE_TOKEN: "bridge-secret", ...env },
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  t.after(async () => { const closed = once(child, "close"); child.kill(); await closed; });
+  await once(child, "message");
+}
 
 for (const mode of ["json", "sse", "failure", "expired", "redirect"] as const) test(`HTTP bridge forwards MCP without replay: ${mode}`, async t => {
   const received: { method: string; session?: string; protocol?: string }[] = [];
@@ -22,16 +35,8 @@ for (const mode of ["json", "sse", "failure", "expired", "redirect"] as const) t
     response.writeHead(200, { "Content-Type": mode === "sse" ? "text/event-stream" : "application/json", "Mcp-Session-Id": request.headers["mcp-session-id"]! });
     response.end(mode === "sse" ? `event: message\ndata: ${reply}\n\n` : reply);
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const child = spawn(process.execPath, [new URL("../boot/mcp-bridge.ts", import.meta.url).pathname], {
-    env: { PLOW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`, PLOW_AGENT_TOKEN: "fixture-token", PLOW_MCP_BRIDGE_TOKEN: "bridge-secret" },
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
-  t.after(async () => { const closed = once(child, "close"); child.kill(); await closed; });
-  await once(child, "message");
+  await startBridge(t, server);
   for (const authorization of [undefined, "Bearer wrong", "Bearer fixture-token"]) {
     const response = await fetch("http://127.0.0.1:18790/mcp", {
       method: "POST", headers: { "Mcp-Session-Id": "unauthorized", ...(authorization ? { Authorization: authorization } : {}) },
@@ -77,20 +82,12 @@ for (const mode of ["stream", "slow-tool"] as const) test(`HTTP bridge preserves
       timer = setTimeout(() => response.writeHead(200, { "Content-Type": "application/json" }).end('{"result":"completed-once"}'), 61_000);
     }
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const child = spawn(process.execPath, [new URL("../boot/mcp-bridge.ts", import.meta.url).pathname], {
-    env: { PLOW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`, PLOW_AGENT_TOKEN: "fixture-token", PLOW_MCP_BRIDGE_TOKEN: "bridge-secret" },
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
   t.after(async () => {
     clearTimeout(timer);
-    const closed = once(child, "close"); child.kill(); await closed;
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   });
-  await once(child, "message");
+  await startBridge(t, server);
   const response = await fetch("http://127.0.0.1:18790/mcp", {
     method: mode === "stream" ? "GET" : "POST",
     headers: { Authorization: "Bearer bridge-secret", Accept: "application/json, text/event-stream" },
@@ -137,16 +134,8 @@ for (const mode of ["json", "sse"] as const) test(`HTTP bridge saves a tool's sc
       { type: "resource", resource: { uri: "file:///Users/owner/Plow/alder%20test.pdf", blob: pdf.toString("base64") } },
     ] } })));
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const child = spawn(process.execPath, [new URL("../boot/mcp-bridge.ts", import.meta.url).pathname], {
-    env: { PLOW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`, PLOW_AGENT_TOKEN: "fixture-token", PLOW_MCP_BRIDGE_TOKEN: "bridge-secret", PLOW_MCP_FILES_DIR: files },
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
-  t.after(async () => { const closed = once(child, "close"); child.kill(); await closed; });
-  await once(child, "message");
+  await startBridge(t, server, { PLOW_MCP_FILES_DIR: files });
   const call = (id: number) => fetch("http://127.0.0.1:18790/mcp", {
     method: "POST", headers: { Authorization: "Bearer bridge-secret", "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "plow_browser" } }),
