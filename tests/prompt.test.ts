@@ -59,6 +59,9 @@ test("the prompt attaches files from the agent's machine, never a path on the Ma
   assert.ok(flat.includes("A text can attach only a file on your own machine, never a path on the owner's Mac."));
   assert.ok(flat.includes("A screenshot or file a Latch tool returns is saved on your machine for you, and the result gives its path: attach that path to text it."));
   assert.ok(flat.includes("Make a file you mean to send in your workspace, not on the Mac."));
+  // #120: a long-running session copied a PDF by shell and write and never read it with plow_read_file.
+  assert.ok(flat.includes("To text, attach or copy any file from the owner's Mac (a PDF, a photo or any other kind), always read it with plow_read_file, even if this conversation moved files another way before: a shell command, base64 or a write tool cannot carry a Mac file to your machine."));
+  assert.ok(flat.indexOf("always read it with plow_read_file") < flat.indexOf("Before any task on the owner's Mac"), "the rule comes before the browsing rules");
 });
 
 for (const format of ["json", "sse", "oversized", "missing", "invalid", "unavailable", "redirect"]) {
