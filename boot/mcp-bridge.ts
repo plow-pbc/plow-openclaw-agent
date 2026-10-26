@@ -47,8 +47,29 @@ async function saveToolFiles(body: string) {
   return JSON.stringify({ ...rpc, result: { ...rpc.result, content: blocks } });
 }
 
-// Each event's data is one JSON-RPC message; an event with no file in it stays byte for byte.
-async function saveEventFiles(body: string) {
+// A Mac file reaches this machine only through plow_read_file. A long-running session used to
+// moving files by shell copied a PDF with commands and writes instead (#120), so a Latch command
+// or write that names such a file gets that said in its result.
+const MAC_FILE = /\.(pdf|png|jpe?g|heic|gif|webp|tiff?|zip|docx?|xlsx?|pptx?|key|numbers|pages|mp3|m4a|wav|mov|mp4)(?![\w.])/i;
+const READ_FILE_HINT = "To text or attach a file from the owner's Mac, read it with plow_read_file: it is saved on your machine and the result gives the path to attach. A command, base64 or a write cannot carry it here.";
+function readFileHint(request: Buffer) {
+  let rpc;
+  try { rpc = JSON.parse(request.toString()); } catch { return undefined; }
+  const args = rpc?.params?.arguments ?? {};
+  const named = rpc?.method !== "tools/call" ? []
+    : rpc.params?.name === "plow_run_command" ? [args.argv, args.read_paths]
+    : rpc.params?.name === "plow_write_file" ? [args.path] : [];
+  return named.flat().some(value => typeof value === "string" && MAC_FILE.test(value)) ? READ_FILE_HINT : undefined;
+}
+function withHint(body: string, hint: string | undefined) {
+  if (!hint) return body;
+  const rpc = JSON.parse(body);
+  if (!Array.isArray(rpc?.result?.content)) return body;
+  return JSON.stringify({ ...rpc, result: { ...rpc.result, content: [...rpc.result.content, { type: "text", text: hint }] } });
+}
+
+// Each event's data is one JSON-RPC message; an event the rewrite leaves alone stays byte for byte.
+async function rewriteEvents(body: string, rewrite: (data: string) => Promise<string>) {
   const parts = body.split(/(\r?\n\r?\n)/);
   for (const [i, event] of parts.entries()) {
     if (i % 2) continue;
@@ -56,7 +77,7 @@ async function saveEventFiles(body: string) {
     const first = lines.findIndex(line => line.startsWith("data:"));
     if (first < 0) continue;
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
-    const saved = await saveToolFiles(data).catch(() => data);
+    const saved = await rewrite(data).catch(() => data);
     if (saved === data) continue;
     parts[i] = [...lines.slice(0, first), `data: ${saved}`, ...lines.slice(first).filter(line => !line.startsWith("data:"))]
       .join(event.includes("\r\n") ? "\r\n" : "\n");
@@ -95,7 +116,9 @@ createServer(async (request, response) => {
     const events = request.method === "POST" && type.startsWith("text/event-stream");
     if (type.startsWith("application/json") || events) {
       const body = await upstream.text();
-      response.end(await (events ? saveEventFiles(body) : saveToolFiles(body)).catch(() => body));
+      const hint = readFileHint(Buffer.concat(chunks));
+      const rewrite = async (data: string) => withHint(await saveToolFiles(data), hint);
+      response.end(await (events ? rewriteEvents(body, rewrite) : rewrite(body)).catch(() => body));
     } else if (upstream.body) await pipeline(Readable.fromWeb(upstream.body), response);
     else response.end();
   } catch {

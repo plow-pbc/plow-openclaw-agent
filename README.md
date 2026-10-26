@@ -183,7 +183,10 @@ bridge while the gateway continues. A screenshot or file a Latch tool returns
 is saved by the bridge in `/var/lib/plow/workspace/latch`, which keeps the
 newest 100, and the result tells the agent that path so it can text the file.
 OpenClaw itself would show a text-only model no image and keep only a
-resource's path on the Mac.
+resource's path on the Mac. A `plow_run_command` or `plow_write_file` call that
+names a non-text file (a PDF, a photo, an office file) gets a line added to its
+result: read that file with `plow_read_file` to text it. A long-running agent
+otherwise kept copying Mac files by shell (#120).
 
 ## Upgrading in place
 

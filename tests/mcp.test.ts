@@ -166,3 +166,42 @@ for (const mode of ["json", "sse"] as const) test(`HTTP bridge saves a tool's sc
   assert.ok(!kept.includes("0000001000000-0") && !kept.includes("0000001000001-0") && kept.includes("0000001000002-0"), "the two oldest went");
   assert.equal(await (await call(2)).text(), frame(mode, text), "a result with no image or file passes unchanged");
 });
+
+// #120: a long-running session copied a Mac PDF with commands and writes, never plow_read_file.
+for (const mode of ["json", "sse"] as const) test(`HTTP bridge points a Latch command or write that names a Mac file to plow_read_file (#120): ${mode}`, async t => {
+  const result = { content: [{ type: "text", text: '{"status":"completed","exit_code":0}' }] };
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const rpc = JSON.parse(body);
+    response.writeHead(200, { "Content-Type": mode === "json" ? "application/json" : "text/event-stream" });
+    response.end(frame(mode, JSON.stringify(rpc.id === 9 ? { jsonrpc: "2.0", id: 9, error: { code: -32000, message: "denied" } } : { jsonrpc: "2.0", id: rpc.id, result })));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const child = spawn(process.execPath, [new URL("../boot/mcp-bridge.ts", import.meta.url).pathname], {
+    env: { PLOW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`, PLOW_AGENT_TOKEN: "fixture-token", PLOW_MCP_BRIDGE_TOKEN: "bridge-secret" },
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  t.after(async () => { const closed = once(child, "close"); child.kill(); await closed; });
+  await once(child, "message");
+  const call = async (id: number, name: string, args: object) => (await fetch("http://127.0.0.1:18790/mcp", {
+    method: "POST", headers: { Authorization: "Bearer bridge-secret", "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
+  })).text();
+  const hinted = (id: number) => JSON.stringify({ jsonrpc: "2.0", id, result: { content: [...result.content, { type: "text",
+    text: "To text or attach a file from the owner's Mac, read it with plow_read_file: it is saved on your machine and the result gives the path to attach. A command, base64 or a write cannot carry it here." }] } });
+  const plain = (id: number) => frame(mode, JSON.stringify({ jsonrpc: "2.0", id, result }));
+  assert.equal(unframe(mode, await call(1, "plow_run_command", { argv: ["base64", "/Users/owner/Plow/receipt.pdf"] })), hinted(1));
+  assert.equal(unframe(mode, await call(2, "plow_run_command", { argv: ["find", "/Users/owner/Plow", "-name", "*.pdf"] })), hinted(2), "finding one is the moment to say it");
+  assert.equal(unframe(mode, await call(3, "plow_run_command", { argv: ["cp", "x", "/tmp"], read_paths: ["~/Plow/Photo.HEIC"] })), hinted(3));
+  assert.equal(unframe(mode, await call(4, "plow_write_file", { path: "/Users/owner/Plow/copy.pdf", content: "%PDF" })), hinted(4));
+  assert.equal(await call(5, "plow_run_command", { argv: ["ls", "-la", "/tmp"] }), plain(5), "an ordinary command passes unchanged");
+  assert.equal(await call(6, "plow_run_command", { argv: ["cat", "notes.pdf.txt"] }), plain(6), "a text file is not one");
+  assert.equal(await call(7, "plow_read_file", { path: "/Users/owner/Plow/receipt.pdf" }), plain(7), "plow_read_file is the way, so no hint");
+  assert.equal(await call(8, "plow_write_file", { path: "/Users/owner/Plow/notes.md", content: "hi" }), plain(8));
+  assert.equal(await call(9, "plow_run_command", { argv: ["open", "a.pdf"] }),
+    frame(mode, JSON.stringify({ jsonrpc: "2.0", id: 9, error: { code: -32000, message: "denied" } })), "an error has no result to add to");
+});
