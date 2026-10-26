@@ -145,8 +145,11 @@ test("the prompt has the agent tell the person right after report_bug succeeds, 
 for (const [name, expected] of [
   // Silence comes from OpenClaw's room events (boot/config.ts); the prompt says who a group message is for.
   ["the prompt keeps the agent silent in a group when a message is for someone else", "A greeting, a pet name or chat aimed at another person is not for you, even from the owner: post nothing."],
-  // plow-openclaw-agent#123: "amor, don't forget to grab milk on the way home" got "🥛" in Daniel's group.
-  ["the prompt keeps the agent off a chore meant for someone else, emoji included", "Neither is a chore or errand meant for someone else (\"amor, don't forget to grab milk\", \"pick up the kids at 5\"): do not act on it, answer it or react to it, not even with an emoji."],
+  // plow-openclaw-agent#123: "amor, don't forget to grab milk on the way home" got "🥛" in Daniel's group, and the
+  // battery's false replies were affection ("Love you too ❤️") and offers ("I'll set a reminder 👍").
+  ["the prompt leaves a message addressed to someone else to them, even one the agent could do", "A message addressed to someone else, by their name or a pet name, is theirs, even when you could do what it asks: \"Camily, did you book the dentist?\", \"amor, don't forget to grab milk on the way home\", \"Oi amor, cheguei!\"."],
+  ["the prompt names affection, chores for others and their answers to each other", "So is affection (\"Love you\", \"Te amo ❤️\"), a chore or errand for another person (\"pick up the kids at 5\"), and their answers to each other (\"Done, Friday 10am\")."],
+  ["the prompt rules out an emoji, a reaction or an offer to help for those", "For these, post nothing at all: no reply, no emoji, no reaction, no \"👍\", and no offer to help or to set a reminder."],
   ["the prompt has the agent answer a group message meant for it", "A message is for you when it uses your name, asks for something you can do, or answers what you just said; answer it, with message(action=\"send\") when your turn says your final text stays private."],
   ["the prompt files report_bug at once when asked, without asking what went wrong", "When the person asks you to report a bug, call report_bug in that turn about what just happened in this conversation, even if they did not say what went wrong; do not ask what they meant first."],
   ["the prompt looks a named person up in the owner's Mac contacts before asking", "look that person up in the owner's contacts on their Mac first (the owners-mac skill) and use what you find. Ask the owner only when the Mac is not connected or nobody matches"],
