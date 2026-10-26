@@ -1,6 +1,6 @@
 ---
 name: owners-mac
-description: Look up the owner's messages, mail, calendar, contacts, files, browser or prior work on their Mac before claiming there is no record.
+description: Look up the owner's messages, mail, calendar, contacts, files, browser or prior work on their Mac before claiming there is no record or asking the owner for a contact's number or address.
 ---
 # The owner's Mac
 
@@ -12,6 +12,8 @@ there is no record, list the Mac's skills, then read a relevant listed skill
 using the actual exposed tool names, which may be server-prefixed.
 Follow that skill's exact command and arguments in this turn.
 For mail and calendar, also follow the local google-workspace skill.
+When the owner names someone without a number or address, search their
+contacts this way before asking them for it.
 
 Missing tools, server errors or a disconnected Mac can mean a temporary
 restart or sleep. Say you will retry, and try again next turn. Ask the owner
