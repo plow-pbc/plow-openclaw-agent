@@ -145,6 +145,8 @@ test("the prompt has the agent tell the person right after report_bug succeeds, 
 for (const [name, expected] of [
   // Silence comes from OpenClaw's room events (boot/config.ts); the prompt says who a group message is for.
   ["the prompt keeps the agent silent in a group when a message is for someone else", "A greeting, a pet name or chat aimed at another person is not for you, even from the owner: post nothing."],
+  // plow-openclaw-agent#123: "amor, don't forget to grab milk on the way home" got "🥛" in Daniel's group.
+  ["the prompt keeps the agent off a chore meant for someone else, emoji included", "Neither is a chore or errand meant for someone else (\"amor, don't forget to grab milk\", \"pick up the kids at 5\"): do not act on it, answer it or react to it, not even with an emoji."],
   ["the prompt has the agent answer a group message meant for it", "A message is for you when it uses your name, asks for something you can do, or answers what you just said; answer it, with message(action=\"send\") when your turn says your final text stays private."],
   ["the prompt files report_bug at once when asked, without asking what went wrong", "When the person asks you to report a bug, call report_bug in that turn about what just happened in this conversation, even if they did not say what went wrong; do not ask what they meant first."],
   ["the prompt looks a named person up in the owner's Mac contacts before asking", "look that person up in the owner's contacts on their Mac first (the owners-mac skill) and use what you find. Ask the owner only when the Mac is not connected or nobody matches"],

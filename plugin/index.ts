@@ -12,6 +12,7 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { buildFeedback, buildReport, type BugTrigger } from "./report-bug.ts";
+import { addressedElsewhere } from "./addressee.ts";
 
 let runtime: PluginRuntime;
 // Channel and discovery registries can load separate copies of this module.
@@ -131,6 +132,9 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
   return result.results[0].messageId;
 }
 
+// Every tool that can put words, an emoji or a reaction in front of people.
+const POSTING_TOOLS = ["message", "plow_reply_to", "plow_start_thread", "plow_send_email"];
+
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender, quoted = message.reply_to?.message;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
@@ -163,14 +167,19 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     conversation: { kind }, unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({ cfg, agentId: route.agentId }),
     wasMentioned: invoked, hasControlCommand: command !== undefined,
   });
-  const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
-  // A guest's "replies only" is the message tool in a room event; its sends stay in this chat (crossContext is off).
-  const guestAllow = guestTools && inboundEventKind === "room_event" ? [...new Set(["message", ...guestTools])] : guestTools;
-  const toolPolicy = email
-    ? { deny: ["automations"], ...(!senderIsOwner ? { allow: [...new Set(["plow_send_email", ...account.guestTools ?? []])] } : {}) }
-    : guestAllow?.length ? { allow: guestAllow } : undefined;
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
+  // A room event that calls someone else by a pet name or by name, and never this agent, gets no tool that
+  // posts or reacts, so not even an emoji reaches the room (plow-openclaw-agent#123).
+  const elsewhere = !email && inboundEventKind === "room_event"
+    && addressedElsewhere(body, selfName, chat.participants.flatMap(p => p.type === "member" ? [p.display_name] : []));
+  const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
+  // A guest's "replies only" is the message tool in a room event; its sends stay in this chat (crossContext is off).
+  const guestAllow = guestTools && inboundEventKind === "room_event"
+    ? [...new Set(["message", ...guestTools])].filter(name => !elsewhere || !POSTING_TOOLS.includes(name)) : guestTools;
+  const toolPolicy = email
+    ? { deny: ["automations"], ...(!senderIsOwner ? { allow: [...new Set(["plow_send_email", ...account.guestTools ?? []])] } : {}) }
+    : guestAllow ? (guestAllow.length ? { allow: guestAllow } : undefined) : elsewhere ? { deny: [...POSTING_TOOLS] } : undefined;
   const persona = (email && account.emailName) || selfName;
   const participants = chat.participants.map(p => ({
     ...(p.type === "agent" && p.relationship === "self" ? { name: persona } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
