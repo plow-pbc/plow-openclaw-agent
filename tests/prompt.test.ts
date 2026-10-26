@@ -147,6 +147,8 @@ for (const [name, expected] of [
   ["the prompt keeps the agent silent in a group when a message is for someone else", "A greeting, a pet name or chat aimed at another person is not for you, even from the owner: post nothing."],
   // plow-openclaw-agent#123: "amor, don't forget to grab milk on the way home" got "🥛" in Daniel's group, and the
   // battery's false replies were affection ("Love you too ❤️") and offers ("I'll set a reminder 👍").
+  // plow-openclaw-agent#122: the first addressed text after joining got its answer only as private final text.
+  ["the prompt says a group answer reaches people only through message(action=\"send\")", "In a group your final text is private: nobody sees it. An answer reaches the group only when you call message(action=\"send\") with it. So when a message is for you, send your answer that way, every time, and never leave it only in your final text."],
   ["the prompt leaves a message addressed to someone else to them, even one the agent could do", "A message addressed to someone else, by their name or a pet name, is theirs, even when you could do what it asks: \"Camily, did you book the dentist?\", \"amor, don't forget to grab milk on the way home\", \"Oi amor, cheguei!\"."],
   ["the prompt names affection, chores for others and their answers to each other", "So is affection (\"Love you\", \"Te amo ❤️\"), a chore or errand for another person (\"pick up the kids at 5\"), and their answers to each other (\"Done, Friday 10am\")."],
   ["the prompt rules out an emoji, a reaction or an offer to help for those", "For these, post nothing at all: no reply, no emoji, no reaction, no \"👍\", and no offer to help or to set a reminder."],
