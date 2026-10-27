@@ -107,18 +107,17 @@ for (const [scene, handle, memberName, expected] of [
   ["owner group", "+15550000002", "+15550000002", "named"],
   ["owner group", "+15550000002", "Joe", "named"],
   ["owner DM", "+15550000009", "Joe", "named"],
-  ["member group", "+15550000002", "+15550000002", "named"],
-  ["member DM", "+15550000002", "+15550000002", "named"],
-  ["member group", "+15550000002", "Joe", /only their own name/],
-  ["member group", "+15550000009", "+15550000002", /only their own name/],
-  ["member group", "+15550000001", "+15550000002", /owner's own number/],
   ["owner group", "+15550000001", "Joe", /owner's own number/],
+  ["member group", "+15550000002", "+15550000002", /Only the owner/],
+  ["member DM", "+15550000002", "+15550000002", /Only the owner/],
+  ["member group", "+15550000001", "+15550000002", /Only the owner/],
   ["owner email", "+15550000002", "+15550000002", /active Plow text/],
 ] as const) test(`name ${handle} shown as ${memberName} from ${scene}: ${expected}`, async t => {
   const { apiBase, result, failure, updates } = await runInboundTool(t, scene, "plow_name_contact", { handle, display_name: " Rowan " }, { memberName });
   if (expected === "named") {
     assert.equal(failure, undefined);
     assert.deepEqual((result as { details: unknown }).details, { handle, display_name: "Rowan" });
+    assert.match((result as { content: { text: string }[] }).content[0].text, /nothing was posted/);
     assert.deepEqual(updates, [{ url: `${apiBase}/v1/contacts/${encodeURIComponent(handle)}`, body: { display_name: "Rowan" } }]);
   } else {
     assert.match((failure as Error)?.message, expected);

@@ -434,7 +434,7 @@ export default defineChannelPluginEntry({
     }));
     api.registerTool(context => ({
       name: "plow_name_contact", label: "Name a person in Plow",
-      description: "Record the name of a person a Plow chat shows only by phone number or email address, so every chat shows them by that name from then on. On the owner's turn, record what the owner calls them, or the one match in the owner's contacts on their Mac. On a member's turn, record only that member's own name, while they have none. Never guess a name from mail, calendar or memory.",
+      description: "Record the name of a person a Plow chat shows only by phone number or email address, so every chat shows them by that name from then on. Only on the owner's turn: record what the owner calls them, or the one match in the owner's contacts on their Mac. Never guess a name from mail, calendar or memory. This posts nothing; still send your answer.",
       parameters: {
         type: "object", required: ["handle", "display_name"], additionalProperties: false,
         properties: {
@@ -447,20 +447,21 @@ export default defineChannelPluginEntry({
         const account = plugin.config.resolveAccount(context.config, "chat");
         const chatUid = conversationUid(context);
         if (context.messageChannel !== "plow" || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("Naming a person requires an active Plow text.");
+        // Only the owner's word names someone: on a member's turn the model put a name the member gave for the
+        // owner on the member's own number (#126).
+        if (context.senderIsOwner !== true) throw new Error("Only the owner can name someone. Nothing was recorded; ask the owner.");
         const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
         if (!accepts(account, chat)) throw new Error("Naming a person requires an active Plow text.");
         const handle = normalizedHandle(args.handle), name = args.display_name.trim();
         if (!name) throw new Error("display_name is empty.");
-        const seated = chat.participants.find(p => p.type === "member" && p.provider_key && normalizedHandle(p.provider_key) === handle);
         // Plow writes the owner's own handle to their account name, which is theirs to set.
-        if (seated?.type === "member" && seated.role === "owner") throw new Error("That is the owner's own number; the owner's name is set in their Plow account.");
-        // A member's word names only that member, and only while Plow shows their bare handle; renaming is the owner's.
-        if (context.senderIsOwner !== true && (handle !== context.requesterSenderId || seated?.type !== "member" || (seated.display_name && seated.display_name !== seated.provider_key))) {
-          throw new Error("A member may give only their own name, and only while they have none. Ask the owner to name anyone else.");
-        }
+        const owner = chat.participants.find(p => p.type === "member" && p.role === "owner");
+        if (owner?.type === "member" && owner.provider_key && normalizedHandle(owner.provider_key) === handle) throw new Error("That is the owner's own number; the owner's name is set in their Plow account.");
         const row = await requestDelivery<{ display_name: string | null }>(account, `/contacts/${encodeURIComponent(handle)}`, { display_name: name }, "PUT");
         const details = { handle, display_name: row.display_name };
-        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+        // After this call the model often left its answer in a private final text, so nothing posted (#122).
+        const text = `${JSON.stringify(details)}\nRecorded; nothing was posted. Still answer: when your final text stays private, send it with message(action="send").`;
+        return { content: [{ type: "text", text }], details };
       },
     }));
     api.registerTool(context => ({
