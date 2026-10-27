@@ -151,3 +151,9 @@ for (const [name, expected] of [
 ] as const) test(name, () => {
   assert.ok(prompt.replace(/\s+/g, " ").includes(expected));
 });
+
+// plow-openclaw-agent#126: the agent talked about a group member to the owner, and kept no name for a bare number.
+test("in a group the agent speaks to members by name and records a bare number's name once", () => {
+  assert.match(prompt, /speak to a member\s+directly by name/);
+  assert.match(prompt, /record the name with plow_name_contact, once/);
+});
