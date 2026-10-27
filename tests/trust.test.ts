@@ -10,7 +10,7 @@ type Tool = { name: string; execute: (id: string, args: object) => Promise<unkno
 type Scene = "owner DM" | "owner group" | "member group" | "owner email" | "member DM" | "member email";
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  threadTrust?: "ask" | "trusted" | "untrusted";
+  threadTrust?: "ask" | "trusted" | "untrusted"; memberName?: string;
 } = {}) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
@@ -18,7 +18,7 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   const account = { apiBase, accountId, lineUid: "line", emailLineUid: "email-line", threadTrust: options.threadTrust ?? "ask" };
   const cfg = { channels: { plow: account }, plugins: { load: { paths: [new URL("../plugin/", import.meta.url).pathname] }, entries: { plow: { enabled: true } } } };
   const owner = { type: "member", uid: "owner", role: "owner", display_name: "Owner", provider_key: "+15550000001" };
-  const member = { ...owner, uid: "member", role: "member", provider_key: "+15550000002", display_name: "Joe" };
+  const member = { ...owner, uid: "member", role: "member", provider_key: "+15550000002", display_name: options.memberName ?? "Joe" };
   const self = { type: "agent", relationship: "self", line: { uid: accountId === "email" ? "email-line" : "line" } };
   const home = { uid: "cht_home", status: "active", trusted: true,
     participants: [{ ...self, line: { uid: "line" } }, owner] };
@@ -31,8 +31,9 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   const updates: { url: string; body: unknown }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     if (init.method === "PUT") {
-      updates.push({ url, body: JSON.parse(init.body as string) });
-      return Response.json({ trusted: true });
+      const body = JSON.parse(init.body as string);
+      updates.push({ url, body });
+      return Response.json(url.includes("/contacts/") ? { display_name: body.display_name } : { trusted: true });
     }
     if (init.method === "POST" && (url.endsWith("/messages") || url.endsWith("/chats"))) {
       posts.push({ url, body: JSON.parse(init.body as string) });
@@ -97,6 +98,29 @@ for (const scene of ["owner DM", "owner group", "member group", "owner email"] a
     assert.deepEqual(updates, [{ url: `${apiBase}/v1/chats/cht_target/trusted`, body: { trusted: true } }]);
   } else {
     assert.match((failure as Error)?.message, /owner's main Plow DM/);
+    assert.deepEqual(updates, []);
+  }
+});
+
+// plow-openclaw-agent#126: a member Plow has no name for reaches the agent as a bare number.
+for (const [scene, handle, memberName, expected] of [
+  ["owner group", "+15550000002", "+15550000002", "named"],
+  ["owner group", "+15550000002", "Joe", "named"],
+  ["owner DM", "+15550000009", "Joe", "named"],
+  ["owner group", "+15550000001", "Joe", /owner's own number/],
+  ["member group", "+15550000002", "+15550000002", /Only the owner/],
+  ["member DM", "+15550000002", "+15550000002", /Only the owner/],
+  ["member group", "+15550000001", "+15550000002", /Only the owner/],
+  ["owner email", "+15550000002", "+15550000002", /active Plow text/],
+] as const) test(`name ${handle} shown as ${memberName} from ${scene}: ${expected}`, async t => {
+  const { apiBase, result, failure, updates } = await runInboundTool(t, scene, "plow_name_contact", { handle, display_name: " Rowan " }, { memberName });
+  if (expected === "named") {
+    assert.equal(failure, undefined);
+    assert.deepEqual((result as { details: unknown }).details, { handle, display_name: "Rowan" });
+    assert.match((result as { content: { text: string }[] }).content[0].text, /nothing was posted/);
+    assert.deepEqual(updates, [{ url: `${apiBase}/v1/contacts/${encodeURIComponent(handle)}`, body: { display_name: "Rowan" } }]);
+  } else {
+    assert.match((failure as Error)?.message, expected);
     assert.deepEqual(updates, []);
   }
 });

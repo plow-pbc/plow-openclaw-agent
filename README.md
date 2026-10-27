@@ -325,6 +325,11 @@ for each group.
 
 Only trust people who may use the owner's resources.
 
+A member Plow has no name for reaches the agent as a bare phone number or email
+address. `plow_name_contact` records a name in the owner's Plow contact book
+(`PUT /v1/contacts/{handle}`), and every chat shows it from then on. Only the
+owner's turn names someone; the owner's own name stays their account name.
+
 Groups use their own history and omit root MEMORY.md. Cross-conversation recall
 is disabled, and native session tools cannot read unrelated conversations from
 group or peer sessions. Shared files and tools are not privacy boundaries.

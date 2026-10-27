@@ -120,7 +120,7 @@ test("guest tools default to empty and are declared once for channel and messagi
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "report_bug", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
+    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_name_contact", "report_bug", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
   });
 });
 
