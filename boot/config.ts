@@ -64,7 +64,8 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
-    plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
+    // The plugin reads a room-event run's private final text (before_agent_finalize) to offer a follow-up (#122).
+    plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true, hooks: { allowConversationAccess: true } } } },
     // A group text that does not tag the agent is room activity it observes (plugin/index.ts receive).
     messages: { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {

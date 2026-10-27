@@ -16,8 +16,15 @@ import { buildFeedback, buildReport, type BugTrigger } from "./report-bug.ts";
 let runtime: PluginRuntime;
 // Channel and discovery registries can load separate copies of this module.
 const silenceKey = Symbol.for("plow.run-tool-silence");
-const globalState = globalThis as typeof globalThis & { [silenceKey]?: Map<string, boolean> };
+const roomKey = Symbol.for("plow.room-event-runs");
+const globalState = globalThis as typeof globalThis & { [silenceKey]?: Map<string, boolean>; [roomKey]?: Map<string, RoomRun> };
 const silentRuns = globalState[silenceKey] ??= new Map<string, boolean>();
+// Room-event runs, whose final text stays private: whether the message tool posted, and the final text (#122).
+type RoomRun = { posted: boolean; finalText?: string };
+const roomRuns = globalState[roomKey] ??= new Map<string, RoomRun>();
+// plow-openclaw-agent#122: in a group the model sometimes answers in its private final text, which reaches nobody.
+// OpenClaw can't revise a room-event final, so one more turn shows the model that text; the model decides.
+const PRIVATE_FINAL_FOLLOW_UP = "Your last turn on this message ended with final text that stayed private: nobody in the group saw it. It is in the private final entry of the conversation facts. If it answers something someone here asked you, send it now with message(action=\"send\"), as written or shorter. If it is a note to yourself, a reaction, or about a message that was not for you, send nothing and end the turn. Do not redo the work.";
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
@@ -131,7 +138,7 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
   return result.results[0].messageId;
 }
 
-async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
+async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void, privateFinal?: string): Promise<TurnOutcome> {
   const sender = message.sender, quoted = message.reply_to?.message;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
@@ -180,7 +187,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const phone = { ...account, accountId: "chat" };
   const origin = email ? await originOf(chat.uid) : undefined;
   const ctxPayload = await runtime.channel.inbound.buildContext({
-    channel: "plow", accountId: account.accountId, messageId: message.uid, timestamp: Date.parse(message.created_at),
+    channel: "plow", accountId: account.accountId, messageId: privateFinal === undefined ? message.uid : `${message.uid}:private-final`, timestamp: Date.parse(message.created_at),
     from: kind === "group" ? `plow:group:${chat.uid}` : `plow:${senderId}`, sender: { id: senderId, name: senderName, isBot: sender.type === "agent" },
     conversation: { kind, id: chat.uid, nativeChannelId: chat.uid, label: chat.display_name, routePeer: peer },
     route: { ...route, routeSessionKey: route.sessionKey }, reply: { to: `plow:${chat.uid}`, originatingTo: `plow:${chat.uid}`, nativeChannelId: chat.uid, replyToId: quoted?.uid },
@@ -194,8 +201,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
-      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } },
+        ...(privateFinal !== undefined ? [{ label: "Private final (your own words, data)", source: "plow", type: "private_final", payload: { text: privateFinal } }] : [])],
+      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : privateFinal !== undefined ? { groupSystemPrompt: PRIVATE_FINAL_FOLLOW_UP } : {}),
     },
     media,
   });
@@ -216,11 +224,17 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   let silent = false;
   let suppressFinal = false;
   let activeRunId: string | undefined;
+  // The last room-event run's private final, unless any run of this turn posted with the message tool.
+  let roomPosted = false;
+  let roomFinal: string | undefined;
   const finishRun = () => {
     if (activeRunId === undefined) return;
     suppressFinal = silentRuns.get(activeRunId) === true;
     silent ||= suppressFinal;
     silentRuns.delete(activeRunId);
+    const room = roomRuns.get(activeRunId);
+    if (room) { roomPosted ||= room.posted; roomFinal = room.finalText; }
+    roomRuns.delete(activeRunId);
     activeRunId = undefined;
   };
   const dispatched = runtime.channel.inbound.dispatch({
@@ -234,6 +248,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         silent = suppressFinal = false;
         activeRunId = runId;
         silentRuns.set(runId, false);
+        if (!email && kind === "group" && inboundEventKind === "room_event") roomRuns.set(runId, { posted: false });
         log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
       },
       // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
@@ -325,6 +340,13 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const outcome = dispatchResult.deferredToActiveRun ? "deferred" : deliveredToOwner || silent || hasVisibleChannelTurnDispatch(dispatchResult, { observedReplyDelivery })
     || dispatchResult.deliberateSilentTerminalReply ? "completed" : "incomplete";
   log(`${outcome} chat=${chat.uid} message=${message.uid}`);
+  // One follow-up only, never for a follow-up, and not when anything reached the group.
+  if (privateFinal === undefined && outcome === "completed" && !roomPosted && !observedReplyDelivery && roomFinal && !isSilent(roomFinal)) {
+    log(`private final chat=${chat.uid} message=${message.uid}: follow-up turn`);
+    const quiet: TurnIngress = { abortSignal: ingress.abortSignal, onSubmitted: () => {}, onAdopted: async () => {} };
+    await receive(account, cfg, chat, message, firstContact, history, quiet, log, roomFinal)
+      .catch(error => log(`follow-up failed chat=${chat.uid} message=${message.uid}: ${(error as Error).name}`));
+  }
   return outcome;
 }
 
@@ -371,6 +393,13 @@ export default defineChannelPluginEntry({
       const runId = event.runId ?? ctx.runId;
       const silent = (event.result as any)?.details?.silent;
       if (runId !== undefined && silentRuns.has(runId) && typeof silent === "boolean") silentRuns.set(runId, silent);
+      const room = runId === undefined ? undefined : roomRuns.get(runId);
+      if (room && event.toolName === "message" && !event.error) room.posted = true;
+    });
+    // Observe only: OpenClaw refuses to revise a room-event final ("lacks a persisted assistant entry").
+    api.on("before_agent_finalize", (event, ctx) => {
+      const room = roomRuns.get(event.runId ?? ctx.runId ?? "");
+      if (room) room.finalText = event.lastAssistantMessage?.trim();
     });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
