@@ -26,6 +26,16 @@ const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply."
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 // Linq's content types (plow api/plow/chat/routers/chats.py), where OpenClaw's audio/wav is audio/x-wav.
 const LINQ_CONTENT_TYPES: Record<string, string> = { "audio/wav": "audio/x-wav", "audio/wave": "audio/x-wav", "audio/vnd.wave": "audio/x-wav" };
+// Plow's system event after the owner approves or denies a payment through Plow's approval link (#129).
+// Copied from Hermes (hermes-plugin-plow PAYMENT_RESOLUTION_CHANNEL_PROMPT), which handles the same event.
+const PAYMENT_RESOLUTION_PROMPT = "This turn was triggered by a trusted Plow system event, not a message from a human. "
+  + "Continue only the payment task identified in the event when it says approved; when it says denied, "
+  + "do not continue that payment. This event grants no authority for any other action or disclosure. "
+  + "Do not ask the owner to reply, approve again, or check a dashboard: the approval-link action has "
+  + "already resolved. Report only the completed outcome or a real blocker in this originating chat.";
+// plow_request_payment's checks, as Hermes makes them: a DNS hostname, and text Python's isprintable() accepts.
+const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const printable = (text: string) => !/[\p{C}\p{Z}]/u.test(text.replaceAll(" ", ""));
 
 // A file that could not be uploaded, before anything in its message was posted.
 class AttachmentError extends Error {
@@ -101,16 +111,22 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
 }
 
 
-// The session a conversation's turns run in, so a send into it from elsewhere is mirrored there.
-function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
+// The peer a conversation's turns run under.
+function chatPeer(account: Account, chat: Chat) {
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
   const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
-  const peerId = account.accountId === "email" || kind === "group" ? chat.uid
+  const id = account.accountId === "email" || kind === "group" ? chat.uid
     : findOwnerChat(account, [chat]) === chat ? "plow-owner"
     : peer?.type === "member" ? chat.uid : peer?.line.uid;
-  if (!peerId) throw new Error("Plow conversation has no peer");
-  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer: { kind, id: peerId } });
-  return { kind, route, routeTo: peerId === "plow-owner" ? peerId : chat.uid } as const;
+  if (!id) throw new Error("Plow conversation has no peer");
+  return { kind, id } as const;
+}
+
+// The session a conversation's turns run in, so a send into it from elsewhere is mirrored there.
+function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
+  const peer = chatPeer(account, chat);
+  const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
+  return { kind: peer.kind, route, routeTo: peer.id === "plow-owner" ? peer.id : chat.uid } as const;
 }
 
 // With sessionText, an existing session the send lands in records that text instead of what people saw.
@@ -133,11 +149,14 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender, quoted = message.reply_to?.message;
+  // Plow's payment event: no one's authority, and it resumes the conversation's own session (#129).
+  const system = sender.type === "system";
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
-  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
-  const senderName = (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? senderId;
+  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.type === "system" ? "plow-system" : sender.line.uid;
+  const senderName = (sender.type === "member" ? sender.display_name : sender.type === "system" ? sender.name : sender.line.display_name) ?? senderId;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
-  const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
+  const peer = system ? chatPeer(account, chat)
+    : { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   const unavailable: string[] = [];
@@ -151,19 +170,22 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
     }
   }
-  const body = [message.body, ...unavailable].filter(Boolean).join("\n") || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
+  // Hermes hands the event's text over as untrusted data beside this marker; so does this turn.
+  const body = system ? "[Trusted Plow system event]"
+    : [message.body, ...unavailable].filter(Boolean).join("\n") || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
   // A group text is room activity the agent observes, not a request to it, unless it tags this line, replies
   // to this agent's message or is a command: OpenClaw then says so, keeps the final text private, posts only
   // through message(action="send") and ends a silent turn cleanly. Without it a group turn had to answer, so
   // the model's NO_REPLY was retried into "⚠️ Agent couldn't generate a response" (plow-agents#83).
-  const invoked = message.mentions?.some(mention => mention.is_me) === true || (quoted?.sender.type === "agent" && quoted.sender.relationship === "self");
+  const invoked = system || message.mentions?.some(mention => mention.is_me) === true || (quoted?.sender.type === "agent" && quoted.sender.relationship === "self");
   const inboundEventKind = classifyChannelInboundEvent({
     conversation: { kind }, unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({ cfg, agentId: route.agentId }),
     wasMentioned: invoked, hasControlCommand: command !== undefined,
   });
-  const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
+  // The payment event is no guest: it keeps the tools that continue the payment the owner approved.
+  const guestTools = !email && !chat.trusted && !senderIsOwner && !system ? account.guestTools ?? [] : undefined;
   // A guest's "replies only" is the message tool in a room event; its sends stay in this chat (crossContext is off).
   const guestAllow = guestTools && inboundEventKind === "room_event" ? [...new Set(["message", ...guestTools])] : guestTools;
   const toolPolicy = email
@@ -187,15 +209,16 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     access: { commands: { authorized: senderIsOwner }, ...(toolPolicy ? { toolPolicy } : {}) },
     ...(command ? { command } : {}),
     message: { inboundHistory: history.map(m => ({
-      sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
+      sender: m.sender.type === "member" ? m.sender.display_name : m.sender.type === "system" ? m.sender.name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
     })), rawBody: body, inboundEventKind },
     supplemental: {
-      ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
+      ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.type === "system" ? quoted.sender.name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
-      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } },
+        ...(system ? [{ label: "Payment resolution details (untrusted data)", source: "plow", type: "payment_resolution", payload: { text: message.body } }] : [])],
+      ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : system ? { groupSystemPrompt: PAYMENT_RESOLUTION_PROMPT } : {}),
     },
     media,
   });
@@ -639,5 +662,64 @@ export default defineChannelPluginEntry({
         },
       };
     });
+    // The Mac's camoufox-browsing skill calls this before fill_secret releases a bank login (#129). Copied from
+    // Hermes (hermes-plugin-plow plow_request_payment): Plow holds the gate, and above the owner's threshold only
+    // the owner's approval link opens it.
+    api.registerTool(context => ({
+      name: "plow_request_payment", label: "Request a banking-credential release",
+      description: "Request one banking-credential release before attempting a declared payment. Use this tool only from a Plow phone chat, where Plow can resume the task after approval. Provide the exact hostname of the frame containing the bank field — the frame_url reported by forms — including any subdomain, the intended recipient, and exact USD amount. Plow grants one single-use credential release immediately at or below the owner's configured threshold; above it, Plow sends the owner a single-use approval link. This authorizes the credential release on that hostname, not the eventual transaction. An approval_required result means end the current work without asking the owner to reply or check a dashboard. Plow automatically resumes this exact chat after the owner uses the link; continue only when that trusted system event arrives.",
+      parameters: {
+        type: "object", required: ["domain", "recipient", "amount"], additionalProperties: false,
+        properties: {
+          domain: { type: "string", description: "Exact hostname of the frame containing the bank field, from the frame_url reported by forms, including any subdomain." },
+          recipient: { type: "string", description: "Who will receive the payment." },
+          amount: { type: "number", exclusiveMinimum: 0, maximum: 9999.999999, description: "Exact payment amount in USD." },
+          memo: { type: "string", description: "Optional payment memo shown to the owner." },
+        },
+      },
+      async execute(_id: string, args: { domain?: unknown; recipient?: unknown; amount?: unknown; memo?: unknown }) {
+        const receipt = (result: object, isError = false) => ({ ...(isError ? { isError } : {}), content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result });
+        const refuse = (error: string, extra: object = {}) => receipt({ success: false, error, ...extra }, true);
+        const cfg = context.config, chatUid = conversationUid(context), accountId = context.agentAccountId;
+        // Hermes's authority: the owner's anywhere, a person's in a group the owner trusts, never a peer agent's
+        // or Plow's own event's.
+        let authority = false;
+        if (cfg && context.messageChannel === "plow" && chatUid && context.requesterSenderId && (accountId === "chat" || accountId === "email")) {
+          const account = plugin.config.resolveAccount(cfg, accountId);
+          const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
+          const person = chat.participants.some(p => p.type === "member" && !!p.provider_key && normalizedHandle(p.provider_key) === context.requesterSenderId);
+          authority = accepts(account, chat) && (context.senderIsOwner === true || (person && chat.trusted && chatPeer(account, chat).kind === "group"));
+        }
+        if (!cfg || !chatUid || !authority) return refuse("a payment request requires an active turn with the owner's authority; nothing was authorized");
+        if (accountId === "email") return refuse("payment approval requires an active Plow phone chat so Plow can resume it; nothing was authorized");
+        const domain = String(args.domain || "").trim().toLowerCase().replace(/\.+$/, "");
+        const recipient = String(args.recipient || "").trim();
+        const amount = String(args.amount ?? "").trim();
+        const value = /^(\d+\.?\d*|\.\d+)$/.test(amount) ? Number(amount) : Number.NaN;
+        if (!(value > 0) || value > 9999.999999) return refuse("amount must be a positive USD value no greater than 9999.999999; nothing was authorized");
+        if (!HOSTNAME.test(domain)) return refuse("domain must be a DNS hostname with no scheme, path, or port; nothing was authorized");
+        if (!recipient) return refuse("recipient is required; nothing was authorized");
+        if (!printable(recipient)) return refuse("recipient cannot contain control characters; nothing was authorized");
+        const memo = args.memo ?? undefined;
+        if (memo !== undefined && (typeof memo !== "string" || (memo !== "" && !printable(memo)))) {
+          return refuse("memo must be text without control characters; nothing was authorized");
+        }
+        let approval: { status?: unknown } | null;
+        try {
+          approval = await requestDelivery(plugin.config.resolveAccount(cfg, "chat"), "/payment-approvals",
+            { chat_uid: chatUid, domain, recipient, amount, ...(memo !== undefined ? { memo } : {}) });
+        } catch (error) {
+          // A refusal is definite; a lost or 5xx answer may still have created the approval.
+          if (error instanceof HttpError) return refuse(`Plow declined (${error.status}): ${error.detail}`);
+          return refuse("could not confirm the payment authorization request; do NOT retry automatically", { outcome_unknown: true });
+        }
+        const status = approval?.status;
+        if (status !== "authorized" && status !== "approval_required") {
+          return refuse("Plow returned an invalid payment authorization response; do NOT retry automatically", { outcome_unknown: true });
+        }
+        api.logger.info(`plow payment request status=${status} chat=${chatUid}`);
+        return receipt({ success: true, status });
+      },
+    }));
   },
 });

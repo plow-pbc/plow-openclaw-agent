@@ -6,7 +6,7 @@
  * because an origin must survive a restart.
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import type { Agent, Chat, Member } from "./transport.ts";
+import type { Chat, Message } from "./transport.ts";
 
 function dir() {
   const root = process.env.OPENCLAW_STATE_DIR;
@@ -33,8 +33,8 @@ export async function originOf(thread: string): Promise<string | undefined> {
 const quote = (value: string) => JSON.stringify(value).replace(/[\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16)}`);
 
 // Which email a delivered final is about, as the Hermes image labels it: subject and sender's address.
-export function emailLabel(chat: Chat, sender: Member | Agent) {
-  return `Email ${quote(chat.display_name || "(no subject)")} from ${quote(sender.type === "member" ? sender.provider_key || sender.display_name : sender.line.display_name || sender.line.uid)}`;
+export function emailLabel(chat: Chat, sender: Message["sender"]) {
+  return `Email ${quote(chat.display_name || "(no subject)")} from ${quote(sender.type === "member" ? sender.provider_key || sender.display_name : sender.type === "system" ? sender.name : sender.line.display_name || sender.line.uid)}`;
 }
 
 // The footer every mail carries, naming who wrote it and for whom.

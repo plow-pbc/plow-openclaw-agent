@@ -2,7 +2,7 @@
   "id": "plow",
   "name": "Plow",
   "channels": ["plow"],
-  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_name_contact", "report_bug", "plow_reply_to", "plow_send_email"] },
+  "contracts": { "tools": ["plow_start_thread", "plow_set_thread_trust", "plow_name_contact", "report_bug", "plow_reply_to", "plow_send_email", "plow_request_payment"] },
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false },
   "channelConfigs": {

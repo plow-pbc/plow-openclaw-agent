@@ -16,9 +16,11 @@ import { createChannelInboundDebouncer, shouldDebounceTextInbound } from "opencl
 export type Member = { type: "member"; uid: string; display_name: string; role: string; provider_key: string };
 export type RosterMember = Omit<Member, "provider_key"> & { provider_key?: string | null };
 export type Agent = { type: "agent"; relationship: string; line: { uid: string; display_name?: string } };
+// Plow's own event in a chat: a payment the owner approved or denied through Plow's approval link (#129).
+export type System = { type: "system"; name: string };
 export type Chat = { uid: string; status: string; trusted: boolean; display_name?: string; participants: (RosterMember | Agent)[] };
 export type Message = {
-  uid: string; direction: string; body: string; sender: Member | Agent; created_at: string;
+  uid: string; direction: string; body: string; sender: Member | Agent | System; created_at: string;
   // Plow serves no url for media it marked failed: over its 100 MiB cap, or never stored.
   attachments: { url: string | null; content_type: string; filename: string }[];
   // Plow wraps the replied-to message with the part being answered.
@@ -33,7 +35,9 @@ export type Account = { accountId: string; apiBase: string; lineUid: string; ema
 
 export class HttpError extends Error {
   status: number;
-  constructor(status: number) { super(`Plow HTTP ${status}`); this.status = status; }
+  // What Plow said, for a tool that passes its refusal on (plow_request_payment's "no_owner").
+  detail: string;
+  constructor(status: number, detail = "") { super(`Plow HTTP ${status}`); this.status = status; this.detail = detail; }
 }
 
 export class DeliveryUnknownError extends Error {
@@ -49,7 +53,7 @@ export async function request<T>(account: Pick<Account, "apiBase">, path: string
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: signal ?? AbortSignal.timeout(40_000),
   });
-  if (!response.ok) throw new HttpError(response.status);
+  if (!response.ok) throw new HttpError(response.status, await response.text().catch(() => ""));
   return await response.json() as T;
 }
 
@@ -261,7 +265,10 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
   };
 
   const lastSpeaker = new Map<string, string>();
-  const key = (item: Queued) => `${account.accountId}/${item.chatUid}/${item.message.sender.type === "member" ? item.message.sender.uid : item.message.sender.line.uid}`;
+  const key = (item: Queued) => {
+    const sender = item.message.sender;
+    return `${account.accountId}/${item.chatUid}/${sender.type === "member" ? sender.uid : sender.type === "system" ? "plow-system" : sender.line.uid}`;
+  };
   const { debouncer } = createChannelInboundDebouncer<Queued>({
     cfg, channel: "plow", buildKey: key,
     shouldDebounce: item => account.accountId === "chat" && shouldDebounceTextInbound({
@@ -285,7 +292,8 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     const chat = discovered.get(chatUid);
     if (chat && !accepts(account, chat)) return;
     const sender = message.sender;
-    if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && sender.relationship === "peer"))) {
+    // A phone chat also takes Plow's system event, which resumes a payment the owner decided on (#129).
+    if (message.direction !== "inbound" || !(sender.type === "member" || (account.accountId === "chat" && (sender.type === "system" || sender.relationship === "peer")))) {
       if (!accepts(account, await request<Chat>(account, `/chats/${chatUid}`))) return;
       if (account.accountId === "chat") await ack(chatUid, message.uid);
       remember(message.uid);
@@ -392,7 +400,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             const newest = page.data[0];
             const fromMember = (message: Message) => message.direction === "inbound" && message.sender.type === "member";
             const missed = (message: Message) => message.direction === "inbound" && Date.parse(message.created_at) >= since &&
-              (message.sender.type === "member" || message.sender.relationship === "peer");
+              (message.sender.type === "member" || (message.sender.type === "agent" && message.sender.relationship === "peer"));
             const unanswered = chat.uid === owner?.uid ? fromMember : missed;
             checkpoint = newest && unanswered(newest)
               ? `first:${await earliestUnanswered(account, chat.uid, newest, unanswered, log)}` : newest?.uid ?? "";

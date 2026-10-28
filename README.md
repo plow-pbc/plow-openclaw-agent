@@ -330,6 +330,14 @@ address. `plow_name_contact` records a name in the owner's Plow contact book
 (`PUT /v1/contacts/{handle}`), and every chat shows it from then on. Only the
 owner's turn names someone; the owner's own name stays their account name.
 
+A bank login on the owner's Mac is released only after `plow_request_payment`
+(`POST /v1/payment-approvals`), as on the Hermes image: the owner's turn anywhere,
+or a person's in a trusted group, declares the hostname, recipient and amount.
+Plow grants one single-use release at or below the owner's threshold and texts
+the owner an approval link above it. When the owner approves or denies, Plow
+posts a system event in that chat; the agent resumes there with no one's
+authority, only to finish or drop that payment.
+
 Groups use their own history and omit root MEMORY.md. Cross-conversation recall
 is disabled, and native session tools cannot read unrelated conversations from
 group or peer sessions. Shared files and tools are not privacy boundaries.
