@@ -149,14 +149,13 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
 
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender, quoted = message.reply_to?.message;
-  // Plow's payment event: no one's authority, and it resumes the conversation's own session (#129).
+  // Plow's payment event carries no one's authority (#129).
   const system = sender.type === "system";
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
   const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.type === "system" ? "plow-system" : sender.line.uid;
   const senderName = (sender.type === "member" ? sender.display_name : sender.type === "system" ? sender.name : sender.line.display_name) ?? senderId;
-  const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
-  const peer = system ? chatPeer(account, chat)
-    : { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
+  // Every turn, Plow's payment event included, runs in its conversation's own session.
+  const peer = chatPeer(account, chat), kind = peer.kind;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   const unavailable: string[] = [];
