@@ -98,7 +98,7 @@ for (const [name, expected] of [
   ["the prompt offers browsing through a host's browser when asked what it can do", "and browsing the web through a host's browser)"],
   ["the prompt never guesses the owner's pronouns in a message", "In a message, refer to the owner by name, or as they and them; use other pronouns for them only once they have told you theirs."],
   // An agent whose line has several chats is refused `which_chat` until each call names one.
-  ["the prompt names the chat on every host call", "Every exec, file, google, messages, contacts and browser call also names the chat you are answering in with `--plow-chat` and that chat's uid"],
+  ["the prompt names the chat on every host call", "Every exec, file, google, messages, contacts, browser and `vault list` call also names the chat you are answering in with `--plow-chat` and that chat's uid"],
   ["the prompt opens a site's own login page when its Sign In box does not load", "when a site's Sign In opens a box that does not load, open the site's own login page URL directly."],
   ["the prompt logs latch in when it says not_logged_in", "When a latch command answers `not_logged_in`, run `latch login`, which logs you in with your own Plow credential, then run the command again."],
   ["the prompt asks which host only when the choice matters", "Ask the owner which host only when several could do the task and the choice matters, as it does for their files, disk or programs."],
