@@ -21,13 +21,12 @@ export type GatewayOptions = {
   entry?: string;
 };
 
-export async function startGateway(captureOutput = false, mcpUrl?: string, writeLog?: (chunk: Buffer) => void, options: GatewayOptions = {}) {
+export async function startGateway(captureOutput = false, writeLog?: (chunk: Buffer) => void, options: GatewayOptions = {}) {
   const entry = options.entry ?? "/app/openclaw.mjs";
-  // Loopback, beside the MCP bridge's 18790, clear of the dev dashboard's 3001.
+  // Loopback, clear of the dev dashboard's 3001.
   const ports = options.ports ?? [18801, 18802];
   const children = new Set<ChildProcess>();
   let stopping = false;
-  let restartTimer: NodeJS.Timeout | undefined;
   let gatewayTimer: NodeJS.Timeout | undefined;
   let gatewayDelay = GATEWAY_RESTART_MS;
   let timer: NodeJS.Timeout | undefined;
@@ -40,7 +39,6 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
   const stop = () => {
     if (stopping) return;
     stopping = true;
-    clearTimeout(restartTimer);
     clearTimeout(gatewayTimer);
     front?.close();
     for (const child of children) child.kill("SIGTERM");
@@ -69,19 +67,14 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
     child.on("error", error => console.error(error));
     child.on("close", (code, signal) => {
       children.delete(child);
-      if (label === "bridge" && !stopping) {
-        console.error(`plow-boot: bridge exited code=${code} signal=${signal}; restarting in 1s`);
-        restartTimer = setTimeout(startBridge, 1000);
-        return;
-      }
-      if (label !== "bridge" && child !== current) {
+      if (child !== current) {
         // A gateway a takeover replaced, or a standby that never took over: the current one serves on.
         if (child === standby) { standby = undefined; takingOver = false; }
         console.error(`plow-boot: ${label === "standby" ? "standby" : "replaced"} gateway exited code=${code} signal=${signal}`);
         if (stopping && !children.size) release();
         return;
       }
-      if (label !== "bridge" && !stopping) {
+      if (!stopping) {
         current = undefined;
         if (Date.now() - startedAt >= GATEWAY_HEALTHY_MS) gatewayDelay = GATEWAY_RESTART_MS;
         console.error(`plow-boot: gateway exited code=${code} signal=${signal}; restarting in ${gatewayDelay / 1000}s`);
@@ -89,16 +82,12 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
         gatewayDelay = Math.min(gatewayDelay * 2, GATEWAY_RESTART_MAX_MS);
         return;
       }
-      if (label !== "bridge") console.error(`plow-boot: gateway exited code=${code} signal=${signal}`);
+      console.error(`plow-boot: gateway exited code=${code} signal=${signal}`);
       stop();
       if (!children.size) release();
     });
     return child;
   };
-  const startBridge = () => launch("bridge", ["/opt/plow/boot/mcp-bridge.js"], {
-    stdio: captureOutput ? ["ignore", "inherit", "inherit", "ipc"] : ["ignore", "pipe", "pipe", "ipc"],
-    env: { PLOW_MCP_URL: mcpUrl!, PLOW_AGENT_TOKEN: process.env.PLOW_AGENT_TOKEN, PLOW_MCP_BRIDGE_TOKEN: process.env.PLOW_MCP_BRIDGE_TOKEN },
-  });
   const gatewayArgs = (listen: number) => front ? [entry, "gateway", "--port", String(listen)] : [entry, "gateway"];
   const startGatewayProcess = () => current = launch("gateway", gatewayArgs(port), {
     stdio: ["ignore", "pipe", "pipe"], env: process.env,
@@ -148,11 +137,6 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
   if (options.frontPort !== undefined) {
     front = await startFront(options.frontPort, () => port);
     process.on("SIGUSR2", takeover);
-  }
-  if (mcpUrl) {
-    const bridge = startBridge();
-    await new Promise(resolve => { bridge.once("message", resolve); bridge.once("close", resolve); });
-    if (stopping) return bridge;
   }
   return startGatewayProcess();
 }

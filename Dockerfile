@@ -54,6 +54,28 @@ RUN case "$TARGETARCH" in \
  && tar -xzf /tmp/agentsview.tgz -C /usr/local/bin agentsview \
  && rm /tmp/agentsview.tgz \
  && chmod 0755 /usr/local/bin/agentsview
+# latch, the command-line tool the agent reaches its owner's machines with. Client only: it asks
+# hosts and never is one. Pinned and checksummed for the same reason as the client above, and the
+# one place its version lives, so a bump edits only these lines; the image is how it updates
+# (LATCH_NO_UPDATE_CHECK). Its key and login go in the state volume, not the image: latch logs in
+# on the agent's first command with the Plow credential boot exports. The skill it ships is
+# installed as one of this image's, so it always matches the binary.
+ARG LATCH_TAG=v0.1.0-149
+RUN case "$TARGETARCH" in \
+      amd64) target=x86_64-unknown-linux-musl; checksum=7ba6a41df3d1ba8856c896c40003044ce2d97775d608a42e218075409e378605 ;; \
+      arm64) target=aarch64-unknown-linux-musl; checksum=fb2ac25008659e6310ea64eadb61d1c550245b22edfdeff878c81737cd8e752e ;; \
+      *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && release="latch-$LATCH_TAG-$target" \
+ && curl -fsS --max-time 120 -o /tmp/latch.tgz "https://releases.plow.co/latch-cli/releases/$LATCH_TAG/$release.tar.gz" \
+ && echo "${checksum}  /tmp/latch.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/latch.tgz -C /tmp \
+ && sh "/tmp/$release/install-binary.sh" --client-only --non-interactive \
+      --bin-dir /home/node/.local/bin --state-dir /tmp/latch-install-state "/tmp/$release/latch" \
+ && mkdir -p /opt/plow/skills/latch \
+ && /home/node/.local/bin/latch skill > /opt/plow/skills/latch/SKILL.md \
+ && rm -rf /tmp/latch.tgz "/tmp/$release" /tmp/latch-install-state
+ENV PATH=/home/node/.local/bin:$PATH LATCH_STATE_DIR=/var/lib/plow/latch LATCH_NO_UPDATE_CHECK=1
 RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && node /opt/plow/build.ts && chmod +x /opt/plow/probe
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.

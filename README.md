@@ -2,8 +2,9 @@
 
 This image runs OpenClaw on Plow's cloud host or locally with Docker. You talk to
 it on a Plow phone line. It can reply in group threads and its own email threads,
-start groups and send follow-ups for the owner, and use the owner's Mac through
-Latch, Plow’s Mac app that the owner installs. It uses `z-ai/glm-5.2` through Plow, with `anthropic/claude-sonnet-5` as fallback.
+start groups and send follow-ups for the owner, and use the owner's machines
+through latch, the command-line tool this image ships, on any machine the owner
+runs as a latch host. It uses `z-ai/glm-5.2` through Plow, with `anthropic/claude-sonnet-5` as fallback.
 
 ## Run it
 
@@ -104,9 +105,8 @@ Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw config set` to other channels, model providers, plugins, agent defaults
 (except `agents.defaults.timeoutSeconds` and `agents.defaults.heartbeat`), skills, and other owner settings survive restarts. Plow seeds defaults on a fresh
 volume, then refreshes its own settings through `$include` files under
-`/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
-connected), channel, plugin entry and load path, tools, commands, main agent
-identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, the agent run timeout
+`/etc/plow/openclaw` at every boot. The Plow gateway, provider, channel, plugin
+entry and load path, tools, commands, main agent identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, `messages.inbound.byChannel.plow`, the agent run timeout
 (`agents.defaults.timeoutSeconds`), the heartbeat (`agents.defaults.heartbeat`, off: plow#2347), and cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
@@ -174,16 +174,34 @@ its chat uid, starts one from email addresses and a subject, or lists threads;
 `message` and `plow_reply_to` refuse email. On mail from anyone but the owner,
 the turn can only reply in its own thread. The mailbox comes from `mailbox` on
 `/v1/agents/me`, so it is served before its first thread.
-Clarifications are ordinary replies. When connected through Latch, the owner's
-Mac provides its tools and instructions. Mac unavailability does not prevent
-texting. Long-running MCP responses stream without a fixed bridge timeout;
-client disconnects cancel the upstream request. A bridge crash restarts the
-bridge while the gateway continues. A screenshot or file a Latch tool returns
-(an image block, or an embedded resource such as a PDF from `plow_read_file`)
-is saved by the bridge in `/var/lib/plow/workspace/latch`, which keeps the
-newest 100, and the result tells the agent that path so it can text the file.
-OpenClaw itself would show a text-only model no image and keep only a
-resource's path on the Mac.
+Clarifications are ordinary replies.
+
+## The owner's machines
+
+The agent reaches the owner's machines only through latch (released at
+`releases.plow.co/latch-cli`), which it runs with OpenClaw's `exec` tool. A
+machine the owner runs as a latch host (their Mac, or the cloud computer Plow
+sets up for them, the host named `cloud`) serves its files, programs, browser,
+Google and, on a Mac, Messages and contacts, each call judged by that host. A host that cannot be reached does not prevent texting.
+
+- **Install:** the `Dockerfile` installs one pinned latch release, client only
+  (`install-binary.sh --client-only`), into `/home/node/.local/bin`, checked
+  against its sha256 for each architecture. Those lines are the one place the
+  version lives; a newer latch is a rebuilt image, and latch's own update check
+  is off.
+- **Login:** none is baked in. The agent's first latch command that needs a
+  host registers it with its own Plow credential, through `PLOW_API_BASE` and
+  `PLOW_AGENT_TOKEN` as boot exports them. Its key and login live in
+  `/var/lib/plow/latch` (`LATCH_STATE_DIR`), on the state volume, so a rebuilt
+  container keeps the same latch identity.
+- **Skill:** `latch skill` from the installed binary is the image's `latch`
+  skill, so its instructions always match the version. The prompt and the
+  bundled skills send every task on the owner's machines through it.
+
+Plow's `/v1/agents/me` also returns an `mcp_url` for the old Latch Mac app's
+relay. Boot does not use it: no MCP server is configured for it and nothing
+reads its instructions. A volume from an older image loses that server's
+config entry at its next boot.
 
 ## Upgrading in place
 
@@ -211,9 +229,7 @@ that has already swapped `/app` and `/opt/plow`:
 If the standby exits or is not warm within 3 minutes, it is stopped and the
 running gateway keeps serving. If it dies after taking over, it restarts like
 any gateway. A change to the boot process itself (`main.js`, `process.js`,
-`front.js`) or to the MCP bridge (`mcp-bridge.js`), which a takeover leaves
-running, still needs a restart: an upgrade that adds the bridge's saving of
-Latch screenshots and files (#116) is one.
+`front.js`), which a takeover leaves running, still needs a restart.
 
 ## Building a variant image
 

@@ -9,7 +9,7 @@ import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
 
 // --prepare writes the config and prompt for a standby gateway (process.ts takeover) with this
-// image's code, and keeps the running supervisor's gateway password and bridge token.
+// image's code, and keeps the running supervisor's gateway password.
 const prepareOnly = process.argv.includes("--prepare");
 // SIGUSR2 would end the process until the supervisor takes it, and nothing would restart it.
 const early = () => console.error("plow-boot: SIGUSR2 before the gateway started; ignored");
@@ -23,7 +23,6 @@ try {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   if (!prepareOnly) {
     process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString("hex");
-    process.env.PLOW_MCP_BRIDGE_TOKEN = randomBytes(32).toString("hex");
   }
   const identity = await identityFromApi(base, process.env.PLOW_AGENT_TOKEN);
   const config = renderConfig(identity, base);
@@ -36,7 +35,7 @@ try {
     await rm(`/var/lib/plow/workspace/${name}`, { force: true });
   }
   const prompt = await readFile("/opt/plow/prompt/AGENTS.md", "utf8");
-  await writeFile("/var/lib/plow/workspace/AGENTS.md", await renderPrompt(prompt, identity.mcp_url, process.env.PLOW_AGENT_TOKEN, config.channels.plow.threadTrust, identity.agent?.web_url));
+  await writeFile("/var/lib/plow/workspace/AGENTS.md", renderPrompt(prompt, config.channels.plow.threadTrust, identity.agent?.web_url));
   await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
   if (prepareOnly) {
     console.log(`plow-boot: standby config written for ${identity.line.uid}`);
@@ -44,7 +43,7 @@ try {
   }
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex(300_000, writeLog);
-  await startGateway(false, identity.mcp_url ?? undefined, writeLog, {
+  await startGateway(false, writeLog, {
     frontPort: 3000,
     warmModules: "/opt/plow/openclaw-warm-modules.txt",
     // The boot code on disk, which after an upgrade's file swap is the new image's.
