@@ -26,7 +26,7 @@ export type GatewayOptions = {
   ports?: [number, number];
   // Runs before a standby starts, to write the config and prompt it boots with.
   prepare?: () => Promise<void>;
-  // Runs before every gateway starts, the first, a restart and a standby alike; must not throw.
+  // Runs before the first gateway and before a standby starts, not before a restart; must not throw.
   beforeGateway?: () => Promise<void>;
   warmModules?: string;
   entry?: string;
@@ -89,7 +89,7 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
         current = undefined;
         if (Date.now() - startedAt >= GATEWAY_HEALTHY_MS) gatewayDelay = GATEWAY_RESTART_MS;
         console.error(`plow-boot: gateway exited code=${code} signal=${signal}; restarting in ${gatewayDelay / 1000}s`);
-        gatewayTimer = setTimeout(restartGateway, gatewayDelay);
+        gatewayTimer = setTimeout(startGatewayProcess, gatewayDelay);
         gatewayDelay = Math.min(gatewayDelay * 2, GATEWAY_RESTART_MAX_MS);
         return;
       }
@@ -103,10 +103,6 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
   const startGatewayProcess = () => current = launch("gateway", gatewayArgs(port), {
     stdio: ["ignore", "pipe", "pipe"], env: gatewayEnv(process.env),
   });
-  // A standby that took over while this waited is the gateway now.
-  const restartGateway = () => options.beforeGateway
-    ? void options.beforeGateway().then(() => { if (!stopping && !current) startGatewayProcess(); })
-    : startGatewayProcess();
   async function takeover() {
     if (stopping || takingOver || !current) return;
     takingOver = true;

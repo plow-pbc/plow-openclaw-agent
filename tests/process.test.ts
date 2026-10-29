@@ -231,9 +231,9 @@ for (const path of ["/usr/local/bin:/usr/bin", "/home/node/.local/bin:/usr/bin"]
   assert.equal(options[0].env!.LATCH_NO_UPDATE_CHECK, "1");
 });
 
-// Boot installs the newest latch (and writes its skill) here: before the first gateway, before a
-// gateway restarted in place, and before a standby takes over.
-test("beforeGateway runs before the first gateway, a restart and a standby, each launch waiting for it", async t => {
+// Boot installs the newest latch (and writes its skill) here: before the first gateway and before
+// an upgrade's standby takes over, not before a crashed gateway is restarted.
+test("beforeGateway runs before the first gateway and a standby, each waiting for it, and not before a restart", async t => {
   const { gateways } = fakeSupervisor(t);
   const seen: number[] = [];
   let release = () => {};
@@ -249,11 +249,7 @@ test("beforeGateway runs before the first gateway, a restart and a standby, each
   assert.equal(gateways().length, 1);
   gateways()[0].emit("close", 1, null);
   t.mock.timers.tick(1_000);
-  await setImmediate();
-  assert.equal(gateways().length, 1, "a restart waits for it");
-  release();
-  await setImmediate();
-  assert.equal(gateways().length, 2);
+  assert.equal(gateways().length, 2, "a restart does not run it");
   process.emit("SIGUSR2");
   await setImmediate();
   assert.equal(gateways().length, 2, "a standby waits for it");
@@ -261,5 +257,5 @@ test("beforeGateway runs before the first gateway, a restart and a standby, each
   await setImmediate();
   await setImmediate();
   assert.equal(gateways().length, 3);
-  assert.deepEqual(seen, [0, 1, 2]);
+  assert.deepEqual(seen, [0, 2]);
 });

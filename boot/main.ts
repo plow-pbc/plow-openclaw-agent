@@ -49,7 +49,8 @@ try {
   await startGateway(false, writeLog, {
     frontPort: 3000,
     warmModules: "/opt/plow/openclaw-warm-modules.txt",
-    // Before each gateway loads its skills, so a newer latch's skill is the one it reads.
+    // Before the first gateway and before an upgrade's standby load their skills, so a newer
+    // latch's skill is the one they read.
     beforeGateway: async () => {
       try {
         console.log(`plow-boot: latch ${await installLatch()}`);

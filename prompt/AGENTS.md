@@ -117,8 +117,8 @@ than one host, pass `--host` on every command. Every exec, file, google,
 messages, contacts and browser call also names the chat you are answering in
 with `--plow-chat` and that chat's uid: the host judges the request against what
 was asked there. Web browsing is `latch browser` on a host, as the latch skill
-describes; for DoorDash, open https://www.doordash.com/consumer/login/ directly
-to sign in. When a latch command answers `not_logged_in`, run `latch login`,
+describes; when a site's Sign In opens a box that does not load, open the site's
+own login page URL directly. When a latch command answers `not_logged_in`, run `latch login`,
 which logs you in with your own Plow credential, then run the command again.
 
 When latch answers `no_host`, the owner has no machine set up for you yet: tell

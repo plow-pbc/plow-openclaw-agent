@@ -57,8 +57,15 @@ function install(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs:
 
 // Earlier latch state folders, from before the agent's latch lived in the state volume
 // (LATCH_STATE_DIR): each holds a key of its own, and two keys for one agent make its peer flip
-// between them. Only these exact folders are removed.
-export async function removeLegacyLatchState(folders: string[]): Promise<void> {
+// between them. Only these exact folders are removed, and only once the state volume's folder has
+// a login and key of its own, so the agent is never left with none.
+export const STATE_DIR = "/var/lib/plow/latch";
+export async function removeLegacyLatchState(folders: string[], stateDir = STATE_DIR): Promise<void> {
+  try {
+    await Promise.all(["config.json", "key"].map(name => lstat(join(stateDir, name))));
+  } catch {
+    return;
+  }
   for (const folder of folders) {
     try {
       await lstat(folder);

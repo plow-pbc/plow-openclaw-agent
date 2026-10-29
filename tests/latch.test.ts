@@ -67,7 +67,7 @@ test("an install still running after the timeout is stopped, and the installed l
   assert.equal(await readFile(skill, "utf8"), "skill of build 149\n");
 });
 
-test("boot removes the earlier latch state folders it is given, and only those", async t => {
+for (const login of [true, false]) test(`boot removes the earlier latch state folders it is given, and only those, ${login ? "once the state volume has a login" : "never before the state volume has a login"}`, async t => {
   const root = await mkdtemp(join(tmpdir(), "plow-latch-legacy-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const [legacy, home, current] = [join(root, ".latch"), join(root, "home", ".latch"), join(root, "plow", "latch")];
@@ -75,11 +75,18 @@ test("boot removes the earlier latch state folders it is given, and only those",
     await mkdir(folder, { recursive: true });
     await writeFile(join(folder, "key"), "a key");
   }
+  if (login) await writeFile(join(current, "config.json"), "{}");
   const logs: string[] = [];
   t.mock.method(console, "log", (line: string) => { logs.push(line); });
-  await removeLegacyLatchState([legacy, home, join(root, "missing", ".latch")]);
-  await assert.rejects(stat(legacy));
-  await assert.rejects(stat(home));
+  await removeLegacyLatchState([legacy, home, join(root, "missing", ".latch")], current);
   assert.equal(await readFile(join(current, "key"), "utf8"), "a key");
-  assert.deepEqual(logs, [`plow-boot: removed the earlier latch state folder ${legacy}`, `plow-boot: removed the earlier latch state folder ${home}`]);
+  if (login) {
+    await assert.rejects(stat(legacy));
+    await assert.rejects(stat(home));
+    assert.deepEqual(logs, [`plow-boot: removed the earlier latch state folder ${legacy}`, `plow-boot: removed the earlier latch state folder ${home}`]);
+  } else {
+    assert.equal(await readFile(join(legacy, "key"), "utf8"), "a key");
+    assert.equal(await readFile(join(home, "key"), "utf8"), "a key");
+    assert.deepEqual(logs, []);
+  }
 });

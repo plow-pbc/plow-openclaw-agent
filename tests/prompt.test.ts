@@ -95,7 +95,7 @@ for (const [name, expected] of [
   ["the prompt texts people from the agent's own line", "To text someone, start a thread from your own line with plow_start_thread."],
   // An agent whose line has several chats is refused `which_chat` until each call names one.
   ["the prompt names the chat on every host call", "Every exec, file, google, messages, contacts and browser call also names the chat you are answering in with `--plow-chat` and that chat's uid"],
-  ["the prompt opens DoorDash's sign-in page directly", "for DoorDash, open https://www.doordash.com/consumer/login/ directly to sign in."],
+  ["the prompt opens a site's own login page when its Sign In box does not load", "when a site's Sign In opens a box that does not load, open the site's own login page URL directly."],
   ["the prompt logs latch in when it says not_logged_in", "When a latch command answers `not_logged_in`, run `latch login`, which logs you in with your own Plow credential, then run the command again."],
   ["the prompt asks which host only when the choice matters", "Ask the owner which host only when several could do the task and the choice matters, as it does for their files, disk or programs."],
   ["the prompt names the host on every command when there is more than one", "With more than one host, pass `--host` on every command."],
