@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { installLatch, removeLegacyLatchState } from "../boot/latch.ts";
+import { installLatch, latchRefresher, removeLegacyLatchState } from "../boot/latch.ts";
 
 // A latch that answers --version and skill as build `build`.
 const fakeLatch = (build: number) => `#!/bin/sh
@@ -89,4 +89,42 @@ for (const login of [true, false]) test(`boot removes the earlier latch state fo
     assert.equal(await readFile(join(home, "key"), "utf8"), "a key");
     assert.deepEqual(logs, []);
   }
+});
+
+// An in-place upgrade's cutover restarts the gateway on the new image, which is the one restart
+// that installs latch; a crash restart on the same image does not.
+test("a restart installs latch only when the image revision changed since the last install", async t => {
+  t.mock.method(console, "log", () => {});
+  let image = "rev-a";
+  let installs = 0;
+  const refresh = latchRefresher({ install: async () => { installs++; return "0.1.0 (150)"; }, revision: async () => image });
+  await refresh("start");
+  assert.equal(installs, 1);
+  await refresh("restart");
+  assert.equal(installs, 1, "same revision: no install");
+  image = "rev-b";
+  await refresh("restart");
+  assert.equal(installs, 2, "revision changed: install");
+  await refresh("restart");
+  assert.equal(installs, 2);
+  await refresh("standby");
+  assert.equal(installs, 3, "a standby always installs");
+});
+
+test("one latch install at a time: a caller arriving while one runs waits for it", async t => {
+  t.mock.method(console, "log", () => {});
+  let installs = 0;
+  let finish = () => {};
+  const refresh = latchRefresher({ install: () => { installs++; return new Promise<string>(resolve => { finish = () => resolve("0.1.0 (150)"); }); }, revision: async () => "rev-a" });
+  const standby = refresh("standby");
+  await new Promise(resolve => setImmediate(resolve));
+  const restart = refresh("restart");
+  let restarted = false;
+  void restart.then(() => { restarted = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(installs, 1);
+  assert.equal(restarted, false, "the restart waits for the install in flight");
+  finish();
+  await Promise.all([standby, restart]);
+  assert.equal(installs, 1);
 });

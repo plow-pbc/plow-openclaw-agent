@@ -188,8 +188,11 @@ host that cannot be reached does not prevent texting.
 - **Install:** latch's own published installer
   (`releases.plow.co/latch-cli/install.sh --client-only`) puts the newest
   release in `/home/node/.local/bin`, at image build, at boot before the first
-  gateway starts, and before an upgrade's standby takes over (`SIGUSR2`); a
-  crashed gateway restarts without one. An install that fails, or takes over a
+  gateway starts, and before an upgrade's standby takes over (`SIGUSR2`). A
+  restarted gateway gets one only when the image changed since the last
+  install (`/opt/plow/revision`), as after an in-place upgrade whose cutover
+  restarts it; a crash with the same image restarts without one. One install
+  runs at a time. An install that fails, or takes over a
   minute, is stopped and the gateway starts on the latch it has. latch's own update check is off.
 - **Login:** none is baked in. The agent's first latch command that needs a
   host registers it with its own Plow credential, through `PLOW_API_BASE` and

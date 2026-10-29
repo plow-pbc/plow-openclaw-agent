@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
-import { installLatch, removeLegacyLatchState } from "./latch.js";
+import { latchRefresher, removeLegacyLatchState } from "./latch.js";
 import { installBootLog } from "./log.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
@@ -49,15 +49,8 @@ try {
   await startGateway(false, writeLog, {
     frontPort: 3000,
     warmModules: "/opt/plow/openclaw-warm-modules.txt",
-    // Before the first gateway and before an upgrade's standby load their skills, so a newer
-    // latch's skill is the one they read.
-    beforeGateway: async () => {
-      try {
-        console.log(`plow-boot: latch ${await installLatch()}`);
-      } catch (error) {
-        console.warn(`plow-boot: latch not updated; keeping the installed one: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
+    // Before a gateway loads its skills, so a newer latch's skill is the one it reads.
+    beforeGateway: latchRefresher(),
     // The boot code on disk, which after an upgrade's file swap is the new image's.
     prepare: () => new Promise<void>((resolve, reject) => {
       const child = spawn(process.execPath, ["/opt/plow/boot/main.js", "--prepare"], { stdio: "inherit", env: process.env });

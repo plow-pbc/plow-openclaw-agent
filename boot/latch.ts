@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,6 +34,36 @@ export async function installLatch({ installer = INSTALLER, binDir = BIN_DIR, sk
   } finally {
     await rm(work, { recursive: true, force: true });
   }
+}
+
+// When boot installs latch before a gateway starts: always before the first one and before an
+// upgrade's standby, and before a restart only when the image changed since the last install, as
+// it has after an in-place upgrade whose cutover restarts the gateway. One install runs at a time,
+// since two would share the bin folder and the skill's temporary file; a caller arriving while one
+// runs waits for it. It never throws: a failed install is logged, and the gateway starts on the
+// latch it has.
+export type GatewayStart = "start" | "restart" | "standby";
+export function latchRefresher({ install = () => installLatch(), revision = imageRevision }: { install?: () => Promise<string>; revision?: () => Promise<string> } = {}) {
+  let inFlight: Promise<void> | undefined;
+  let installedFor: string | undefined;
+  return (start: GatewayStart): Promise<void> => inFlight ??= (async () => {
+    const image = await revision();
+    if (start === "restart" && image === installedFor) return;
+    // Recorded whether or not the install works, so a gateway that keeps crashing is not held up
+    // by an install on every restart.
+    installedFor = image;
+    try {
+      console.log(`plow-boot: latch ${await install()}`);
+    } catch (error) {
+      console.warn(`plow-boot: latch not updated; keeping the installed one: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })().finally(() => { inFlight = undefined; });
+}
+
+// The commit the image was built from, written by its build into the image's own files, so an
+// in-place upgrade changes it while the VM's environment stays as it was created.
+async function imageRevision(): Promise<string> {
+  return (await readFile("/opt/plow/revision", "utf8").catch(() => "")).trim();
 }
 
 // The installer in a process group of its own, so a timeout stops curl and install-binary.sh too.

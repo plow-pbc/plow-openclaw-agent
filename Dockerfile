@@ -13,6 +13,8 @@ COPY imagemagick-policy.xml /etc/ImageMagick-6/policy.xml
 COPY patches /opt/plow/patches
 RUN node /opt/plow/patches/openclaw-standby.ts /app
 RUN mkdir -p /opt/plow/skills /var/lib/plow /etc/plow/openclaw && chown node:node /var/lib/plow /etc/plow/openclaw
+# The commit this image was built from, in its own files: boot tells an in-place upgrade by it.
+RUN printf '%s\n' "$PLOW_REVISION" > /opt/plow/revision
 COPY boot /opt/plow/boot
 COPY boot/gateway-password.sh /etc/profile.d/plow-openclaw.sh
 RUN printf '\n. /etc/profile.d/plow-openclaw.sh\n' >> /home/node/.bashrc

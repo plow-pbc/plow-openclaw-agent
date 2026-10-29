@@ -231,14 +231,13 @@ for (const path of ["/usr/local/bin:/usr/bin", "/home/node/.local/bin:/usr/bin"]
   assert.equal(options[0].env!.LATCH_NO_UPDATE_CHECK, "1");
 });
 
-// Boot installs the newest latch (and writes its skill) here: before the first gateway and before
-// an upgrade's standby takes over, not before a crashed gateway is restarted.
-test("beforeGateway runs before the first gateway and a standby, each waiting for it, and not before a restart", async t => {
+// Boot installs the newest latch (and writes its skill) here, deciding by the kind of start.
+test("beforeGateway runs before the first gateway, a restart and a standby, told which, each waiting for it", async t => {
   const { gateways } = fakeSupervisor(t);
-  const seen: number[] = [];
+  const seen: string[] = [];
   let release = () => {};
-  const beforeGateway = () => {
-    seen.push(gateways().length);
+  const beforeGateway = (start: string) => {
+    seen.push(`${start}@${gateways().length}`);
     return new Promise<void>(resolve => { release = resolve; });
   };
   const starting = startGateway(true, undefined, { ...takeoverOptions(), beforeGateway });
@@ -246,10 +245,13 @@ test("beforeGateway runs before the first gateway and a standby, each waiting fo
   assert.equal(gateways().length, 0, "the first gateway waits for it");
   release();
   await starting;
-  assert.equal(gateways().length, 1);
   gateways()[0].emit("close", 1, null);
   t.mock.timers.tick(1_000);
-  assert.equal(gateways().length, 2, "a restart does not run it");
+  await setImmediate();
+  assert.equal(gateways().length, 1, "a restart waits for it");
+  release();
+  await setImmediate();
+  assert.equal(gateways().length, 2);
   process.emit("SIGUSR2");
   await setImmediate();
   assert.equal(gateways().length, 2, "a standby waits for it");
@@ -257,5 +259,5 @@ test("beforeGateway runs before the first gateway and a standby, each waiting fo
   await setImmediate();
   await setImmediate();
   assert.equal(gateways().length, 3);
-  assert.deepEqual(seen, [0, 2]);
+  assert.deepEqual(seen, ["start@0", "restart@1", "standby@2"]);
 });
