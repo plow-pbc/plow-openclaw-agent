@@ -14,7 +14,7 @@ if ([process.env.PLOW_AGENT_TOKEN, process.env.OPENCLAW_GATEWAY_PASSWORD].some(t
   throw new Error("Credential leaked into rendered config");
 }
 await syncConfig(config, "/var/lib/plow/openclaw.json", "/etc/plow/openclaw");
-const child = await startGateway(true);
+const child = (await startGateway(true))!;
 let succeeded = false;
 let timedOut = false;
 const timeout = setTimeout(() => {

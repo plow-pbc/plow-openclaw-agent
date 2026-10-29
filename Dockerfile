@@ -54,7 +54,16 @@ RUN case "$TARGETARCH" in \
  && tar -xzf /tmp/agentsview.tgz -C /usr/local/bin agentsview \
  && rm /tmp/agentsview.tgz \
  && chmod 0755 /usr/local/bin/agentsview
+ENV PATH=/home/node/.local/bin:$PATH LATCH_STATE_DIR=/var/lib/plow/latch LATCH_NO_UPDATE_CHECK=1
 RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && node /opt/plow/build.ts && chmod +x /opt/plow/probe
+# latch, the command-line tool the agent reaches its owner's machines with: the newest release,
+# installed by boot/latch.ts as every boot installs it again, so the folders it writes belong to
+# the agent's user. This copy is what an agent keeps when a boot's install fails. Its key and
+# login go in the state volume, not the image: latch logs in on the agent's first command with
+# the Plow credential boot exports.
+RUN mkdir -p /home/node/.local/bin /opt/plow/skills/latch \
+ && node /opt/plow/boot/latch.js \
+ && chown -R node:node /home/node/.local/bin /opt/plow/skills/latch
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.
 ENV AGENT_RUNTIME=OpenClaw
