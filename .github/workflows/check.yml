@@ -22,3 +22,12 @@ jobs:
             '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test /opt/plow/tests/*.test.ts'
       - name: Offline gateway probe
         run: docker run --rm --network none plow-openclaw:test /opt/plow/probe
+      - name: latch runs as the agent's user, with its state in the volume
+        run: |
+          docker run --rm --network none plow-openclaw:test sh -euc '
+            test "$(id -un)" = node
+            latch --version | tee /dev/stderr | grep -Eq "\([0-9]+\)"
+            test -O /home/node/.local/bin/latch && test -O /opt/plow/skills/latch/SKILL.md
+            latch status --local | tee /dev/stderr | grep -q "\"state_dir\":\"/var/lib/plow/latch\""
+            test -w /var/lib/plow'
+

@@ -7,6 +7,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // @ts-expect-error The pinned SDK ships this runtime entry without type declarations.
 import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
+import { classifyChannelInboundEvent, resolveUnmentionedGroupInboundPolicy } from "openclaw/plugin-sdk/channel-inbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
@@ -153,10 +154,21 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const body = [message.body, ...unavailable].filter(Boolean).join("\n") || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
+  // A group text is room activity the agent observes, not a request to it, unless it tags this line, replies
+  // to this agent's message or is a command: OpenClaw then says so, keeps the final text private, posts only
+  // through message(action="send") and ends a silent turn cleanly. Without it a group turn had to answer, so
+  // the model's NO_REPLY was retried into "⚠️ Agent couldn't generate a response" (plow-agents#83).
+  const invoked = message.mentions?.some(mention => mention.is_me) === true || (quoted?.sender.type === "agent" && quoted.sender.relationship === "self");
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind }, unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({ cfg, agentId: route.agentId }),
+    wasMentioned: invoked, hasControlCommand: command !== undefined,
+  });
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
+  // A guest's "replies only" is the message tool in a room event; its sends stay in this chat (crossContext is off).
+  const guestAllow = guestTools && inboundEventKind === "room_event" ? [...new Set(["message", ...guestTools])] : guestTools;
   const toolPolicy = email
     ? { deny: ["automations"], ...(!senderIsOwner ? { allow: [...new Set(["plow_send_email", ...account.guestTools ?? []])] } : {}) }
-    : guestTools?.length ? { allow: guestTools } : undefined;
+    : guestAllow?.length ? { allow: guestAllow } : undefined;
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
   const persona = (email && account.emailName) || selfName;
@@ -177,7 +189,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
     message: { inboundHistory: history.map(m => ({
       sender: m.sender.type === "member" ? m.sender.display_name : m.sender.relationship === "self" ? "You (assistant)" : m.sender.line.display_name ?? m.sender.line.uid,
       body: m.body, timestamp: Date.parse(m.created_at), messageId: m.uid,
-    })), rawBody: body },
+    })), rawBody: body, inboundEventKind },
     supplemental: {
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
@@ -225,7 +237,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         log(`run started chat=${chat.uid} message=${message.uid} run=${runId}`);
       },
       // An empty OpenClaw allow-list is unrestricted, so disable tools explicitly.
-      ...(guestTools?.length === 0 ? { disableTools: true } : {}),
+      ...(guestAllow?.length === 0 ? { disableTools: true } : {}),
       sourceReplyDeliveryMode: command && !senderIsOwner && chat.trusted ? "message_tool_only" : "automatic",
       onObservedReplyDelivery: () => { observedReplyDelivery = true; },
       onAgentRunTerminalOutcome: outcome => {
@@ -362,7 +374,7 @@ export default defineChannelPluginEntry({
     });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
-      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email.",
+      description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers or iMessage email addresses. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers and iMessage email addresses, not chat ids; to send email, use plow_send_email. When the owner names a person without a number or address, look them up in the owner's contacts on their Mac first (owners-mac skill); ask the owner only if nobody matches or the Mac is not connected, and ask which one if several match.",
       parameters: {
         type: "object", required: ["members", "body"], additionalProperties: false,
         properties: {
@@ -421,8 +433,40 @@ export default defineChannelPluginEntry({
       },
     }));
     api.registerTool(context => ({
+      name: "plow_name_contact", label: "Name a person in Plow",
+      description: "Record the name of a person a Plow chat shows only by phone number or email address, so every chat shows them by that name from then on. Only on the owner's turn: record what the owner calls them, or the one match in the owner's contacts on their Mac. Never guess a name from mail, calendar or memory. This posts nothing; still send your answer.",
+      parameters: {
+        type: "object", required: ["handle", "display_name"], additionalProperties: false,
+        properties: {
+          handle: { type: "string", pattern: "^(\\+[1-9][0-9]{1,14}|[^\\s@]+@[^\\s@]+\\.[^\\s@]+)$", description: "The person's handle as the chat shows it: a phone number in E.164 format or an email address." },
+          display_name: { type: "string", minLength: 1, maxLength: 100, description: "The person's name, as the owner calls them." },
+        },
+      },
+      async execute(_id, args: { handle: string; display_name: string }) {
+        if (!context.config) throw new Error("Plow configuration is unavailable.");
+        const account = plugin.config.resolveAccount(context.config, "chat");
+        const chatUid = conversationUid(context);
+        if (context.messageChannel !== "plow" || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("Naming a person requires an active Plow text.");
+        // Only the owner's word names someone: on a member's turn the model put a name the member gave for the
+        // owner on the member's own number (#126).
+        if (context.senderIsOwner !== true) throw new Error("Only the owner can name someone. Nothing was recorded; ask the owner.");
+        const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
+        if (!accepts(account, chat)) throw new Error("Naming a person requires an active Plow text.");
+        const handle = normalizedHandle(args.handle), name = args.display_name.trim();
+        if (!name) throw new Error("display_name is empty.");
+        // Plow writes the owner's own handle to their account name, which is theirs to set.
+        const owner = chat.participants.find(p => p.type === "member" && p.role === "owner");
+        if (owner?.type === "member" && owner.provider_key && normalizedHandle(owner.provider_key) === handle) throw new Error("That is the owner's own number; the owner's name is set in their Plow account.");
+        const row = await requestDelivery<{ display_name: string | null }>(account, `/contacts/${encodeURIComponent(handle)}`, { display_name: name }, "PUT");
+        const details = { handle, display_name: row.display_name };
+        // After this call the model often left its answer in a private final text, so nothing posted (#122).
+        const text = `${JSON.stringify(details)}\nRecorded; nothing was posted. Still answer: when your final text stays private, send it with message(action="send").`;
+        return { content: [{ type: "text", text }], details };
+      },
+    }));
+    api.registerTool(context => ({
       name: "report_bug", label: "Report a bug to your developers",
-      description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once. Only tell the person it was reported after this returns success, and then do so at once, in one short line with the report_id it returns, before anything else; status duplicate means it was already reported earlier, so say that without quoting an id.",
+      description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. When the person asks you to report a bug, call this in that turn about what just happened in the conversation; do not ask them what went wrong first. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once. Only tell the person it was reported after this returns success, and then do so at once, in one short line with the report_id it returns, before anything else; status duplicate means it was already reported earlier, so say that without quoting an id.",
       parameters: {
         type: "object", required: [], additionalProperties: false,
         properties: {

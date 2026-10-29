@@ -10,7 +10,6 @@ export type Identity = {
   line: { uid: string };
   mailbox?: { uid: string; display_name: string } | null;
   chats: { uid: string; status: string; participants: Participant[] }[];
-  mcp_url?: string | null;
 };
 
 export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask") {
@@ -46,6 +45,9 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
       // A phone turn, not OpenClaw's 48-hour default: a stuck run blocks its chat.
       timeoutSeconds: 600,
+      // OpenClaw's group default makes every group turn answer: a NO_REPLY is retried, then replaced
+      // by "⚠️ Agent couldn't generate a response" (plow-agents#83). Silence is an answer in a group.
+      silentReply: { group: "allow" },
       // Off. OpenClaw's default heartbeat polls every 30 minutes with the whole
       // conversation, uncached, for a NO_REPLY nobody sees, billed to the owner:
       // about $90 a day across idle agents (plow#2347). "0m" is its off switch;
@@ -57,12 +59,10 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       modelPolicy: {},
       models: { "plow/z-ai/glm-5.2": { params: { extraBody: { reasoning: { enabled: false } } } } },
     } },
-    mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
-      url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
-      headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
-    } } } : {}) },
+    mcp: { sessionIdleTtlMs: 300_000 },
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
-    messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
+    // A group text that does not tag the agent is room activity it observes (plugin/index.ts receive).
+    messages: { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
@@ -74,13 +74,15 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "report_bug", "plow_reply_to", "plow_send_email", ...guestTools], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_name_contact", "report_bug", "plow_reply_to", "plow_send_email", ...guestTools], deny: ["ask_user"] },
   };
 }
 
 const ownedPaths = [
   ["gateway", ["gateway"]],
   ["plow-provider", ["models", "providers", "plow"]],
+  // Rendered by none of today's boots, so the sync removes the Mac relay's server a volume from an
+  // older image still names.
   ["plow-mcp", ["mcp", "servers", "plow"]],
   ["plow-channel", ["channels", "plow"]],
   ["plow-plugin", ["plugins", "entries", "plow"]],
@@ -88,10 +90,12 @@ const ownedPaths = [
   ["tools", ["tools"]],
   ["commands", ["commands"]],
   ["visible-replies", ["messages", "visibleReplies"]],
+  ["group-unmentioned-inbound", ["messages", "groupChat", "unmentionedInbound"]],
   ["message-queue", ["messages", "queue"]],
   ["inbound-debounce", ["messages", "inbound", "byChannel", "plow"]],
   ["identity", ["agents", "entries", "main", "identity"]],
   ["run-timeout", ["agents", "defaults", "timeoutSeconds"]],
+  ["group-silent-reply", ["agents", "defaults", "silentReply", "group"]],
   ["heartbeat", ["agents", "defaults", "heartbeat"]],
   ["session", ["session"]],
   ["memory", ["memory"]],

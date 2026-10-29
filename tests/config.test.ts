@@ -59,14 +59,12 @@ test("boot accepts no owner chat or ambiguous owner chats without waiting", () =
   }
 });
 
-test("provider and optional MCP use environment references, never credential values", () => {
-  const config = renderConfig({ ...identity, mcp_url: "http://api:8000/relay" }, "http://api:8000");
+test("the provider uses environment references, never credential values", () => {
+  const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.models.providers.plow.apiKey, "${PLOW_AGENT_TOKEN}");
   assert.equal(config.models.providers.plow.baseUrl, "http://api:8000/v1");
   assert.equal(config.gateway.auth.mode, "trusted-proxy");
   assert.equal("password" in config.gateway.auth, false);
-  assert.equal(config.mcp?.servers.plow.url, "http://127.0.0.1:18790/mcp");
-  assert.deepEqual(renderConfig(identity, "http://api:8000").mcp, { sessionIdleTtlMs: 300_000 });
 });
 
 test("GLM falls back to Sonnet on the Plow provider with explicit capacity and pricing", () => {
@@ -94,12 +92,8 @@ test("the configured Plow provider permits an operator-controlled private endpoi
   assert.equal(config.models.providers.plow.request.allowPrivateNetwork, true);
 });
 
-test("MCP sessions share the loopback bridge and expire after five idle minutes", () => {
-  const config = renderConfig({ ...identity, mcp_url: "https://relay.internal/mcp" }, "http://api:8000");
-  assert.deepEqual(config.mcp, { sessionIdleTtlMs: 300_000, servers: { plow: {
-    url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
-    headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
-  } } });
+test("MCP sessions expire after five idle minutes, and Plow adds no MCP server", () => {
+  assert.deepEqual(renderConfig(identity, "http://api:8000").mcp, { sessionIdleTtlMs: 300_000 });
 });
 
 test("phone turns cannot block on ask_user", () => {
@@ -120,7 +114,7 @@ test("guest tools default to empty and are declared once for channel and messagi
 
 test("native messaging retains local workspace and memory file tools", () => {
   assert.deepEqual(renderConfig(identity, "http://api:8000").tools, {
-    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "report_bug", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
+    message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_name_contact", "report_bug", "plow_reply_to", "plow_send_email"], deny: ["ask_user"],
   });
 });
 
@@ -142,7 +136,9 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  // plow-agents#83: a silent group turn is an answer, not a failure retried into an error notice.
+  assert.deepEqual(config.agents.defaults.silentReply, { group: "allow" });
   assert.deepEqual(config.meta, {});
 });
 
@@ -195,6 +191,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   old.messages.groupChat = { visibleReplies: "message_tool" };
   old.bindings.unshift({ agentId: "extra", match: { channel: "telegram" } });
   delete old.agents.defaults.heartbeat; // rendered before plow#2347, on OpenClaw's 30-minute default
+  delete old.agents.defaults.silentReply; // rendered before plow-agents#83, on OpenClaw's answer-every-group-turn default
   await writeFile(path, `// owner settings\n${JSON.stringify(old)}\n`);
   await syncConfig(renderConfig(identity, "http://new-api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
@@ -202,7 +199,10 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(owner.models.providers.extra, { baseUrl: "https://example.com" });
   assert.deepEqual(owner.plugins.entries.extra, { enabled: true });
   assert.deepEqual(JSON5.parse(await readFile(join(includes, "message-queue.json5"), "utf8")), { mode: "collect" });
-  assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool" });
+  // An upgraded agent gets the group-silence settings and keeps the owner's own group settings (plow-agents#83).
+  assert.deepEqual(owner.messages.groupChat, { visibleReplies: "message_tool", unmentionedInbound: { $include: join(includes, "group-unmentioned-inbound.json5") } });
+  assert.equal(JSON5.parse(await readFile(owner.messages.groupChat.unmentionedInbound.$include, "utf8")), "room_event");
+  assert.equal(JSON5.parse(await readFile(owner.agents.defaults.silentReply.group.$include, "utf8")), "allow");
   assert.equal(owner.messages.inbound.debounceMs, 800);
   assert.equal(owner.messages.inbound.byChannel.signal, 500);
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
@@ -222,15 +222,16 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.deepEqual(again.gateway, { $include: join(includes, "gateway.json5") });
   assert.deepEqual(again.channels.plow, { $include: join(includes, "plow-channel.json5") });
   assert.deepEqual(again.channels.telegram, { enabled: true });
-  assert.deepEqual(again.messages.groupChat, { visibleReplies: "message_tool" });
+  assert.deepEqual(again.messages.groupChat, { visibleReplies: "message_tool", unmentionedInbound: { $include: join(includes, "group-unmentioned-inbound.json5") } });
   assert.equal(again.agents.defaults.model.primary, "extra/model");
 });
 
-test("MCP Plow server include disappears without a relay while owner MCP settings remain", async t => {
+test("the Mac relay's MCP server an older image left on the volume goes, while owner MCP settings remain", async t => {
   const { path, includes } = await configFixture(t);
-  await syncConfig(renderConfig({ ...identity, mcp_url: "https://relay.example" }, "http://api:8000"), path, includes);
+  await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
   const owner = JSON5.parse(await readFile(path, "utf8"));
-  owner.mcp.servers.other = { url: "https://other.example" };
+  owner.mcp.servers = { plow: { $include: join(includes, "plow-mcp.json5") }, other: { url: "https://other.example" } };
+  await writeFile(join(includes, "plow-mcp.json5"), JSON.stringify({ url: "http://127.0.0.1:18790/mcp", transport: "streamable-http" }));
   await writeFile(path, JSON.stringify(owner));
   await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
   const again = JSON5.parse(await readFile(path, "utf8"));

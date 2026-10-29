@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import type { Server } from "node:net";
 import { startFront } from "./front.ts";
+import type { GatewayStart } from "./latch.ts";
 
 // Nothing outside this process restarts the gateway (exe.dev's init does not), so it does.
 const GATEWAY_RESTART_MS = 1_000;
@@ -8,6 +9,15 @@ const GATEWAY_RESTART_MAX_MS = 60_000;
 const GATEWAY_HEALTHY_MS = 5 * 60_000;
 // A standby that is not warm by then is stopped, and the running gateway keeps serving.
 const STANDBY_WARM_MS = 180_000;
+// latch's settings, which the image's ENV sets too: a VM upgraded in place keeps the environment
+// it was created with, so the gateway, and the agent's commands under it, get them from here.
+const LATCH_BIN = "/home/node/.local/bin";
+const gatewayEnv = (env: NodeJS.ProcessEnv) => ({
+  ...env,
+  PATH: env.PATH?.split(":").includes(LATCH_BIN) ? env.PATH : [LATCH_BIN, env.PATH].filter(Boolean).join(":"),
+  LATCH_STATE_DIR: "/var/lib/plow/latch",
+  LATCH_NO_UPDATE_CHECK: "1",
+});
 
 export type GatewayOptions = {
   // The public port. With it the gateway listens on one of `ports` behind it, and SIGUSR2 hands over
@@ -17,17 +27,18 @@ export type GatewayOptions = {
   ports?: [number, number];
   // Runs before a standby starts, to write the config and prompt it boots with.
   prepare?: () => Promise<void>;
+  // Runs before every gateway starts, told which kind of start it is; must not throw.
+  beforeGateway?: (start: GatewayStart) => Promise<void>;
   warmModules?: string;
   entry?: string;
 };
 
-export async function startGateway(captureOutput = false, mcpUrl?: string, writeLog?: (chunk: Buffer) => void, options: GatewayOptions = {}) {
+export async function startGateway(captureOutput = false, writeLog?: (chunk: Buffer) => void, options: GatewayOptions = {}) {
   const entry = options.entry ?? "/app/openclaw.mjs";
-  // Loopback, beside the MCP bridge's 18790, clear of the dev dashboard's 3001.
+  // Loopback, clear of the dev dashboard's 3001.
   const ports = options.ports ?? [18801, 18802];
   const children = new Set<ChildProcess>();
   let stopping = false;
-  let restartTimer: NodeJS.Timeout | undefined;
   let gatewayTimer: NodeJS.Timeout | undefined;
   let gatewayDelay = GATEWAY_RESTART_MS;
   let timer: NodeJS.Timeout | undefined;
@@ -40,7 +51,6 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
   const stop = () => {
     if (stopping) return;
     stopping = true;
-    clearTimeout(restartTimer);
     clearTimeout(gatewayTimer);
     front?.close();
     for (const child of children) child.kill("SIGTERM");
@@ -69,44 +79,40 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
     child.on("error", error => console.error(error));
     child.on("close", (code, signal) => {
       children.delete(child);
-      if (label === "bridge" && !stopping) {
-        console.error(`plow-boot: bridge exited code=${code} signal=${signal}; restarting in 1s`);
-        restartTimer = setTimeout(startBridge, 1000);
-        return;
-      }
-      if (label !== "bridge" && child !== current) {
+      if (child !== current) {
         // A gateway a takeover replaced, or a standby that never took over: the current one serves on.
         if (child === standby) { standby = undefined; takingOver = false; }
         console.error(`plow-boot: ${label === "standby" ? "standby" : "replaced"} gateway exited code=${code} signal=${signal}`);
         if (stopping && !children.size) release();
         return;
       }
-      if (label !== "bridge" && !stopping) {
+      if (!stopping) {
         current = undefined;
         if (Date.now() - startedAt >= GATEWAY_HEALTHY_MS) gatewayDelay = GATEWAY_RESTART_MS;
         console.error(`plow-boot: gateway exited code=${code} signal=${signal}; restarting in ${gatewayDelay / 1000}s`);
-        gatewayTimer = setTimeout(startGatewayProcess, gatewayDelay);
+        gatewayTimer = setTimeout(restartGateway, gatewayDelay);
         gatewayDelay = Math.min(gatewayDelay * 2, GATEWAY_RESTART_MAX_MS);
         return;
       }
-      if (label !== "bridge") console.error(`plow-boot: gateway exited code=${code} signal=${signal}`);
+      console.error(`plow-boot: gateway exited code=${code} signal=${signal}`);
       stop();
       if (!children.size) release();
     });
     return child;
   };
-  const startBridge = () => launch("bridge", ["/opt/plow/boot/mcp-bridge.js"], {
-    stdio: captureOutput ? ["ignore", "inherit", "inherit", "ipc"] : ["ignore", "pipe", "pipe", "ipc"],
-    env: { PLOW_MCP_URL: mcpUrl!, PLOW_AGENT_TOKEN: process.env.PLOW_AGENT_TOKEN, PLOW_MCP_BRIDGE_TOKEN: process.env.PLOW_MCP_BRIDGE_TOKEN },
-  });
   const gatewayArgs = (listen: number) => front ? [entry, "gateway", "--port", String(listen)] : [entry, "gateway"];
   const startGatewayProcess = () => current = launch("gateway", gatewayArgs(port), {
-    stdio: ["ignore", "pipe", "pipe"], env: process.env,
+    stdio: ["ignore", "pipe", "pipe"], env: gatewayEnv(process.env),
   });
+  // A standby that took over while this waited is the gateway now.
+  const restartGateway = () => options.beforeGateway
+    ? void options.beforeGateway("restart").then(() => { if (!stopping && !current) startGatewayProcess(); })
+    : startGatewayProcess();
   async function takeover() {
     if (stopping || takingOver || !current) return;
     takingOver = true;
     try {
+      await options.beforeGateway?.("standby");
       await options.prepare?.();
     } catch (error) {
       console.error(`plow-boot: takeover not started: ${error instanceof Error ? error.message : String(error)}`);
@@ -117,7 +123,7 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
     const next = port === ports[0] ? ports[1] : ports[0];
     const child = standby = launch("standby", gatewayArgs(next), {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
-      env: { ...process.env, OPENCLAW_GATEWAY_STANDBY: "1", OPENCLAW_GATEWAY_WARM_MODULES: options.warmModules },
+      env: { ...gatewayEnv(process.env), OPENCLAW_GATEWAY_STANDBY: "1", OPENCLAW_GATEWAY_WARM_MODULES: options.warmModules },
     });
     console.error(`plow-boot: standby gateway starting on :${next}`);
     const notWarm = setTimeout(() => {
@@ -149,10 +155,7 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, write
     front = await startFront(options.frontPort, () => port);
     process.on("SIGUSR2", takeover);
   }
-  if (mcpUrl) {
-    const bridge = startBridge();
-    await new Promise(resolve => { bridge.once("message", resolve); bridge.once("close", resolve); });
-    if (stopping) return bridge;
-  }
+  await options.beforeGateway?.("start");
+  if (stopping) return undefined;
   return startGatewayProcess();
 }

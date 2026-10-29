@@ -142,7 +142,7 @@ test("a standby gateway takes over the same state with no lost message and a sho
   });
 
   const booted = performance.now();
-  await startGateway(true, undefined, chunk => { output += chunk; }, { frontPort: front, ports: [first, second], entry: join(openclaw, "openclaw.mjs"), warmModules: join(root, "warm-modules.txt") });
+  await startGateway(true, chunk => { output += chunk; }, { frontPort: front, ports: [first, second], entry: join(openclaw, "openclaw.mjs"), warmModules: join(root, "warm-modules.txt") });
   await until("the first gateway to connect to Plow", () => connected() === 1 && plow.sockets.size === 1);
   const coldBoot = performance.now() - booted;
   delete process.env.NODE_OPTIONS;
