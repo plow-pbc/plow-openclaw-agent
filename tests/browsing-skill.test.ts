@@ -23,5 +23,10 @@ const owners = await readFile(new URL("../skills/owners-mac/SKILL.md", import.me
 test("the owners-mac skill reads texts with latch and texts people from the agent's own line", () => {
   const flat = owners.replace(/\s+/g, " ");
   assert.ok(flat.includes("On their Mac, the `latch messages` commands read the owner's texts and `latch contacts` their address book."));
-  assert.ok(flat.includes("To text someone, start a thread from your own line with plow_start_thread."));
+  assert.ok(flat.includes("To text someone, start a thread with them from your own line with plow_start_thread, following the thread trust rule."));
+});
+
+test("the owners-mac skill names the calls that take --plow-chat, and not latch status", () => {
+  const flat = owners.replace(/\s+/g, " ");
+  assert.ok(flat.includes("Its exec, file, google, messages, contacts, browser and `vault list` calls name the chat you are answering in with `--plow-chat`; `latch status` takes none."));
 });
