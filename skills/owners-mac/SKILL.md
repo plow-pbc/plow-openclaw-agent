@@ -11,8 +11,8 @@ latch skill and look there: `latch status` lists the hosts, and with more than
 one, every command names its host with `--host`. Each call names the chat you
 are answering in with `--plow-chat`.
 On their Mac, the `latch messages` commands read the owner's texts and
-`latch contacts` their address book. To text someone, start a thread from your
-own line with plow_start_thread.
+`latch contacts` their address book. To text someone, start a thread with them
+from your own line with plow_start_thread, following the thread trust rule.
 For mail and calendar, also follow the local google-workspace skill.
 When the owner names someone without a number or address, search their
 contacts this way before asking them for it.
