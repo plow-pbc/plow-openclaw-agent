@@ -230,3 +230,36 @@ for (const path of ["/usr/local/bin:/usr/bin", "/home/node/.local/bin:/usr/bin"]
   assert.equal(options[0].env!.LATCH_STATE_DIR, "/var/lib/plow/latch");
   assert.equal(options[0].env!.LATCH_NO_UPDATE_CHECK, "1");
 });
+
+// Boot installs the newest latch (and writes its skill) here: before the first gateway, before a
+// gateway restarted in place, and before a standby takes over.
+test("beforeGateway runs before the first gateway, a restart and a standby, each launch waiting for it", async t => {
+  const { gateways } = fakeSupervisor(t);
+  const seen: number[] = [];
+  let release = () => {};
+  const beforeGateway = () => {
+    seen.push(gateways().length);
+    return new Promise<void>(resolve => { release = resolve; });
+  };
+  const starting = startGateway(true, undefined, { ...takeoverOptions(), beforeGateway });
+  await setImmediate();
+  assert.equal(gateways().length, 0, "the first gateway waits for it");
+  release();
+  await starting;
+  assert.equal(gateways().length, 1);
+  gateways()[0].emit("close", 1, null);
+  t.mock.timers.tick(1_000);
+  await setImmediate();
+  assert.equal(gateways().length, 1, "a restart waits for it");
+  release();
+  await setImmediate();
+  assert.equal(gateways().length, 2);
+  process.emit("SIGUSR2");
+  await setImmediate();
+  assert.equal(gateways().length, 2, "a standby waits for it");
+  release();
+  await setImmediate();
+  await setImmediate();
+  assert.equal(gateways().length, 3);
+  assert.deepEqual(seen, [0, 1, 2]);
+});

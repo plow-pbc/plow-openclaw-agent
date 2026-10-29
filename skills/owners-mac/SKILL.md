@@ -8,9 +8,11 @@ Your session history records what happened through you, not the owner's whole
 life. Their machines hold their messages, files, accounts and earlier agents'
 work, and you reach them with latch. Before saying there is no record, read the
 latch skill and look there: `latch status` lists the hosts, and with more than
-one, every command names its host with `--host`.
-On their Mac, `latch messages` reads the owner's texts and `latch contacts`
-their address book.
+one, every command names its host with `--host`. Each call names the chat you
+are answering in with `--plow-chat`.
+On their Mac, the `latch messages` commands read the owner's texts and
+`latch contacts` their address book. To text someone, start a thread from your
+own line with plow_start_thread.
 For mail and calendar, also follow the local google-workspace skill.
 When the owner names someone without a number or address, search their
 contacts this way before asking them for it.

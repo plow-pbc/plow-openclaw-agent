@@ -26,6 +26,8 @@ export type GatewayOptions = {
   ports?: [number, number];
   // Runs before a standby starts, to write the config and prompt it boots with.
   prepare?: () => Promise<void>;
+  // Runs before every gateway starts, the first, a restart and a standby alike; must not throw.
+  beforeGateway?: () => Promise<void>;
   warmModules?: string;
   entry?: string;
 };
@@ -87,7 +89,7 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
         current = undefined;
         if (Date.now() - startedAt >= GATEWAY_HEALTHY_MS) gatewayDelay = GATEWAY_RESTART_MS;
         console.error(`plow-boot: gateway exited code=${code} signal=${signal}; restarting in ${gatewayDelay / 1000}s`);
-        gatewayTimer = setTimeout(startGatewayProcess, gatewayDelay);
+        gatewayTimer = setTimeout(restartGateway, gatewayDelay);
         gatewayDelay = Math.min(gatewayDelay * 2, GATEWAY_RESTART_MAX_MS);
         return;
       }
@@ -101,10 +103,15 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
   const startGatewayProcess = () => current = launch("gateway", gatewayArgs(port), {
     stdio: ["ignore", "pipe", "pipe"], env: gatewayEnv(process.env),
   });
+  // A standby that took over while this waited is the gateway now.
+  const restartGateway = () => options.beforeGateway
+    ? void options.beforeGateway().then(() => { if (!stopping && !current) startGatewayProcess(); })
+    : startGatewayProcess();
   async function takeover() {
     if (stopping || takingOver || !current) return;
     takingOver = true;
     try {
+      await options.beforeGateway?.();
       await options.prepare?.();
     } catch (error) {
       console.error(`plow-boot: takeover not started: ${error instanceof Error ? error.message : String(error)}`);
@@ -147,5 +154,7 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
     front = await startFront(options.frontPort, () => port);
     process.on("SIGUSR2", takeover);
   }
+  await options.beforeGateway?.();
+  if (stopping) return undefined;
   return startGatewayProcess();
 }

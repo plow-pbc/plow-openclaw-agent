@@ -6,7 +6,8 @@ description: Open a website, read a page, fill a form, download a file, search t
 
 Browser work goes through `latch browser` on one of the owner's hosts, the way
 the latch skill describes: open a session, observe the page, then act on the
-refs it returns. Read the latch skill before your first `latch browser` call
+refs it returns, naming the chat you are answering in with `--plow-chat` on
+session calls. Read the latch skill before your first `latch browser` call
 this turn, even when the site looks simple. It carries what to do when a site
 asks for a code it texted the owner, and when to hand a session to the owner.
 Follow its exact steps and arguments.

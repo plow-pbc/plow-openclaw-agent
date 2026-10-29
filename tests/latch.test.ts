@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { installLatch } from "../boot/latch.ts";
+import { installLatch, removeLegacyLatchState } from "../boot/latch.ts";
 
 // A latch that answers --version and skill as build `build`.
 const fakeLatch = (build: number) => `#!/bin/sh
@@ -55,4 +55,31 @@ for (const [failure, message] of [["unreachable", /Could not resolve host/], ["r
   await assert.rejects(installLatch(options), message);
   assert.match(await readFile(join(bin, "latch"), "utf8"), /0\.1\.0 \(149\)/);
   assert.equal(await readFile(skill, "utf8"), "skill of build 149\n");
+});
+
+test("an install still running after the timeout is stopped, and the installed latch and its skill stay", async t => {
+  const { bin, skill, options } = await machine(t, "newer");
+  await writeFile(join(options.env.PATH!.split(":")[0], "curl"), "#!/bin/sh\nsleep 30\n");
+  const started = Date.now();
+  await assert.rejects(installLatch({ ...options, timeoutMs: 300 }), /did not finish within 0\.3s/);
+  assert.ok(Date.now() - started < 5_000);
+  assert.match(await readFile(join(bin, "latch"), "utf8"), /0\.1\.0 \(149\)/);
+  assert.equal(await readFile(skill, "utf8"), "skill of build 149\n");
+});
+
+test("boot removes the earlier latch state folders it is given, and only those", async t => {
+  const root = await mkdtemp(join(tmpdir(), "plow-latch-legacy-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const [legacy, home, current] = [join(root, ".latch"), join(root, "home", ".latch"), join(root, "plow", "latch")];
+  for (const folder of [legacy, home, current]) {
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, "key"), "a key");
+  }
+  const logs: string[] = [];
+  t.mock.method(console, "log", (line: string) => { logs.push(line); });
+  await removeLegacyLatchState([legacy, home, join(root, "missing", ".latch")]);
+  await assert.rejects(stat(legacy));
+  await assert.rejects(stat(home));
+  assert.equal(await readFile(join(current, "key"), "utf8"), "a key");
+  assert.deepEqual(logs, [`plow-boot: removed the earlier latch state folder ${legacy}`, `plow-boot: removed the earlier latch state folder ${home}`]);
 });

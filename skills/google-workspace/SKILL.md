@@ -5,9 +5,10 @@ description: Use Gmail and Google Calendar through latch on a host where the own
 # Google Workspace
 
 This image holds no Google OAuth credentials. Do not set up local OAuth.
-Google goes through `latch google --host H -- COMMAND…` on a host where the
-owner connected Google: `latch status` lists each host's plugins, and the
-latch skill says how to call it. `latch google --help` lists the commands a
+Google goes through `latch google --host H --plow-chat C -- COMMAND…`, with C
+the chat you are answering in, on a host where the owner connected Google:
+`latch status` lists each host's plugins, and the latch skill says how to call
+it. `latch google --help` lists the commands a
 host allows; use those exact commands and arguments instead of guessing them.
 
 Owner-account mail goes out as the owner. Obtain their authorization before

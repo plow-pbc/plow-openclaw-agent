@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
+import { join } from "node:path";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
-import { installLatch } from "./latch.js";
+import { installLatch, removeLegacyLatchState } from "./latch.js";
 import { installBootLog } from "./log.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
@@ -43,16 +44,19 @@ try {
     process.exit(0);
   }
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
-  // Before the gateway loads its skills, so a newer latch's skill is the one it reads.
-  try {
-    console.log(`plow-boot: latch ${await installLatch()}`);
-  } catch (error) {
-    console.warn(`plow-boot: latch not updated; keeping the installed one: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  await removeLegacyLatchState(["/.latch", ...(process.env.HOME ? [join(process.env.HOME, ".latch")] : [])]);
   startAgentIndex(300_000, writeLog);
   await startGateway(false, writeLog, {
     frontPort: 3000,
     warmModules: "/opt/plow/openclaw-warm-modules.txt",
+    // Before each gateway loads its skills, so a newer latch's skill is the one it reads.
+    beforeGateway: async () => {
+      try {
+        console.log(`plow-boot: latch ${await installLatch()}`);
+      } catch (error) {
+        console.warn(`plow-boot: latch not updated; keeping the installed one: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
     // The boot code on disk, which after an upgrade's file swap is the new image's.
     prepare: () => new Promise<void>((resolve, reject) => {
       const child = spawn(process.execPath, ["/opt/plow/boot/main.js", "--prepare"], { stdio: "inherit", env: process.env });

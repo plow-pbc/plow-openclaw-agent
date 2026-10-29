@@ -187,14 +187,16 @@ host that cannot be reached does not prevent texting.
 
 - **Install:** latch's own published installer
   (`releases.plow.co/latch-cli/install.sh --client-only`) puts the newest
-  release in `/home/node/.local/bin`, at image build and again at every boot,
-  before the gateway starts. A boot whose install fails keeps the latch it has.
-  latch's own update check is off.
+  release in `/home/node/.local/bin`, at image build and again before every
+  gateway starts: at boot, on a gateway restart and before a standby takes
+  over. An install that fails, or takes over a minute, is stopped and the
+  gateway starts on the latch it has. latch's own update check is off.
 - **Login:** none is baked in. The agent's first latch command that needs a
   host registers it with its own Plow credential, through `PLOW_API_BASE` and
   `PLOW_AGENT_TOKEN` as boot exports them. Its key and login live in
   `/var/lib/plow/latch` (`LATCH_STATE_DIR`), on the state volume, so a rebuilt
-  container keeps the same latch identity. Boot also gives the gateway latch's
+  container keeps the same latch identity. Boot removes the earlier state
+  folders `/.latch` and `$HOME/.latch`, so the agent has one latch key. Boot also gives the gateway latch's
   `PATH`, state folder and update setting, since a VM upgraded in place keeps
   the environment it was created with.
 - **Skill:** after each install, `latch skill` from that binary is written as

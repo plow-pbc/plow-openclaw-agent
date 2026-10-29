@@ -17,3 +17,11 @@ test("the browsing skill says to read the latch skill before the first latch bro
   const flat = skill.replace(/\s+/g, " ");
   assert.ok(flat.includes("Read the latch skill before your first `latch browser` call this turn, even when the site looks simple."));
 });
+
+const owners = await readFile(new URL("../skills/owners-mac/SKILL.md", import.meta.url), "utf8");
+
+test("the owners-mac skill reads texts with latch and texts people from the agent's own line", () => {
+  const flat = owners.replace(/\s+/g, " ");
+  assert.ok(flat.includes("On their Mac, the `latch messages` commands read the owner's texts and `latch contacts` their address book."));
+  assert.ok(flat.includes("To text someone, start a thread from your own line with plow_start_thread."));
+});
