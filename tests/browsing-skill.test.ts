@@ -17,9 +17,3 @@ test("the browsing skill says to read the latch skill before the first latch bro
   const flat = skill.replace(/\s+/g, " ");
   assert.ok(flat.includes("Read the latch skill before your first `latch browser` call this turn, even when the site looks simple."));
 });
-
-test("the browsing skill says latch cannot work around a page, rather than improvising", () => {
-  const flat = skill.replace(/\s+/g, " ");
-  assert.ok(flat.includes("latch has no way to drive the owner's other apps or capture their screen"));
-  assert.match(flat, /say so in one short line instead of working around it/);
-});

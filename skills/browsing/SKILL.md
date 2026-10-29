@@ -11,6 +11,4 @@ this turn, even when the site looks simple. It carries what to do when a site
 asks for a code it texted the owner, and when to hand a session to the owner.
 Follow its exact steps and arguments.
 
-To see a page, use the browser's own `screenshot`. latch has no way to drive
-the owner's other apps or capture their screen, so when a page cannot be done
-in latch's browser, say so in one short line instead of working around it.
+To see a page, use the browser's own `screenshot`.

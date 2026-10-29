@@ -21,6 +21,5 @@ that exact booking; preserve all attendees and event details. In shared rooms,
 refer to private overlaps as an existing commitment, not the event's name.
 
 If no host is reachable, say so and try again next turn. If no host has Google
-connected, say Google access is not available and that the owner can connect it
-on a host with latch. Neither case permits falling back to local OAuth or
-invented tools.
+connected, tell the owner they can connect it on a host with latch. Neither case
+permits falling back to local OAuth or invented tools.

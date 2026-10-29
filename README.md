@@ -182,13 +182,14 @@ The agent reaches the owner's machines only through latch (released at
 `releases.plow.co/latch-cli`), which it runs with OpenClaw's `exec` tool. A
 machine the owner runs as a latch host (their Mac, or the cloud computer Plow
 sets up for them, the host named `cloud`) serves its files, programs, browser,
-Google and, on a Mac, Messages and contacts, each call judged by that host. A host that cannot be reached does not prevent texting.
+Google and, on a Mac, Messages and contacts, each call judged by that host. A
+host that cannot be reached does not prevent texting.
 
-- **Install:** the `Dockerfile` installs one pinned latch release, client only
-  (`install-binary.sh --client-only`), into `/home/node/.local/bin`, checked
-  against its sha256 for each architecture. Those lines are the one place the
-  version lives; a newer latch is a rebuilt image, and latch's own update check
-  is off.
+- **Install:** latch's own published installer
+  (`releases.plow.co/latch-cli/install.sh --client-only`) puts the newest
+  release in `/home/node/.local/bin`, at image build and again at every boot,
+  before the gateway starts. A boot whose install fails keeps the latch it has.
+  latch's own update check is off.
 - **Login:** none is baked in. The agent's first latch command that needs a
   host registers it with its own Plow credential, through `PLOW_API_BASE` and
   `PLOW_AGENT_TOKEN` as boot exports them. Its key and login live in
@@ -196,9 +197,10 @@ Google and, on a Mac, Messages and contacts, each call judged by that host. A ho
   container keeps the same latch identity. Boot also gives the gateway latch's
   `PATH`, state folder and update setting, since a VM upgraded in place keeps
   the environment it was created with.
-- **Skill:** `latch skill` from the installed binary is the image's `latch`
-  skill, so its instructions always match the version. The prompt and the
-  bundled skills send every task on the owner's machines through it.
+- **Skill:** after each install, `latch skill` from that binary is written as
+  the image's `latch` skill, so its instructions always match the version. The
+  prompt and the bundled skills send every task on the owner's machines through
+  it.
 
 Plow's `/v1/agents/me` also returns an `mcp_url` for the old Latch Mac app's
 relay. Boot does not use it: no MCP server is configured for it and nothing

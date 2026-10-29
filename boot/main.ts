@@ -4,6 +4,7 @@ import { readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { startAgentIndex } from "./agent-index.js";
 import { renderConfig, syncConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
+import { installLatch } from "./latch.js";
 import { installBootLog } from "./log.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
@@ -42,6 +43,12 @@ try {
     process.exit(0);
   }
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
+  // Before the gateway loads its skills, so a newer latch's skill is the one it reads.
+  try {
+    console.log(`plow-boot: latch ${await installLatch()}`);
+  } catch (error) {
+    console.warn(`plow-boot: latch not updated; keeping the installed one: ${error instanceof Error ? error.message : String(error)}`);
+  }
   startAgentIndex(300_000, writeLog);
   await startGateway(false, writeLog, {
     frontPort: 3000,
