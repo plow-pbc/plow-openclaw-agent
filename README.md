@@ -193,7 +193,9 @@ Google and, on a Mac, Messages and contacts, each call judged by that host. A ho
   host registers it with its own Plow credential, through `PLOW_API_BASE` and
   `PLOW_AGENT_TOKEN` as boot exports them. Its key and login live in
   `/var/lib/plow/latch` (`LATCH_STATE_DIR`), on the state volume, so a rebuilt
-  container keeps the same latch identity.
+  container keeps the same latch identity. Boot also gives the gateway latch's
+  `PATH`, state folder and update setting, since a VM upgraded in place keeps
+  the environment it was created with.
 - **Skill:** `latch skill` from the installed binary is the image's `latch`
   skill, so its instructions always match the version. The prompt and the
   bundled skills send every task on the owner's machines through it.

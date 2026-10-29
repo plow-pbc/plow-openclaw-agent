@@ -216,3 +216,17 @@ test("with a relay URL from /me, boot adds no MCP server, no relay instructions 
   assert.deepEqual(children, gateways(), "the gateway is the only child");
   assert.equal(children.length, 1);
 });
+
+// An agent upgraded in place keeps its VM's original environment, which has none of latch's settings.
+for (const path of ["/usr/local/bin:/usr/bin", "/home/node/.local/bin:/usr/bin"]) test(`the gateway gets latch's PATH, state and update settings from boot (PATH ${path})`, async t => {
+  const env = { PATH: process.env.PATH, LATCH_STATE_DIR: process.env.LATCH_STATE_DIR, LATCH_NO_UPDATE_CHECK: process.env.LATCH_NO_UPDATE_CHECK };
+  process.env.PATH = path;
+  delete process.env.LATCH_STATE_DIR;
+  delete process.env.LATCH_NO_UPDATE_CHECK;
+  t.after(() => { for (const [key, value] of Object.entries(env)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  const { options } = fakeSupervisor(t);
+  await startGateway(true);
+  assert.equal(options[0].env!.PATH, path.startsWith("/home/node/.local/bin") ? path : `/home/node/.local/bin:${path}`);
+  assert.equal(options[0].env!.LATCH_STATE_DIR, "/var/lib/plow/latch");
+  assert.equal(options[0].env!.LATCH_NO_UPDATE_CHECK, "1");
+});

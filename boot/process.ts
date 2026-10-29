@@ -8,6 +8,15 @@ const GATEWAY_RESTART_MAX_MS = 60_000;
 const GATEWAY_HEALTHY_MS = 5 * 60_000;
 // A standby that is not warm by then is stopped, and the running gateway keeps serving.
 const STANDBY_WARM_MS = 180_000;
+// latch's settings, which the image's ENV sets too: a VM upgraded in place keeps the environment
+// it was created with, so the gateway, and the agent's commands under it, get them from here.
+const LATCH_BIN = "/home/node/.local/bin";
+const gatewayEnv = (env: NodeJS.ProcessEnv) => ({
+  ...env,
+  PATH: env.PATH?.split(":").includes(LATCH_BIN) ? env.PATH : [LATCH_BIN, env.PATH].filter(Boolean).join(":"),
+  LATCH_STATE_DIR: "/var/lib/plow/latch",
+  LATCH_NO_UPDATE_CHECK: "1",
+});
 
 export type GatewayOptions = {
   // The public port. With it the gateway listens on one of `ports` behind it, and SIGUSR2 hands over
@@ -90,7 +99,7 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
   };
   const gatewayArgs = (listen: number) => front ? [entry, "gateway", "--port", String(listen)] : [entry, "gateway"];
   const startGatewayProcess = () => current = launch("gateway", gatewayArgs(port), {
-    stdio: ["ignore", "pipe", "pipe"], env: process.env,
+    stdio: ["ignore", "pipe", "pipe"], env: gatewayEnv(process.env),
   });
   async function takeover() {
     if (stopping || takingOver || !current) return;
@@ -106,7 +115,7 @@ export async function startGateway(captureOutput = false, writeLog?: (chunk: Buf
     const next = port === ports[0] ? ports[1] : ports[0];
     const child = standby = launch("standby", gatewayArgs(next), {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
-      env: { ...process.env, OPENCLAW_GATEWAY_STANDBY: "1", OPENCLAW_GATEWAY_WARM_MODULES: options.warmModules },
+      env: { ...gatewayEnv(process.env), OPENCLAW_GATEWAY_STANDBY: "1", OPENCLAW_GATEWAY_WARM_MODULES: options.warmModules },
     });
     console.error(`plow-boot: standby gateway starting on :${next}`);
     const notWarm = setTimeout(() => {

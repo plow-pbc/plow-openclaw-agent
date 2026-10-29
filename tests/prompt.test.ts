@@ -42,28 +42,6 @@ test("the prompt sends thanks, praise and ideas as report_bug feedback", () => {
   assert.ok(flat.includes("Thanks, praise or an idea the person asks you to pass to your developers is feedback, not a problem: call report_bug with kind feedback"));
 });
 
-test("the prompt reaches the owner's machines through latch and its skill, naming the host", () => {
-  const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("Before any task on the owner's machines, read the latch skill and follow it in this turn."));
-  assert.ok(flat.includes("Run `latch status` to see their hosts: the cloud computer is the host named `cloud`."));
-  assert.ok(flat.includes("With more than one host, pass `--host` with the host's name on every command, and ask the owner which one when the task does not say; never guess."));
-  assert.ok(flat.includes("latch has no way to script the owner's apps or capture their screen: when a task needs that, say it is not available."));
-});
-
-test("the prompt tells the owner how to set latch up, and waits out an offline host", () => {
-  const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("When latch answers `no_host`, the owner has no machine set up for you yet"));
-  assert.ok(flat.includes("`curl -fsSLO https://releases.plow.co/latch-cli/install.sh && sh install.sh`"));
-  assert.ok(flat.includes("ask the owner to start latch on that machine only after it fails on two turns a few minutes apart"));
-});
-
-test("the prompt attaches files from the agent's machine, never a path on a host", () => {
-  const flat = prompt.replace(/\s+/g, " ");
-  // #116: the agent wrote a PDF on the Mac, then tried to text that Mac path (path-not-allowed).
-  assert.ok(flat.includes("A text can attach only a file on your own machine, never a path on a host."));
-  assert.ok(flat.includes("To text a file from a host, copy it to your workspace first with `latch file get`, then attach that copy."));
-});
-
 test("the prompt directs existing-chat sends to the native tool", () => {
   assert.ok(!prompt.includes("plow_send_message"));
   assert.ok(!prompt.includes("Do not use message"));
@@ -109,6 +87,16 @@ for (const [name, expected] of [
   ["the prompt has the agent answer a group message meant for it", "A message is for you when it uses your name, asks for something you can do, or answers what you just said; answer it, with message(action=\"send\") when your turn says your final text stays private."],
   ["the prompt files report_bug at once when asked, without asking what went wrong", "When the person asks you to report a bug, call report_bug in that turn about what just happened in this conversation, even if they did not say what went wrong; do not ask what they meant first."],
   ["the prompt looks a named person up in the owner's Mac contacts before asking", "look that person up in the owner's contacts on their Mac first (the owners-mac skill) and use what you find. Ask the owner only when no Mac host is reachable or nobody matches"],
+  ["the prompt sends host work through the latch skill first", "Before any task on the owner's machines, read the latch skill and follow it in this turn."],
+  ["the prompt finds hosts with latch status and names the cloud computer", "Run `latch status` to see their hosts: the cloud computer is the host named `cloud`."],
+  ["the prompt names the host when there is more than one, never guessing", "With more than one host, pass `--host` with the host's name on every command, and ask the owner which one when the task does not say; never guess."],
+  ["the prompt says what latch cannot do rather than improvising", "latch has no way to script the owner's apps or capture their screen: when a task needs that, say it is not available."],
+  ["the prompt explains no_host to the owner", "When latch answers `no_host`, the owner has no machine set up for you yet"],
+  ["the prompt gives the owner latch's install command", "`curl -fsSLO https://releases.plow.co/latch-cli/install.sh && sh install.sh`"],
+  ["the prompt waits out an offline host before asking the owner", "ask the owner to start latch on that machine only after it fails on two turns a few minutes apart"],
+  // #116: the agent wrote a PDF on the Mac, then tried to text that Mac path (path-not-allowed).
+  ["the prompt attaches files from the agent's machine, never a path on a host", "A text can attach only a file on your own machine, never a path on a host."],
+  ["the prompt copies a host's file to the workspace before texting it", "To text a file from a host, copy it to your workspace first with `latch file get`, then attach that copy."],
 ] as const) test(name, () => {
   assert.ok(prompt.replace(/\s+/g, " ").includes(expected));
 });
