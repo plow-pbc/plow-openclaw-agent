@@ -186,8 +186,8 @@ OpenClaw itself would show a text-only model no image and keep only a
 resource's path on the Mac.
 A Mac on the newer Latch (the `latch` command line, which the old relay does not
 reach) is reached through the pinned `latch` client in the image instead: the
-prompt has the agent run `latch status` first and use `latch` on the owner's Mac
-when it is listed. Its first call logs in as this agent through `PLOW_API_BASE`;
+prompt and the owners-mac, browsing and google-workspace skills have the agent
+run `latch status` first and use `latch` on the owner's Mac when it is listed. Its first call logs in as this agent through `PLOW_API_BASE`;
 the login lives in `/var/lib/plow/latch` (`LATCH_STATE_DIR`).
 
 ## Upgrading in place

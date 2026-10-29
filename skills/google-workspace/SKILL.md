@@ -5,7 +5,10 @@ description: Use Gmail and Google Calendar through the owner's connected Mac, fo
 # Google Workspace
 
 This image holds no Google OAuth credentials. Do not set up local OAuth.
-This google-workspace skill is already loaded locally; the Mac's skill-reading
+When `latch status` lists their Mac (any host but `cloud`), run Gmail and
+Calendar there with `latch google --host <it> --plow-chat <chat uid> -- <gog
+command>` (`latch help google --examples`). Otherwise, through Latch's own
+tools: this google-workspace skill is already loaded locally; the Mac's skill-reading
 tool reads only Mac-published skills, not this image's local skills. List the
 Mac's skills first, then read its listed Google Workspace skill using the actual
 exposed tool names, which may be server-prefixed. Follow that skill's exact
@@ -21,6 +24,6 @@ Check calendar conflicts. Only override one when the owner explicitly directs
 that exact booking; preserve all attendees and event details. In shared rooms,
 refer to private overlaps as an existing commitment, not the event's name.
 
-If the Mac cannot be reached, ask the owner to open Latch on their Mac. If the
-Mac's skill list has no Google Workspace capability, say Google access is not
-available. Neither case permits falling back to local OAuth or invented tools.
+If neither latch nor Latch's tools reach the Mac, ask the owner to open Latch
+on their Mac. If the Mac's Google plugin is off (`latch status`) or its skill
+list has no Google Workspace capability, say Google access is not available. Neither case permits falling back to local OAuth or invented tools.
