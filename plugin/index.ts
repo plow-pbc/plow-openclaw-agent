@@ -462,6 +462,38 @@ export default defineChannelPluginEntry({
       },
     }));
     api.registerTool(context => ({
+      name: "plow_name_contact", label: "Name a person in Plow",
+      description: "Record the name of a person a Plow chat shows only by phone number or email address, so every chat shows them by that name from then on. Only on the owner's turn: record what the owner calls them, or the one match in the owner's contacts on their Mac. Never guess a name from mail, calendar or memory. This posts nothing; still send your answer.",
+      parameters: {
+        type: "object", required: ["handle", "display_name"], additionalProperties: false,
+        properties: {
+          handle: { type: "string", pattern: "^(\\+[1-9][0-9]{1,14}|[^\\s@]+@[^\\s@]+\\.[^\\s@]+)$", description: "The person's handle as the chat shows it: a phone number in E.164 format or an email address." },
+          display_name: { type: "string", minLength: 1, maxLength: 100, description: "The person's name, as the owner calls them." },
+        },
+      },
+      async execute(_id, args: { handle: string; display_name: string }) {
+        if (!context.config) throw new Error("Plow configuration is unavailable.");
+        const account = plugin.config.resolveAccount(context.config, "chat");
+        const chatUid = conversationUid(context);
+        if (context.messageChannel !== "plow" || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("Naming a person requires an active Plow text.");
+        // Only the owner's word names someone: on a member's turn the model put a name the member gave for the
+        // owner on the member's own number (#126).
+        if (context.senderIsOwner !== true) throw new Error("Only the owner can name someone. Nothing was recorded; ask the owner.");
+        const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
+        if (!accepts(account, chat)) throw new Error("Naming a person requires an active Plow text.");
+        const handle = normalizedHandle(args.handle), name = args.display_name.trim();
+        if (!name) throw new Error("display_name is empty.");
+        // Plow writes the owner's own handle to their account name, which is theirs to set.
+        const owner = chat.participants.find(p => p.type === "member" && p.role === "owner");
+        if (owner?.type === "member" && owner.provider_key && normalizedHandle(owner.provider_key) === handle) throw new Error("That is the owner's own number; the owner's name is set in their Plow account.");
+        const row = await requestDelivery<{ display_name: string | null }>(account, `/contacts/${encodeURIComponent(handle)}`, { display_name: name }, "PUT");
+        const details = { handle, display_name: row.display_name };
+        // After this call the model often left its answer in a private final text, so nothing posted (#122).
+        const text = `${JSON.stringify(details)}\nRecorded; nothing was posted. Still answer: when your final text stays private, send it with message(action="send").`;
+        return { content: [{ type: "text", text }], details };
+      },
+    }));
+    api.registerTool(context => ({
       name: "report_bug", label: "Report a bug to your developers",
       description: "Tell your developers about a limitation or breakage: a capability you lack and cannot work around, an error you could not complete, or something the person says is broken. When the person asks you to report a bug, call this in that turn about what just happened in the conversation; do not ask them what went wrong first. Write the report with NO personal data — no names of the person's contacts, phone numbers, email addresses, postal addresses, or tokens; describe the situation generically. Still answer the person yourself; this report goes only to your developers, not to them. Do not use it for ordinary refusals you can handle, routine denials, or the same issue more than once. Only tell the person it was reported after this returns success, and then do so at once, in one short line with the report_id it returns, before anything else; status duplicate means it was already reported earlier, so say that without quoting an id.",
       parameters: {

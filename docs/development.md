@@ -48,7 +48,6 @@ To move to the next extended-stable release:
 | Session isolation and owner binding | [Routing schema](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/zod-schema.agents.ts) |
 | Tool registration, requester and deny policy | [Tool API](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/plugins/plugin-api.types.ts), [hook context](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/plugins/hook-types.ts), [policy schema](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/zod-schema.agent-runtime.ts) |
 | MCP configuration | [MCP server type](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/config/types.mcp.ts) |
-| Native MCP catalog omits server instructions | [Catalog construction](https://github.com/openclaw/openclaw/blob/5873f8174e0b2866a2b8bc0dbf4c4c8164d8dc82/src/agents/agent-bundle-mcp-runtime.ts) |
 
 ## Defaults we inherit
 

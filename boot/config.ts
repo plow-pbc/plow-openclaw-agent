@@ -10,7 +10,6 @@ export type Identity = {
   line: { uid: string };
   mailbox?: { uid: string; display_name: string } | null;
   chats: { uid: string; status: string; participants: Participant[] }[];
-  mcp_url?: string | null;
 };
 
 export function renderConfig(identity: Identity, apiBase: string, threadTrust = process.env.PLOW_THREAD_TRUST ?? "ask") {
@@ -60,10 +59,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       modelPolicy: {},
       models: { "plow/z-ai/glm-5.2": { params: { extraBody: { reasoning: { enabled: false } } } } },
     } },
-    mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
-      url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
-      headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
-    } } } : {}) },
+    mcp: { sessionIdleTtlMs: 300_000 },
     // The plugin reads a room-event run's private final text (before_agent_finalize) to offer a follow-up (#122).
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true, hooks: { allowConversationAccess: true } } } },
     // A group text that does not tag the agent is room activity it observes (plugin/index.ts receive).
@@ -79,13 +75,15 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills"] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "report_bug", "plow_reply_to", "plow_send_email", ...guestTools], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_name_contact", "report_bug", "plow_reply_to", "plow_send_email", ...guestTools], deny: ["ask_user"] },
   };
 }
 
 const ownedPaths = [
   ["gateway", ["gateway"]],
   ["plow-provider", ["models", "providers", "plow"]],
+  // Rendered by none of today's boots, so the sync removes the Mac relay's server a volume from an
+  // older image still names.
   ["plow-mcp", ["mcp", "servers", "plow"]],
   ["plow-channel", ["channels", "plow"]],
   ["plow-plugin", ["plugins", "entries", "plow"]],
