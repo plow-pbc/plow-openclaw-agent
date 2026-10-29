@@ -6,7 +6,10 @@ description: Look up the owner's messages, mail, calendar, contacts, files, brow
 
 Your session history records what happened through you, not the owner's whole
 life. Their Mac holds their messages, files, accounts and earlier agents' work.
-This owners-mac skill is already loaded locally; the Mac's skill-reading tool
+When `latch status` lists their Mac (any host but `cloud`), reach it through
+`latch` on that host, as your AGENTS.md says: `latch messages`, `latch contacts`,
+`latch google`, `latch exec`, each with `--plow-chat`. Otherwise, through Latch's
+own tools: this owners-mac skill is already loaded locally; the Mac's skill-reading tool
 reads only Mac-published skills, not this image's local skills. Before saying
 there is no record, list the Mac's skills, then read a relevant listed skill
 using the actual exposed tool names, which may be server-prefixed.

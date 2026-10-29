@@ -4,6 +4,10 @@ description: Open a website, read a page, fill a form, download a file, search t
 ---
 # Browsing the web on the owner's Mac
 
+When `latch status` lists their Mac (any host but `cloud`), browse there with
+`latch browser` (`latch help browser --examples`), with `--plow-chat`; the rest
+of this skill is for Latch's own tools.
+
 Browser work goes through Latch's own browser, plow_browser, the way the owner's
 Mac's camoufox-browsing skill describes. That skill is published by the Mac, not
 this image, so it is not loaded here: list the Mac's skills (plow_list_skills)
@@ -14,7 +18,8 @@ including a Safari `do JavaScript` recipe that works through Safari's own
 scripting and needs only the Automation consent. Follow its exact steps and
 arguments.
 
-Do not drive Safari or any other app through plow_run_applescript UI scripting,
+Do not drive Safari or any other app through plow_run_applescript UI scripting
+(or osascript through latch),
 and do not capture the owner's screen, as a way around a page. That is the
 improvising the camoufox-browsing skill tells you to avoid, and it raises
 screen-capture and other macOS permission prompts on the owner's Mac. To see a

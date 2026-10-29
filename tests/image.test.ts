@@ -15,6 +15,12 @@ test("the usage collector runs on the image's native architecture", async () => 
   execFileSync("/usr/local/bin/agentsview", ["--version"]);
 });
 
+test("the latch client is the pinned release, keeping its login in the state volume", () => {
+  // The agent's first latch call logs in as this agent; under /var/lib/plow that peer survives an upgrade.
+  assert.match(execFileSync("latch", ["--version"], { encoding: "utf8" }), /standalone tag v0\.1\.0-\d+/);
+  assert.equal(process.env.LATCH_STATE_DIR, "/var/lib/plow/latch");
+});
+
 test("a texted iPhone photo (HEIC) converts to JPEG, so the model can be shown it", async () => {
   // OpenClaw reads local media only from its own roots; the state dir's workspace is one.
   process.env.OPENCLAW_STATE_DIR = await mkdtemp(`${tmpdir()}/plow-heic-`);

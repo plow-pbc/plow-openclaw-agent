@@ -45,7 +45,11 @@ test("the prompt sends thanks, praise and ideas as report_bug feedback", () => {
 
 test("the prompt puts Latch's tools and the Mac's skills before improvising", () => {
   const flat = prompt.replace(/\s+/g, " ");
-  assert.ok(flat.includes("Before any task on the owner's Mac, use Latch's own tools and the skill that covers the task first (plow_list_skills, then plow_read_skill), and follow that skill's recipe in this turn."));
+  // The owner's Mac on the newer Latch (the latch CLI) is reached through latch first; Latch's own tools when it lists no Mac.
+  assert.ok(flat.includes("Before any task on the owner's Mac, run `latch status` (with the exec tool)."));
+  assert.ok(flat.includes("any host but `cloud`, which is Plow's computer, not theirs"));
+  assert.ok(flat.includes("every call names the chat you are answering in with `--plow-chat <its chat uid>`"));
+  assert.ok(flat.includes("Only when it lists no Mac, use Latch's own tools and the skill that covers the task first (plow_list_skills, then plow_read_skill), and follow that skill's recipe in this turn."));
   // #104: the agent browsed without reading camoufox-browsing, so the rule now names the moment it must happen.
   assert.ok(flat.includes("read that skill before your first plow_browser call, even when the site looks simple"));
   assert.ok(flat.includes("so you never improvise one."));
@@ -58,6 +62,7 @@ test("the prompt attaches files from the agent's machine, never a path on the Ma
   // #116: the agent wrote a PDF on the Mac, then tried to text that Mac path (path-not-allowed).
   assert.ok(flat.includes("A text can attach only a file on your own machine, never a path on the owner's Mac."));
   assert.ok(flat.includes("A screenshot or file a Latch tool returns is saved on your machine for you, and the result gives its path: attach that path to text it."));
+  assert.ok(flat.includes("Through latch, `latch file get` copies a Mac file to your machine first."));
   assert.ok(flat.includes("Make a file you mean to send in your workspace, not on the Mac."));
 });
 

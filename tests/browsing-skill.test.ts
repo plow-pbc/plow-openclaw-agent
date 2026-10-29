@@ -20,6 +20,11 @@ test("the browsing skill says to read camoufox-browsing before the first plow_br
   assert.match(flat, /Safari `do JavaScript` recipe/);
 });
 
+test("the browsing skill browses through latch when it lists the owner's Mac", () => {
+  const flat = skill.replace(/\s+/g, " ");
+  assert.ok(flat.includes("When `latch status` lists their Mac (any host but `cloud`), browse there with `latch browser`"));
+});
+
 test("the browsing skill forbids AppleScript Safari and screen capture as a workaround", () => {
   const flat = skill.replace(/\s+/g, " ");
   assert.ok(flat.includes("Do not drive Safari or any other app through plow_run_applescript UI scripting"));

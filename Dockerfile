@@ -54,6 +54,25 @@ RUN case "$TARGETARCH" in \
  && tar -xzf /tmp/agentsview.tgz -C /usr/local/bin agentsview \
  && rm /tmp/agentsview.tgz \
  && chmod 0755 /usr/local/bin/agentsview
+
+# latch, the client that reaches the owner's Mac when it runs the newer Latch
+# (the `latch` CLI, Latch 149 on): its first call logs in as this agent through
+# PLOW_API_BASE, the proxy every Plow call here already goes through. The client
+# alone (no host, browser engine or sandbox), pinned and checksummed for the
+# same reason as the two above. Its key and login live in the state volume
+# (LATCH_STATE_DIR below), so an upgrade keeps the same peer.
+ARG LATCH_TAG=v0.1.0-149
+RUN case "$TARGETARCH" in \
+      amd64) target=x86_64-unknown-linux-musl checksum=7ba6a41df3d1ba8856c896c40003044ce2d97775d608a42e218075409e378605 ;; \
+      arm64) target=aarch64-unknown-linux-musl checksum=fb2ac25008659e6310ea64eadb61d1c550245b22edfdeff878c81737cd8e752e ;; \
+      *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && curl -fsS --max-time 120 -L -o /tmp/latch.tgz \
+      "https://releases.plow.co/latch-cli/releases/${LATCH_TAG}/latch-${LATCH_TAG}-${target}.tar.gz" \
+ && echo "${checksum}  /tmp/latch.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/latch.tgz -C /tmp "latch-${LATCH_TAG}-${target}/latch" \
+ && install -m 0755 "/tmp/latch-${LATCH_TAG}-${target}/latch" /usr/local/bin/latch \
+ && rm -rf /tmp/latch.tgz "/tmp/latch-${LATCH_TAG}-${target}"
 RUN cd /opt/plow && npm ci --omit=dev --omit=peer --omit=optional --ignore-scripts && node /opt/plow/build.ts && chmod +x /opt/plow/probe
 # What the Agent Index page says the agent runs on. Without it the page falls
 # back to its Hermes placeholder; a variant can override it.
@@ -61,6 +80,7 @@ ENV AGENT_RUNTIME=OpenClaw
 # Surface the image revision to the runtime so report_bug can name the build a
 # report came from. It is otherwise only an image label, unreadable by a tool.
 ENV PLOW_REVISION=$PLOW_REVISION
+ENV LATCH_STATE_DIR=/var/lib/plow/latch
 ENV OPENCLAW_STATE_DIR=/var/lib/plow OPENCLAW_CONFIG_PATH=/var/lib/plow/openclaw.json OPENCLAW_INCLUDE_ROOTS=/etc/plow/openclaw OPENCLAW_NO_RESPAWN=1 NODE_DISABLE_COMPILE_CACHE=1
 # The inherited healthcheck loads config and can race the boot state lock.
 HEALTHCHECK NONE
