@@ -9,7 +9,7 @@ import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/sess
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { classifyChannelInboundEvent, resolveUnmentionedGroupInboundPolicy } from "openclaw/plugin-sdk/channel-inbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, isOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { buildFeedback, buildReport, type BugTrigger } from "./report-bug.ts";
 
@@ -51,7 +51,7 @@ async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat
   if (context.sessionKey !== "agent:main:main" || context.messageChannel !== "plow" || !context.senderIsOwner
     || context.agentAccountId !== "chat" || !chatUid || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
   const chat = await request<Chat>(account, `/chats/${encodeURIComponent(chatUid)}`);
-  if (findOwnerChat(account, [chat]) !== chat) throw new Error("This action requires the owner's main Plow DM.");
+  if (!isOwnerChat(account, chat)) throw new Error("This action requires the owner's main Plow DM.");
   return { chat };
 }
 
@@ -106,7 +106,7 @@ function sessionRoute(cfg: OpenClawConfig, account: Account, chat: Chat) {
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
   const peer = chat.participants.find(p => p.type === "member" || p.relationship !== "self");
   const peerId = account.accountId === "email" || kind === "group" ? chat.uid
-    : findOwnerChat(account, [chat]) === chat ? "plow-owner"
+    : isOwnerChat(account, chat) ? "plow-owner"
     : peer?.type === "member" ? chat.uid : peer?.line.uid;
   if (!peerId) throw new Error("Plow conversation has no peer");
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer: { kind, id: peerId } });
@@ -275,9 +275,9 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
               if (error instanceof HttpError && [403, 404].includes(error.status)) return undefined;
               throw error;
             }) : undefined;
-            return recorded && accepts(phone, recorded) && (recorded.trusted || findOwnerChat(phone, [recorded]) === recorded) ? recorded
+            return recorded && accepts(phone, recorded) && (recorded.trusted || isOwnerChat(phone, recorded)) ? recorded
               // Read fresh: a cached roster can be stale, and a failed read is not proof there is no 1:1.
-              : findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
+              : await findOwnerChat(phone, (await request<Page<Chat>>(phone, "/chats")).data);
           };
           // Nothing has been sent yet, so a failed lookup is safe to retry; the email listener has no replay.
           let target: Chat | undefined;
