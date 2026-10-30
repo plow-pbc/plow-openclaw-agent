@@ -124,10 +124,12 @@ failures, interrupted response bodies, 429 and 5xx for as long as they last,
 backing off from 3 seconds to a minute and logging each cause. A 401/403 past
 the 120 seconds, a 404 or other 4xx, or an invalid identity leaves the
 container running with a diagnostic error. The plugin subscribes before listing
-chats, discovers the active owner DM from its roster, and buffers messages during
-baseline recovery. Multiple owner DMs among the received listing and live chats
-stop the chat account until the container restarts. A cached owner may be used
-from a truncated listing; uniqueness is checked only among discovered chats.
+chats, treats every active owner DM in its roster as the owner's (one per handle
+the owner texts from, all in the one owner session), and buffers messages during
+baseline recovery. A turn replies in the thread its message came from; any other
+send to the owner goes to the owner DM holding the owner's newest message, paging
+past the agent's own sends to find it. A cached owner may be used from a
+truncated listing; only discovered chats are compared.
 Without a cached owner, the fallback lookup refuses truncated listings.
 The API currently returns complete listings.
 Socket drops reconnect with backoff, without waiting for running turns; the plugin never re-reads identity.
