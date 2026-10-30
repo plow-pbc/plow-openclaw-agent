@@ -471,6 +471,16 @@ test("every active self-line DM with an owner is the owner's, and of several the
   assert.equal(await findOwnerChat(fixture, [home, linked]), linked);
   ownerWrote.home = "2026-10-30T12:30:00Z";
   assert.equal(await findOwnerChat(fixture, [home, linked]), home);
+  // The owner's newest message in the phone thread is behind a full page of the agent's own sends.
+  ownerWrote.home = "2026-10-30T12:30:00Z";
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const uid = url.match(/\/chats\/([^/]+)\/messages/)![1];
+    if (uid === "home" && !url.includes("starting_after")) return Response.json({ data: Array.from({ length: 50 }, (_, i) => (
+      { uid: `reply-${i}`, direction: "outbound", sender: { type: "agent", relationship: "self" }, created_at: "2026-10-30T13:00:00Z" })), has_more: true });
+    assert.ok(uid !== "home" || url.endsWith("starting_after=reply-49"));
+    return Response.json({ data: [{ uid: `${uid}-owner`, direction: "inbound", sender: { type: "member" }, created_at: ownerWrote[uid] }], has_more: false });
+  });
+  assert.equal(await findOwnerChat(fixture, [home, linked]), home);
   t.mock.method(globalThis, "fetch", async () => Response.json({ data: [home], has_more: true }));
   await assert.rejects(ownerChat(fixture), /truncated/);
 });

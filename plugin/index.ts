@@ -9,7 +9,7 @@ import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/sess
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { classifyChannelInboundEvent, resolveUnmentionedGroupInboundPolicy } from "openclaw/plugin-sdk/channel-inbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, isOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, isOwnerChat, latestOwnerThread, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { buildFeedback, buildReport, type BugTrigger } from "./report-bug.ts";
 
@@ -55,13 +55,22 @@ async function ownerDmTurn(account: Account, context: Requester): Promise<{ chat
   return { chat };
 }
 
+// Chats with a turn running, whose sends answer the message in that chat.
+const turnsRunning = new Map<string, number>();
+
 async function send(account: Account, to: string, text: string, mediaUrls: string[] = []) {
   to = to.replace(/^plow:/i, "");
   if (account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
   // Heartbeats are routed to their own alias (boot/config.ts) so their sends can be marked.
   const heartbeat = to === "plow-heartbeat";
   if (to === "plow-owner" || heartbeat) to = (await ownerChat(account)).uid;
-  const chat = await request<Chat>(account, `/chats/${to}`);
+  let chat = await request<Chat>(account, `/chats/${to}`);
+  // The owner's threads (one per handle they text from) are one conversation: a send that answers no
+  // message there, such as a reminder bound to the thread it was set in, goes where they last wrote.
+  if (!turnsRunning.has(chat.uid) && isOwnerChat(account, chat)) {
+    chat = await latestOwnerThread(account, chat);
+    to = chat.uid;
+  }
   if (chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
     throw new Error("Email is sent with plow_send_email, not message.");
   }
@@ -348,7 +357,14 @@ const plugin: ChannelPlugin<Account> = {
     startAccount: async ctx => {
       const log = (text: string) => ctx.log?.info(text);
       await listen(ctx.account, ctx.abortSignal, log,
-        (chat, message, firstContact, history, ingress) => receive(ctx.account, ctx.cfg, chat, message, firstContact, history, ingress, log), ctx.cfg);
+        async (chat, message, firstContact, history, ingress) => {
+          turnsRunning.set(chat.uid, (turnsRunning.get(chat.uid) ?? 0) + 1);
+          try { return await receive(ctx.account, ctx.cfg, chat, message, firstContact, history, ingress, log); }
+          finally {
+            const left = turnsRunning.get(chat.uid)! - 1;
+            if (left) turnsRunning.set(chat.uid, left); else turnsRunning.delete(chat.uid);
+          }
+        }, ctx.cfg);
     },
   },
   outbound: {

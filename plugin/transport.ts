@@ -85,11 +85,23 @@ export async function findOwnerChat(account: Account, chats: Chat[]): Promise<Ch
   const owners = chats.filter(chat => isOwnerChat(account, chat));
   if (owners.length < 2) return owners[0];
   const lastWritten = await Promise.all(owners.map(async chat => {
-    const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20`);
-    const written = page.data.find(message => message.direction === "inbound" && message.sender.type === "member");
-    return written ? Date.parse(written.created_at) : Number.NEGATIVE_INFINITY;
+    // Pages back past the agent's own sends until the owner's newest message, or the start of the chat.
+    for (let cursor = ""; ;) {
+      const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=50${cursor}`);
+      const written = page.data.find(message => message.direction === "inbound" && message.sender.type === "member");
+      if (written) return Date.parse(written.created_at);
+      if (!page.has_more || !page.data.length) return Number.NEGATIVE_INFINITY;
+      cursor = `&starting_after=${page.data.at(-1)!.uid}`;
+    }
   }));
   return owners[lastWritten.indexOf(Math.max(...lastWritten))];
+}
+
+// Of `chat` and the other owner's threads this listener knows, the one the owner last wrote in.
+export async function latestOwnerThread(account: Account, chat: Chat): Promise<Chat> {
+  const others = [...(discoveredChats.get(`${account.apiBase}/${account.lineUid}`)?.values() ?? [])].filter(other => other.uid !== chat.uid);
+  if (!others.some(other => isOwnerChat(account, other))) return chat;
+  return (await findOwnerChat(account, [chat, ...others])) ?? chat;
 }
 
 export async function ownerChat(account: Account): Promise<Chat> {
