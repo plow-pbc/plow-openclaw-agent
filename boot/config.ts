@@ -62,7 +62,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     mcp: { sessionIdleTtlMs: 300_000 },
     plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
     // A group text that does not tag the agent is room activity it observes (plugin/index.ts receive).
-    messages: { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 1500 } } },
+    messages: { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
