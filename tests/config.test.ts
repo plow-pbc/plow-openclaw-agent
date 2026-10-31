@@ -136,7 +136,7 @@ test("the base image uses boot-owned config with the OpenClaw browser UI", () =>
   const config = renderConfig(identity, "http://api:8000");
   assert.equal(config.gateway.controlUi.enabled, true);
   assert.equal(config.agents.defaults.skipBootstrap, true);
-  assert.deepEqual(config.messages, { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } });
+  assert.deepEqual(config.messages, { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 1500 } } });
   // plow-agents#83: a silent group turn is an answer, not a failure retried into an error notice.
   assert.deepEqual(config.agents.defaults.silentReply, { group: "allow" });
   assert.deepEqual(config.meta, {});
@@ -205,7 +205,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.silentReply.group.$include, "utf8")), "allow");
   assert.equal(owner.messages.inbound.debounceMs, 800);
   assert.equal(owner.messages.inbound.byChannel.signal, 500);
-  assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
+  assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 1500);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
   assert.deepEqual(JSON5.parse(await readFile(owner.agents.defaults.heartbeat.$include, "utf8")), { every: "0m", target: "plow", to: "plow-heartbeat", accountId: "chat" });
