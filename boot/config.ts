@@ -60,7 +60,8 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
       models: { "plow/z-ai/glm-5.2": { params: { extraBody: { reasoning: { enabled: false } } } } },
     } },
     mcp: { sessionIdleTtlMs: 300_000 },
-    plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true } } },
+    // The plugin reads a room-event run's private final text (before_agent_finalize) to offer a follow-up (#122).
+    plugins: { load: { paths: ["/opt/plow/plugin"] }, entries: { plow: { enabled: true, hooks: { allowConversationAccess: true } } } },
     // A group text that does not tag the agent is room activity it observes (plugin/index.ts receive).
     messages: { visibleReplies: "automatic", groupChat: { unmentionedInbound: "room_event" }, queue: { mode: "collect" }, inbound: { byChannel: { plow: 1500 } } },
     channels: { plow: {
