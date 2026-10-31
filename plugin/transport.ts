@@ -60,8 +60,6 @@ export function accepts(account: Account, chat: Chat): boolean {
 
 const validChatId = (uid: unknown): uid is string => typeof uid === "string" && uid !== "" && uid !== "." && uid !== "..";
 
-class AmbiguousOwnerChatError extends Error {}
-
 const discoveredChats = new Map<string, Map<string, Chat>>();
 type HistoryState = { contextualized: Set<string>; versions: Map<string, number> };
 const historyStates = new Map<string, HistoryState>();
@@ -73,20 +71,45 @@ export function invalidateContextualizedHistory(account: Account, chatUid: strin
   if (state) state.versions.set(chatUid, (state.versions.get(chatUid) ?? 0) + 1);
 }
 
-export function findOwnerChat(account: Account, chats: Chat[]): Chat | undefined {
-  const owners = chats.filter(chat => chat.status === "active" && chat.participants.length === 2 &&
+// An active self-line DM with the owner. An owner texting from several of their
+// handles (a phone and a linked Apple ID email) has one of these per handle.
+export function isOwnerChat(account: Account, chat: Chat): boolean {
+  return chat.status === "active" && chat.participants.length === 2 &&
     chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.lineUid) &&
-    chat.participants.some(p => p.type === "member" && p.role === "owner"));
-  if (owners.length > 1) throw new AmbiguousOwnerChatError(`Expected one owner's chat; found ${owners.length}`);
-  return owners[0];
+    chat.participants.some(p => p.type === "member" && p.role === "owner");
+}
+
+// The owner's chat that something not answering a message goes to: of several,
+// the one the owner last wrote in, so it reaches the handle they are using now.
+export async function findOwnerChat(account: Account, chats: Chat[]): Promise<Chat | undefined> {
+  const owners = chats.filter(chat => isOwnerChat(account, chat));
+  if (owners.length < 2) return owners[0];
+  const lastWritten = await Promise.all(owners.map(async chat => {
+    // Pages back past the agent's own sends until the owner's newest message, or the start of the chat.
+    for (let cursor = ""; ;) {
+      const page = await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=50${cursor}`);
+      const written = page.data.find(message => message.direction === "inbound" && message.sender.type === "member");
+      if (written) return Date.parse(written.created_at);
+      if (!page.has_more || !page.data.length) return Number.NEGATIVE_INFINITY;
+      cursor = `&starting_after=${page.data.at(-1)!.uid}`;
+    }
+  }));
+  return owners[lastWritten.indexOf(Math.max(...lastWritten))];
+}
+
+// Of `chat` and the other owner's threads this listener knows, the one the owner last wrote in.
+export async function latestOwnerThread(account: Account, chat: Chat): Promise<Chat> {
+  const others = [...(discoveredChats.get(`${account.apiBase}/${account.lineUid}`)?.values() ?? [])].filter(other => other.uid !== chat.uid);
+  if (!others.some(other => isOwnerChat(account, other))) return chat;
+  return (await findOwnerChat(account, [chat, ...others])) ?? chat;
 }
 
 export async function ownerChat(account: Account): Promise<Chat> {
-  const cached = findOwnerChat(account, [...(discoveredChats.get(`${account.apiBase}/${account.lineUid}`)?.values() ?? [])]);
+  const cached = await findOwnerChat(account, [...(discoveredChats.get(`${account.apiBase}/${account.lineUid}`)?.values() ?? [])]);
   if (cached) return cached;
   const listing = await request<Page<Chat>>(account, "/chats");
   if (listing.has_more) throw new Error("Cannot resolve owner from a truncated chat listing");
-  const chat = findOwnerChat(account, listing.data);
+  const chat = await findOwnerChat(account, listing.data);
   if (!chat) throw new Error("No owner's chat discovered");
   return chat;
 }
@@ -212,7 +235,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       return;
     }
     discovered.set(chat.uid, chat);
-    const owner = findOwnerChat(account, [...discovered.values()]);
+    const ownerDm = isOwnerChat(account, chat);
     // A burst keeps every text's invocation: a tag or a reply to this agent in an earlier text still addresses it.
     const quotes = items.flatMap(item => item.message.reply_to ? [item.message.reply_to] : []);
     const message = { ...last.message, body: items.map(item => item.message.body).join("\n"), mentions: items.flatMap(item => item.message.mentions ?? []),
@@ -230,10 +253,12 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     let outcome: TurnOutcome = "incomplete";
     try {
       const checkpoint = checkpoints.get(chat.uid);
-      const firstContact = account.accountId === "chat" && chat.uid === owner?.uid && (checkpoint === "" || checkpoint === `first:${first.message.uid}`);
+      // The agent introduces itself once: not again when the owner first writes from another of their handles.
+      const firstContact = account.accountId === "chat" && ownerDm && ![...discovered.values()].some(other => other.uid !== chat.uid && isOwnerChat(account, other)) &&
+        (checkpoint === "" || checkpoint === `first:${first.message.uid}`);
       let history: Message[] = [];
       const historyVersion = state.versions.get(chat.uid) ?? 0;
-      let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && chat.uid === owner?.uid);
+      let historyLoaded = contextualized.has(chat.uid) && !(account.accountId === "chat" && ownerDm);
       if (!historyLoaded) {
         try { history = (await request<Page<Message>>(account, `/chats/${chat.uid}/messages?limit=20&starting_after=${first.message.uid}`)).data.reverse(); historyLoaded = true; }
         catch (error) { log(`history failed chat=${chat.uid}: ${(error as Error).name}; dispatching without history`); }
@@ -380,7 +405,6 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
       const chats = listing.data.filter(chat => validChatId(chat.uid) && accepts(account, chat));
       discovered.clear();
       for (const chat of chats) discovered.set(chat.uid, chat);
-      const owner = findOwnerChat(account, chats);
       if (account.accountId === "chat") {
         for (const chat of chats) {
           if (checkpoints.has(chat.uid)) continue;
@@ -393,7 +417,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
             const fromMember = (message: Message) => message.direction === "inbound" && message.sender.type === "member";
             const missed = (message: Message) => message.direction === "inbound" && Date.parse(message.created_at) >= since &&
               (message.sender.type === "member" || message.sender.relationship === "peer");
-            const unanswered = chat.uid === owner?.uid ? fromMember : missed;
+            const unanswered = isOwnerChat(account, chat) ? fromMember : missed;
             checkpoint = newest && unanswered(newest)
               ? `first:${await earliestUnanswered(account, chat.uid, newest, unanswered, log)}` : newest?.uid ?? "";
             const buffered = bufferedChats.get(chat.uid);
@@ -460,7 +484,7 @@ export async function listen(account: Account, signal: AbortSignal, log: (text: 
     } catch (error) {
       accepting = account.accountId === "email";
       if (signal.aborted) break;
-      if (error instanceof AmbiguousOwnerChatError || (error instanceof HttpError && error.status === 401)) {
+      if (error instanceof HttpError && error.status === 401) {
         log(error.message + "; stopped until restart");
         clearInterval(heartbeat);
         abort();

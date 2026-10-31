@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 import fs, { mkdir, readFile, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { listen, DeliveryUnknownError, recover, findOwnerChat, ownerChat, invalidateContextualizedHistory, postMessage, isSilent, type Account, type Chat, type Message } from "../plugin/transport.ts";
+import { listen, DeliveryUnknownError, recover, findOwnerChat, isOwnerChat, ownerChat, invalidateContextualizedHistory, postMessage, isSilent, type Account, type Chat, type Message } from "../plugin/transport.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat" } as Account;
 const message = (uid: string) => ({ uid }) as Message;
@@ -439,7 +439,7 @@ test("invalidation during a contextualized turn reloads history on the next turn
   assert.equal(historyReads, 2);
 });
 
-test("owner discovery requires the unique active self-line DM with an owner", async t => {
+test("every active self-line DM with an owner is the owner's, and of several the one they last wrote in is picked", async t => {
   const fixture = { ...account, lineUid: "line" };
   const home: Chat = { uid: "home", status: "active", trusted: true, participants: [
     { type: "agent", relationship: "self", line: { uid: "line" } },
@@ -452,35 +452,67 @@ test("owner discovery requires the unique active self-line DM with an owner", as
     { ...home, uid: "peer", participants: [{ type: "agent", relationship: "peer", line: { uid: "line" } }, home.participants[1]] },
     { ...home, uid: "member", participants: [home.participants[0], { type: "member", uid: "member", role: "member", display_name: "Member" }] },
   ];
-  assert.equal(findOwnerChat(fixture, others), undefined);
-  assert.equal(findOwnerChat(fixture, [...others, home]), home);
-  assert.throws(() => findOwnerChat(fixture, [home, { ...home, uid: "second" }]), /found 2/);
+  assert.equal(others.some(chat => isOwnerChat(fixture, chat)), false);
+  assert.equal(await findOwnerChat(fixture, others), undefined);
+  assert.equal(await findOwnerChat(fixture, [...others, home]), home);
+  // The owner's linked Apple ID email is its own thread, so its own owner's DM.
+  const linked: Chat = { ...home, uid: "linked" };
+  assert.ok(isOwnerChat(fixture, linked));
+  const ownerWrote: Record<string, string> = { home: "2026-10-30T10:00:00Z", linked: "2026-10-30T11:00:00Z" };
   process.env.PLOW_AGENT_TOKEN = "test-token";
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const uid = url.match(/\/chats\/([^/]+)\/messages/)![1];
+    // The agent's own later send in the phone thread is not the owner writing there.
+    return Response.json({ data: [
+      { uid: `${uid}-reply`, direction: "outbound", sender: { type: "agent", relationship: "self" }, created_at: "2026-10-30T12:00:00Z" },
+      { uid: `${uid}-owner`, direction: "inbound", sender: { type: "member" }, created_at: ownerWrote[uid] },
+    ], has_more: false });
+  });
+  assert.equal(await findOwnerChat(fixture, [home, linked]), linked);
+  ownerWrote.home = "2026-10-30T12:30:00Z";
+  assert.equal(await findOwnerChat(fixture, [home, linked]), home);
+  // The owner's newest message in the phone thread is behind a full page of the agent's own sends.
+  ownerWrote.home = "2026-10-30T12:30:00Z";
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    const uid = url.match(/\/chats\/([^/]+)\/messages/)![1];
+    if (uid === "home" && !url.includes("starting_after")) return Response.json({ data: Array.from({ length: 50 }, (_, i) => (
+      { uid: `reply-${i}`, direction: "outbound", sender: { type: "agent", relationship: "self" }, created_at: "2026-10-30T13:00:00Z" })), has_more: true });
+    assert.ok(uid !== "home" || url.endsWith("starting_after=reply-49"));
+    return Response.json({ data: [{ uid: `${uid}-owner`, direction: "inbound", sender: { type: "member" }, created_at: ownerWrote[uid] }], has_more: false });
+  });
+  assert.equal(await findOwnerChat(fixture, [home, linked]), home);
   t.mock.method(globalThis, "fetch", async () => Response.json({ data: [home], has_more: true }));
   await assert.rejects(ownerChat(fixture), /truncated/);
 });
 
-test("ambiguous owner chats stop until restart instead of repeatedly discovering them", async t => {
-  const { apiBase } = await websocketFixture(t);
-  const controller = new AbortController();
+test("an owner writing from a second handle keeps the transport running, with no second introduction", async t => {
+  const { server, apiBase, abortAfter } = await websocketFixture(t);
+  const controller = abortAfter();
   const logs: string[] = [];
   const participants = [
     { type: "agent", relationship: "self", line: { uid: "line" } },
     { type: "member", uid: "owner", role: "owner" },
   ];
-  let tickets = 0;
+  const [phone, linked] = ["phone", "linked"].map(uid => ({ uid, status: "active", trusted: true, participants }));
   t.mock.method(globalThis, "fetch", async (url: string) => {
-    if (url.endsWith("/ws/ticket")) { tickets++; return Response.json({ ticket: "ticket" }); }
-    return Response.json({ data: ["first", "second"].map(uid => ({ uid, status: "active", participants })), has_more: false });
+    if (url.endsWith("/chats")) {
+      for (const socket of server.clients) socket.send(JSON.stringify({
+        event_type: "message_received", event_id: "linked-event", chat_id: linked.uid,
+        data: { message: { uid: "from-mac", direction: "inbound", sender: { type: "member", uid: "owner", role: "owner" }, created_at: new Date().toISOString() } },
+      }));
+      return Response.json({ data: [phone, linked], has_more: false });
+    }
+    if (url.endsWith(`/chats/${linked.uid}`)) return Response.json(linked);
+    return Response.json(url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
   });
-  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => {
-    logs.push(text);
-    if (text.includes("stopped")) queueMicrotask(() => controller.abort());
-  }, async () => {
-    assert.fail("Ambiguous owner chats must not dispatch");
+  const turns: { chat: string; message: string; firstContact: boolean }[] = [];
+  await listen({ ...account, apiBase, lineUid: "line" }, controller.signal, text => logs.push(text), async (chat, message, firstContact) => {
+    turns.push({ chat: chat.uid, message: message.uid, firstContact });
+    controller.abort();
+    return "completed";
   });
-  assert.ok(logs.includes("Expected one owner's chat; found 2; stopped until restart"));
-  assert.equal(tickets, 1);
+  assert.deepEqual(turns, [{ chat: "linked", message: "from-mac", firstContact: false }]);
+  assert.equal(logs.some(text => text.includes("stopped")), false);
 });
 
 test("a stalled WebSocket upgrade times out and reconnects after backoff", { timeout: 55_000 }, async t => {
