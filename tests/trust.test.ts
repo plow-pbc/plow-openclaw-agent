@@ -10,7 +10,7 @@ type Tool = { name: string; execute: (id: string, args: object) => Promise<unkno
 type Scene = "owner DM" | "owner group" | "member group" | "owner email" | "member DM" | "member email";
 
 async function runInboundTool(t: TestContext, scene: Scene, toolName: string, args: object, options: {
-  threadTrust?: "ask" | "trusted" | "untrusted"; memberName?: string;
+  threadTrust?: "ask" | "trusted" | "untrusted"; memberName?: string; groupUids?: string[];
 } = {}) {
   const { server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
@@ -26,6 +26,8 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     uid: scene.includes("group") ? "cht_group" : "cht_source", display_name: "Lunch crew", status: "active", trusted: false,
     participants: scene.includes("group") || scene === "owner email" ? [self, owner, member] : [self, member],
   };
+  // More groups the line serves; Plow knows each uid only in its exact case (plow-openclaw-agent#140).
+  const groups = (options.groupUids ?? []).map(uid => ({ uid, display_name: "Lunch crew", status: "active", trusted: false, participants: [self, owner, member] }));
   const sender = scene.startsWith("member") ? member : owner;
   const posts: { url: string; body: unknown }[] = [];
   const updates: { url: string; body: unknown }[] = [];
@@ -42,8 +44,11 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
     const target = { ...chat, uid: "cht_target", participants: [self, owner, member] };
     const emailTarget = { ...chat, uid: "cht_email_target", participants: [{ ...self, line: { uid: "email-line" } }, member] };
     const directTarget = { ...chat, uid: "cht_direct_target", participants: [{ ...self, line: { uid: "line" } }, member] };
+    const group = groups.find(group => url.endsWith(`/chats/${group.uid}`));
+    if (group) return Response.json(group);
+    if (groups.some(group => url.endsWith(`/chats/${group.uid.toLowerCase()}`))) return Response.json({ error: "not_found" }, { status: 404 });
     return Response.json(url.endsWith("/chats/cht_email_target") ? emailTarget : url.endsWith("/chats/cht_direct_target") ? directTarget : url.endsWith("/chats/cht_target") ? target :
-      url.endsWith("/chats") ? { data: chat === home ? [home] : [home, chat], has_more: false } :
+      url.endsWith("/chats") ? { data: [...(chat === home ? [home] : [home, chat]), ...groups], has_more: false } :
       url.endsWith(`/chats/${chat.uid}`) ? chat : url.endsWith("/chats/cht_home") ? home :
       url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket" });
   });
@@ -58,7 +63,8 @@ async function runInboundTool(t: TestContext, scene: Scene, toolName: string, ar
   let failure: unknown;
   const runtime = { channel: {
     routing: { resolveAgentRoute: (input?: { peer?: { id: string } }) => ({
-      agentId: "main", sessionKey: input?.peer?.id === "cht_email_target" ? "agent:main:plow:direct:cht_email_target"
+      agentId: "main", sessionKey: groups.some(group => group.uid === input?.peer?.id) ? `agent:main:plow:group:${input!.peer!.id.toLowerCase()}`
+        : input?.peer?.id === "cht_email_target" ? "agent:main:plow:direct:cht_email_target"
         : scene === "owner DM" && input?.peer?.id === "cht_direct_target" ? "agent:main:plow:direct:cht_direct_target" : sessionKey,
     }) },
     session: { resolveStorePath, updateLastRoute },
@@ -158,6 +164,22 @@ test("follow-up to another phone chat", async t => {
   assert.deepEqual((result as { details: unknown }).details, { message_uid: "sent" });
   assert.deepEqual(posts, [{ url: `${apiBase}/v1/chats/${chatUid}/messages`, body: { body: text, attachment_uids: [] } }]);
   assert.deepEqual((await transcript(sessionKey)).map(entry => [entry.role, entry.message.content[0].text]), [["assistant", text]]);
+});
+
+// plow-openclaw-agent#140: OpenClaw lowercases session keys, and a model can copy a chat uid out of one.
+for (const [toolName, args, groupUids, expected] of [
+  ["plow_reply_to", { chat_uid: "cht_lunch_crew", text: "Lunch is at noon." }, ["cht_Lunch_Crew"], "cht_Lunch_Crew/messages"],
+  ["plow_set_thread_trust", { chat_uid: "cht_lunch_crew", trusted: true }, ["cht_Lunch_Crew"], "cht_Lunch_Crew/trusted"],
+  ["plow_reply_to", { chat_uid: "cht_lunch_crew", text: "Lunch is at noon." }, ["cht_Lunch_Crew", "cht_LUNCH_crew"], /Plow HTTP 404/],
+] as const) test(`${toolName} to a lowercased uid matching ${groupUids.length} served chat(s)`, async t => {
+  const { apiBase, failure, posts, updates } = await runInboundTool(t, "owner DM", toolName, args, { groupUids: [...groupUids] });
+  if (typeof expected === "string") {
+    assert.equal(failure, undefined);
+    assert.deepEqual([...posts, ...updates].map(sent => sent.url), [`${apiBase}/v1/chats/${expected}`]);
+  } else {
+    assert.match((failure as Error)?.message, expected);
+    assert.deepEqual([...posts, ...updates], []);
+  }
 });
 
 test("reply tool serves only phone chats, never an email thread", async t => {
