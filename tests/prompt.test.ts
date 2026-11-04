@@ -110,6 +110,8 @@ for (const [name, expected] of [
   // #116: the agent wrote a PDF on the Mac, then tried to text that Mac path (path-not-allowed).
   ["the prompt attaches files from the agent's machine, never a path on a host", "A text can attach only a file on your own machine, never a path on a host."],
   ["the prompt gives the agent its workspace folder", "Your workspace is `/var/lib/plow/workspace`."],
+  // plow-openclaw-agent#142: a scheduled job set with lightContext or a narrow toolsAllow loses the latch section or exec.
+  ["the prompt keeps a scheduled job's instructions and tools", "Leave the payload's lightContext and toolsAllow unset: either one takes from the scheduled turn these instructions or the exec that latch runs with, and then it cannot read the owner's mail, texts or Mac."],
   ["the prompt copies a host's file to the workspace before texting it", "To text a file from a host, copy it there first with `latch file get` (the destination a path in that folder), then attach that copy."],
 ] as const) test(name, () => {
   assert.ok(prompt.replace(/\s+/g, " ").includes(expected));
