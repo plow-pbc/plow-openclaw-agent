@@ -10,8 +10,8 @@
 # image; `latch-cli` is the latch the Dockerfile pins and the prompt and
 # skills send the agent's host work through; `agent-index-client` owns
 # the agent_index_client.py the Dockerfile pins and boot/agent-index.ts runs;
-# and `plow-agents` is the CLI the README tells owners to build, push and
-# deploy this image with.
+# and `plow-agents` is the CLI the README tells owners to build and push
+# this image with.
 
 plow-pbc/plow
 plow-pbc/latch-cli

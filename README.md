@@ -8,12 +8,12 @@ runs as a latch host. It uses `z-ai/glm-5.2` through Plow, with `anthropic/claud
 
 ## Run it
 
-Install [plow-agents](https://github.com/plow-pbc/plow-agents), sign in, and choose
-an available line. The listing includes the number you will text.
+Install [latch](https://github.com/plow-pbc/latch-cli#install), sign in, and choose
+a free line. The listing includes the number you will text.
 
 ```sh
-plow-agents login
-plow-agents lines
+latch login
+latch agents lines
 ```
 
 This image is published as
@@ -21,24 +21,26 @@ This image is published as
 immutable tag per commit of this repository — pinned by digest, because a tag
 is a name someone can move, and the code it names boots holding this agent's
 Plow credential. An agent built on it is a `FROM` line plus its own content — see [Building a variant image](#building-a-variant-image). Build
-and push your variant to a registry you control, make it publicly pullable by
-Plow, and deploy it:
+and push your variant to a registry you control with
+[plow-agents](https://github.com/plow-pbc/plow-agents) (signed in with
+`plow-agents login`), make it publicly pullable by Plow, and create the agent
+from it with latch:
 
 ```sh
 plow-agents image build REGISTRY/REPOSITORY:TAG
 plow-agents image push REGISTRY/REPOSITORY:TAG
-plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
+latch agents new --image REGISTRY/REPOSITORY@sha256:DIGEST --name NAME --line LINE
 ```
 
-Use the full digest reference printed by push and the selected line ID — for
+Use the full digest reference printed by push and the selected line — for
 your image and for the base you build on alike.
 
 To build and run locally, clone this repository and run these commands from its
-root. By default, mint writes `plow-credentials` in the current directory;
-Compose reads `./plow-credentials` from this repository root:
+root. Register the agent and write its credential to `./plow-credentials`,
+which Compose reads from this repository root:
 
 ```sh
-plow-agents mint LINE_UID
+latch agents new --own --name NAME --line LINE --credential-file ./plow-credentials
 docker compose up --build
 ```
 
@@ -74,9 +76,9 @@ This proxy is for local development only: anyone who can reach localhost:3001
 can act as an admin of this agent. It rejects browser requests with a foreign
 `Origin`; local clients can supply an allowed `Origin`.
 
-For a local Plow API, use the CLI's `--api-base` option and mint with
-`--agent-api-base` set to an address the container can reach, such as
-`http://host.docker.internal:PORT`.
+For a local Plow API, sign in with `latch login --api-url URL` and add
+`--agent-api-url` to `latch agents new`, set to an address the container can
+reach, such as `http://host.docker.internal:PORT`.
 
 Then text the selected number as the owner. Your first message starts the
 conversation; no setup greeting is sent before it. Check that a reply arrives.
