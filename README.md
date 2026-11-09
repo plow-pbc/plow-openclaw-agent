@@ -8,12 +8,12 @@ runs as a latch host. It uses `z-ai/glm-5.2` through Plow, with `anthropic/claud
 
 ## Run it
 
-Install [plow-agents](https://github.com/plow-pbc/plow-agents), sign in, and choose
-an available line. The listing includes the number you will text.
+Install [latch](https://github.com/plow-pbc/latch-cli#install), log in, and choose
+a line whose `available` is `true`. The listing includes the number you will text.
 
 ```sh
-plow-agents login
-plow-agents lines
+latch login           # text the code it prints from your phone
+latch agents lines
 ```
 
 This image is published as
@@ -22,25 +22,31 @@ immutable tag per commit of this repository — pinned by digest, because a tag
 is a name someone can move, and the code it names boots holding this agent's
 Plow credential. An agent built on it is a `FROM` line plus its own content — see [Building a variant image](#building-a-variant-image). Build
 and push your variant to a registry you control, make it publicly pullable by
-Plow, and deploy it:
+Plow, and deploy it. Images are built and pushed with
+[plow-agents](https://github.com/plow-pbc/plow-agents), and deployed with latch:
 
 ```sh
 plow-agents image build REGISTRY/REPOSITORY:TAG
 plow-agents image push REGISTRY/REPOSITORY:TAG
-plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
+latch agents new --image REGISTRY/REPOSITORY@sha256:DIGEST --name NAME --line LINE_UID
+latch agents show NAME   # poll until the status is running
 ```
 
 Use the full digest reference printed by push and the selected line ID — for
 your image and for the base you build on alike.
 
 To build and run locally, clone this repository and run these commands from its
-root. By default, mint writes `plow-credentials` in the current directory;
-Compose reads `./plow-credentials` from this repository root:
+root. latch writes the agent's credential to `./plow-credentials`, which
+Compose reads from this repository root:
 
 ```sh
-plow-agents mint LINE_UID
+latch agents new --own --name NAME --line LINE_UID --credential-file ./plow-credentials
 docker compose up --build
 ```
+
+When you are finished, remove the agent, which frees the line:
+`latch agents remove --line LINE_UID --yes`, then `docker compose down -v` and
+`rm plow-credentials`.
 
 Open <http://localhost:3001>.
 
