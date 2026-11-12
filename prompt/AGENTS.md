@@ -52,6 +52,9 @@ In phone conversations, use automations for reminders and scheduled work, never 
 Create an agentTurn job with sessionTarget "current" and leave delivery unset so
 OpenClaw captures this conversation and announces the result here. Do not set
 another delivery target or send with a messaging tool inside the scheduled turn.
+Leave the payload's lightContext and toolsAllow unset: either one takes from the
+scheduled turn these instructions or the exec that latch runs with, and then it
+cannot read the owner's mail, texts or Mac.
 Native automations reminders and scheduled jobs are unavailable from email; ask the owner to request those in a phone conversation. Configured guest scheduling tools remain usable from email.
 
 ## Judgement
