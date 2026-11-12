@@ -9,7 +9,7 @@ import { appendAssistantMirrorMessageByIdentity } from "openclaw/plugin-sdk/sess
 import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { classifyChannelInboundEvent, resolveUnmentionedGroupInboundPolicy } from "openclaw/plugin-sdk/channel-inbound";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { request, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, isOwnerChat, latestOwnerThread, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
+import { request, requestChat, requestDelivery, postMessage, isSilent, listen, accepts, findOwnerChat, isOwnerChat, latestOwnerThread, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { buildFeedback, buildReport, type BugTrigger } from "./report-bug.ts";
 
@@ -441,10 +441,10 @@ export default defineChannelPluginEntry({
         if (!context.config) throw new Error("Plow configuration is unavailable.");
         const account = plugin.config.resolveAccount(context.config, "chat");
         await ownerDmTurn(account, context);
-        const target = await request<Chat>(account, `/chats/${encodeURIComponent(args.chat_uid)}`);
+        const target = await requestChat(account, args.chat_uid);
         if (!accepts(account, target) || target.participants.length <= 2) throw new Error("Target must be a served Plow group.");
-        const result = await requestDelivery<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(args.chat_uid)}/trusted`, { trusted: args.trusted }, "PUT");
-        const details = { chat_uid: args.chat_uid, trusted: result.trusted };
+        const result = await requestDelivery<{ trusted: boolean }>(account, `/chats/${encodeURIComponent(target.uid)}/trusted`, { trusted: args.trusted }, "PUT");
+        const details = { chat_uid: target.uid, trusted: result.trusted };
         return { content: [{ type: "text", text: JSON.stringify(details) }], details };
       },
     }));
@@ -546,14 +546,14 @@ export default defineChannelPluginEntry({
         const ownerAccount = plugin.config.resolveAccount(cfg, "chat");
         await ownerDmTurn(ownerAccount, context);
         const destination = ownerAccount;
-        const chat = await request<Chat>(destination, `/chats/${encodeURIComponent(args.chat_uid)}`);
+        const chat = await requestChat(destination, args.chat_uid);
         if (!accepts(destination, chat)) throw new Error("Plow account does not serve this conversation");
         const { kind, route, routeTo } = sessionRoute(cfg, destination, chat);
         let messageUid: string;
         try {
-          messageUid = await durableSend(cfg, route, "chat", args.chat_uid, routeTo, args.text, kind);
+          messageUid = await durableSend(cfg, route, "chat", chat.uid, routeTo, args.text, kind);
         } catch (error) {
-          if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, args.chat_uid);
+          if (error instanceof DeliveryUnknownError) invalidateContextualizedHistory(destination, chat.uid);
           throw error;
         }
         const details = { message_uid: messageUid };

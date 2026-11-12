@@ -58,6 +58,21 @@ export function accepts(account: Account, chat: Chat): boolean {
   return chat.status === "active" && chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === line);
 }
 
+// Plow chat uids are case-sensitive, but OpenClaw lowercases session keys, and a model that copies a uid out of
+// one gets a 404 (plow-openclaw-agent#140). Then the one chat this account serves that matches it ignoring case
+// is the target; none or several keep the 404.
+export async function requestChat(account: Account, uid: string): Promise<Chat> {
+  try {
+    return await request<Chat>(account, `/chats/${encodeURIComponent(uid)}`);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 404) throw error;
+    const matches = (await request<Page<Chat>>(account, "/chats")).data
+      .filter(chat => chat.uid.toLowerCase() === uid.toLowerCase() && accepts(account, chat));
+    if (matches.length !== 1) throw error;
+    return matches[0];
+  }
+}
+
 const validChatId = (uid: unknown): uid is string => typeof uid === "string" && uid !== "" && uid !== "." && uid !== "..";
 
 const discoveredChats = new Map<string, Map<string, Chat>>();
